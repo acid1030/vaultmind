@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VaultMind</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section id="loginView" class="loginView">
+        <div class="loginCard">
+          <div class="brandBlock">
+            <div class="brandMark">FS</div>
+            <div>
+              <h1>VaultMind</h1>
+              <p>Encrypted workspace for local secrets</p>
+            </div>
+          </div>
+          <div class="segmented">
+            <button id="showLogin" class="active">登录</button>
+            <button id="showRegister">注册</button>
+          </div>
+          <label>
+            手机或邮箱
+            <input id="localEmail" placeholder="手机号 / you@example.com" />
+          </label>
+          <label id="usernameWrap">
+            用户名
+            <input id="localUsername" placeholder="你的名字" />
+          </label>
+          <div id="verifyWrap" class="verifyLine">
+            <input id="recoveryEmail" placeholder="验证码" />
+            <button id="sendVerifyCode">发送验证码</button>
+          </div>
+          <label>
+            本地密码
+            <input id="localPassword" type="password" placeholder="至少 8 位" />
+          </label>
+          <button id="localSubmit" class="primary full">登录</button>
+          <details class="resetBox">
+            <summary>忘记密码 / 使用恢复码重置</summary>
+            <input id="resetEmail" placeholder="注册邮箱或恢复邮箱" />
+            <input id="resetCode" placeholder="恢复码" />
+            <input id="resetPassword" type="password" placeholder="新密码，至少 8 位" />
+            <button id="resetSubmit" class="full">重置本地密码</button>
+          </details>
+          <div id="loginHint" class="hint"></div>
+        </div>
+      </section>
+
+      <section id="mainView" class="hidden">
+        <header class="topbar">
+          <div class="brandBlock">
+            <div class="brandMark compact">FS</div>
+            <div>
+              <h1>VaultMind</h1>
+              <p>AI retrieval workspace with secure vault</p>
+            </div>
+          </div>
+          <div class="statusStack">
+            <button id="navLibrary" class="navPill active" data-view="library">内容库</button>
+            <button id="navProjects" class="navPill" data-view="projects">项目</button>
+            <button id="navAdd" class="navPill" data-view="add">添加</button>
+            <button id="navConfig" class="navPill" data-view="config">配置</button>
+            <div id="localBadge" class="badge">本地账号</div>
+            <button id="loginBadge" class="badge warn">未登录飞书</button>
+          </div>
+        </header>
+
+        <section id="notice" class="notice hidden"></section>
+
+        <div class="grid">
+          <aside id="configView" class="side viewPane hidden">
+            <section class="panel configCenter">
+              <div class="panelHeader">
+                <h2>配置中心</h2>
+                <button id="showConfigForm" class="primary">新增配置</button>
+              </div>
+              <div id="configList" class="configList"></div>
+              <div id="configForm" class="configForm hidden">
+                <label>
+                  配置类型
+                  <select id="configType">
+                    <option value="feishu">飞书同步</option>
+                    <option value="llm">大模型</option>
+                    <option value="knowledge">远程知识库</option>
+                    <option value="vector">远程向量库</option>
+                    <option value="obsidian">远程 Obsidian</option>
+                    <option value="recovery">账户恢复</option>
+                  </select>
+                </label>
+                <div id="dynamicConfigFields"></div>
+                <div class="buttonRow">
+                  <button id="saveConfigDynamic" class="success">保存配置</button>
+                  <button id="cancelConfigForm">取消</button>
+                </div>
+              </div>
+            </section>
+
+            <div id="legacyConfigFields" class="hidden">
+            <section class="panel profilePanel">
+              <h2>账户恢复</h2>
+              <label>
+                绑定手机
+                <input id="profilePhone" placeholder="用于找回身份" />
+              </label>
+              <label>
+                恢复邮箱
+                <input id="profileRecoveryEmail" placeholder="you@example.com" />
+              </label>
+              <button id="saveRecovery" class="primary full">保存恢复资料</button>
+            </section>
+
+            <section class="panel">
+              <h2>大模型配置</h2>
+              <label>
+                OpenAI Compatible Base URL
+                <input id="llmBaseUrl" placeholder="https://api.openai.com/v1" />
+              </label>
+              <label>
+                API Key
+                <input id="llmApiKey" type="password" placeholder="sk-..." />
+              </label>
+              <label>
+                模型
+                <input id="llmModel" placeholder="gpt-4.1-mini / qwen-plus / deepseek-chat" />
+              </label>
+              <label>
+                Temperature
+                <input id="llmTemperature" placeholder="0.2" />
+              </label>
+              <button id="saveAiProfile" class="primary full">保存大模型配置</button>
+            </section>
+
+            <section class="panel">
+              <h2>远程知识库</h2>
+              <label>
+                名称
+                <input id="kbName" placeholder="公司知识库" />
+              </label>
+              <label>
+                检索接口
+                <input id="kbEndpoint" placeholder="https://server/kb/search" />
+              </label>
+              <label>
+                API Key
+                <input id="kbApiKey" type="password" placeholder="可选" />
+              </label>
+              <button id="addKbSource" class="full">添加知识库</button>
+              <div id="kbSources" class="sourceList"></div>
+            </section>
+
+            <section class="panel">
+              <h2>远程向量库</h2>
+              <label>
+                名称
+                <input id="vectorName" placeholder="Milvus / Qdrant / PGVector" />
+              </label>
+              <label>
+                检索接口
+                <input id="vectorEndpoint" placeholder="https://server/vector/search" />
+              </label>
+              <label>
+                Collection
+                <input id="vectorCollection" placeholder="personal_docs" />
+              </label>
+              <label>
+                API Key
+                <input id="vectorApiKey" type="password" placeholder="可选" />
+              </label>
+              <button id="addVectorSource" class="full">添加向量库</button>
+              <div id="vectorSources" class="sourceList"></div>
+            </section>
+
+            <section class="panel">
+              <h2>远程 Obsidian</h2>
+              <label>
+                名称
+                <input id="obsidianName" placeholder="我的 Obsidian Vault" />
+              </label>
+              <label>
+                Base URL
+                <input id="obsidianBaseUrl" placeholder="https://127.0.0.1:27124" />
+              </label>
+              <label>
+                API Key
+                <input id="obsidianApiKey" type="password" placeholder="Local REST API token" />
+              </label>
+              <label class="checkLine">
+                <input id="obsidianInsecureTls" type="checkbox" checked />
+                允许自签名 HTTPS 证书
+              </label>
+              <button id="addObsidianSource" class="full">添加 Obsidian</button>
+              <div id="obsidianSources" class="sourceList"></div>
+            </section>
+
+            <section class="panel">
+              <h2>飞书应用配置</h2>
+              <label>
+                App ID
+                <input id="appId" placeholder="cli_xxx" />
+              </label>
+              <label>
+                App Secret
+                <input id="appSecret" type="password" placeholder="只保存在本机 SQLite" />
+              </label>
+              <label>
+                飞书文件夹 Token
+                <input id="folderToken" placeholder="root 或 fldcn..." />
+              </label>
+              <label>
+                OAuth 回调地址
+                <input id="redirectUri" readonly />
+              </label>
+              <div class="buttonRow">
+                <button id="saveSettings" class="primary">保存配置</button>
+                <button id="login">登录飞书</button>
+                <button id="logout">退出飞书</button>
+              </div>
+              <div class="hint">建议权限：<span id="scopes"></span></div>
+            </section>
+            </div>
+
+          </aside>
+
+          <section id="addView" class="side viewPane hidden">
+            <section class="panel">
+              <h2>添加内容</h2>
+              <div class="segmented four">
+                <button id="fileMode" class="active">文件</button>
+                <button id="textMode">文本</button>
+                <button id="webMode">网页</button>
+                <button id="videoMode">视频</button>
+              </div>
+
+              <div id="manualContentBox">
+                <label>
+                  标题
+                  <input id="manualTitle" placeholder="内容标题" />
+                </label>
+                <label id="manualUrlWrap" class="hidden">
+                  链接
+                  <input id="manualUrl" placeholder="https://..." />
+                </label>
+                <label id="manualTextWrap">
+                  内容
+                  <textarea id="manualText" placeholder="手动输入文本、摘要、密钥或备注"></textarea>
+                </label>
+                <button id="saveManualContent" class="primary full">保存到本地内容库</button>
+              </div>
+
+              <h2 class="subTitle">上传到飞书保险箱</h2>
+              <div class="segmented">
+                <button id="vaultFileMode" class="active">文件</button>
+                <button id="vaultTextMode">文本</button>
+              </div>
+
+              <div id="fileUploadBox">
+                <button id="chooseFiles">选择本地文件</button>
+                <div id="selectedFiles" class="fileBox">尚未选择文件</div>
+              </div>
+
+              <div id="textUploadBox" class="hidden">
+                <label>
+                  文本名称
+                  <input id="secretName" placeholder="例如：服务器 SSH 密钥" />
+                </label>
+                <label>
+                  文本内容
+                  <textarea id="secretText" placeholder="粘贴密码、密钥或任意纯文本"></textarea>
+                </label>
+              </div>
+
+              <label>
+                飞书加密口令
+                <input id="passphrase" type="password" placeholder="同步和取回时使用，至少 8 位" />
+              </label>
+              <button id="upload" class="success">加密并同步到飞书</button>
+            </section>
+          </section>
+
+          <section id="libraryView" class="libraryShell viewPane">
+            <aside class="librarySidebar panel">
+              <div class="panelHeader">
+                <h2>内容库</h2>
+                <button id="showDatabase" class="small">SQLite</button>
+              </div>
+              <label>
+                本地密码
+                <input id="unlockPassword" type="password" placeholder="查看文本或保存文件" />
+              </label>
+              <div id="items" class="itemList"></div>
+              <div class="syncBlock">
+                <h2>飞书同步记录</h2>
+                <div class="table compactTable">
+                  <div class="row head">
+                    <div>条目</div>
+                    <div>类型</div>
+                    <div>大小</div>
+                    <div>操作</div>
+                  </div>
+                  <div id="records"></div>
+                </div>
+              </div>
+            </aside>
+
+            <section class="chatWorkspace panel">
+              <div class="panelHeader">
+                <div>
+                  <h2>知识库对话</h2>
+                  <span class="hint">自然语言查询本地内容、知识库、向量库和 Obsidian</span>
+                </div>
+              </div>
+              <div id="queryResult" class="queryResult chatResult">检索和回答会显示在这里。</div>
+              <div class="chatComposer">
+                <textarea id="questionInput" placeholder="问一个问题，例如：帮我找一下生产环境数据库密码轮换流程，以及相关负责人是谁？"></textarea>
+                <button id="runKnowledgeQuery" class="success">发送</button>
+              </div>
+            </section>
+          </section>
+
+          <section id="projectsView" class="projectsShell viewPane hidden">
+            <aside class="panel projectSide">
+              <h2>项目账号</h2>
+              <div class="segmented four">
+                <button id="projectProviderGithub" class="active" data-provider="github">GitHub</button>
+                <button id="projectProviderGitlab" data-provider="gitlab">GitLab</button>
+                <button id="projectProviderGit" data-provider="git">Git</button>
+                <button id="projectProviderSvn" data-provider="svn">SVN</button>
+              </div>
+              <label>账号名称<input id="projectAccountLabel" placeholder="工作 GitHub" /></label>
+              <label>用户名<input id="projectAccountUsername" placeholder="Git 用户名 / SVN 用户名" /></label>
+              <label>Token / 密码<input id="projectAccountSecret" type="password" placeholder="加密保存到本地 SQLite" /></label>
+              <button id="saveProjectAccount" class="primary full">保存账号</button>
+              <div id="projectAccounts" class="sourceList"></div>
+            </aside>
+
+            <section class="panel projectMain">
+              <div class="panelHeader">
+                <h2>代码库管理</h2>
+                <button id="chooseProjectDir" class="small">选择本地目录</button>
+              </div>
+              <div class="projectForm">
+                <label>工具
+                  <select id="projectTool">
+                    <option value="git">Git / GitHub / GitLab</option>
+                    <option value="svn">SVN</option>
+                  </select>
+                </label>
+                <label>账号
+                  <select id="projectAccountSelect"></select>
+                </label>
+                <label>项目名称<input id="projectName" placeholder="my-service" /></label>
+                <label>远程地址<input id="projectRemoteUrl" placeholder="https://github.com/org/repo.git / svn://..." /></label>
+                <label>本地目录<input id="projectLocalPath" placeholder="/Users/me/projects/repo" /></label>
+                <label>迁移目录<input id="projectMigrationDir" placeholder="可选：迁移目标目录" /></label>
+                <button id="saveProjectRepo" class="success">保存项目配置</button>
+              </div>
+              <div id="projectRepos" class="projectRepos"></div>
+              <div class="projectConsole">
+                <div class="panelHeader">
+                  <h2>版本信息 / 命令输出</h2>
+                  <input id="projectCommitMessage" placeholder="提交信息" />
+                </div>
+                <pre id="projectOutput">选择项目后可查看 status、log、更新、提交和推送。</pre>
+              </div>
+            </section>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
