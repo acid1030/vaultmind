@@ -8,6 +8,8 @@ function createUnavailableApi() {
       isFeishuLoggedIn: false,
       records: [],
       items: [],
+      context: { scope: 'personal', groupId: '', groupName: '' },
+      groups: [],
       knowledgeCenter: { aiProfile: {}, knowledgeSources: [], vectorSources: [], obsidianSources: [], queryLogs: [] },
       redirectUri: 'http://127.0.0.1:37891/feishu/oauth/callback',
       requiredScopes: '',
@@ -31,6 +33,8 @@ function createUnavailableApi() {
     forgetItem: fail,
     createLibraryItem: fail,
     saveAiProfile: fail,
+    listModels: fail,
+    testModel: fail,
     saveKnowledgeSources: fail,
     saveVectorSources: fail,
     queryKnowledgeCenter: fail,
@@ -38,12 +42,86 @@ function createUnavailableApi() {
     saveProjectRepository: fail,
     deleteProjectRepository: fail,
     runProjectAction: fail,
+    setContext: fail,
+    createGroup: fail,
+    inviteToGroup: fail,
+    leaveGroup: fail,
+    listGroupMembers: fail,
+    search: fail,
+    reindexSearch: fail,
+    copyItemToGroup: fail,
+    syncManifest: fail,
+    pullManifest: fail,
+    fullSync: fail,
+    removeGroupMember: fail,
+    rotateGroupKey: fail,
+    updateMemberRole: fail,
+    transferGroupOwnership: fail,
+    acceptPendingInvites: fail,
     openExternal: fail,
     showDatabase: fail,
   };
 }
 
 const api = window.vaultApi || createUnavailableApi();
+const FEISHU_APP_CREDENTIALS_URL = 'https://open.feishu.cn/app';
+const LLM_PROVIDERS = {
+  deepseek: {
+    label: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com',
+    models: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'],
+  },
+  zhipu: {
+    label: '智谱AI',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    models: ['glm-5.1', 'glm-5', 'glm-5-turbo', 'glm-4.7', 'glm-4.6', 'glm-4.5', 'glm-4.5-air', 'glm-4.5v', 'glm-4.6v'],
+  },
+  zhipu_coding_plan: {
+    label: '智谱CodingPlan',
+    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    models: ['glm-5.1', 'glm-5', 'glm-5-turbo', 'glm-4.7', 'glm-4.6', 'glm-4.5', 'glm-4.5-air'],
+  },
+  minimax: {
+    label: 'MiniMax',
+    baseUrl: 'https://api.minimaxi.com/v1',
+    models: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5', 'MiniMax-M2.5-highspeed', 'MiniMax-M2.1', 'MiniMax-M2.1-highspeed', 'MiniMax-M2'],
+  },
+  kimi: {
+    label: 'Kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    models: ['kimi-k2.6', 'kimi-k2.5', 'kimi-k2-0905-preview', 'kimi-k2-turbo-preview', 'kimi-k2-thinking', 'kimi-k2-thinking-turbo', 'kimi-k2-0711-preview', 'moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
+  },
+  qwen: {
+    label: '千问 / 阿里百炼',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen3.7-max', 'qwen3.7-max-2026-05-20', 'qwen3.6-max-preview', 'qwen3.6-plus', 'qwen3.6-plus-2026-04-02', 'qwen3.6-flash', 'qwen3.6-flash-2026-04-16', 'qwen3.6-35b-a3b', 'qwen3.5-plus', 'qwen3.5-flash', 'qwen3-max', 'qwen3-max-2026-01-23', 'qwen3-max-preview', 'qwen-plus-latest', 'qwen-flash-latest', 'qwen-turbo-latest', 'qwen3-coder-plus', 'qwen3-coder-flash', 'qwq-plus'],
+  },
+  openai: {
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    models: ['gpt-5.5', 'gpt-5.5-chat-latest', 'gpt-5.5-pro', 'gpt-5.5-codex', 'gpt-5.2', 'gpt-5.2-chat-latest', 'gpt-5.2-pro', 'gpt-5.2-codex', 'gpt-5.1', 'gpt-5.1-chat-latest', 'gpt-5.1-codex-max', 'gpt-5.1-codex', 'gpt-5', 'gpt-5-chat-latest', 'gpt-5-codex', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o4-mini', 'o3'],
+  },
+  gemini: {
+    label: 'Gemini',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    models: ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
+  },
+  grok: {
+    label: 'Grok',
+    baseUrl: 'https://api.x.ai/v1',
+    models: ['grok-4.3', 'grok-4.3-latest', 'grok-4.20', 'grok-4.20-latest', 'grok-3-latest', 'grok-3-mini-latest'],
+  },
+  claude: {
+    label: 'Claude',
+    baseUrl: 'https://api.anthropic.com/v1',
+    models: ['claude-opus-4-1-20250805', 'claude-opus-4-20250514', 'claude-sonnet-4-20250514', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest'],
+  },
+  custom: {
+    label: '自定义 OpenAI-compatible',
+    baseUrl: '',
+    models: [],
+  },
+};
 
 const elements = {
   loginView: document.querySelector('#loginView'),
@@ -64,14 +142,36 @@ const elements = {
   resetSubmit: document.querySelector('#resetSubmit'),
   loginHint: document.querySelector('#loginHint'),
   localBadge: document.querySelector('#localBadge'),
+  contextSelect: document.querySelector('#contextSelect'),
   navLibrary: document.querySelector('#navLibrary'),
+  navGroups: document.querySelector('#navGroups'),
   navProjects: document.querySelector('#navProjects'),
   navAdd: document.querySelector('#navAdd'),
   navConfig: document.querySelector('#navConfig'),
   libraryView: document.querySelector('#libraryView'),
+  groupsView: document.querySelector('#groupsView'),
   projectsView: document.querySelector('#projectsView'),
   addView: document.querySelector('#addView'),
   configView: document.querySelector('#configView'),
+  newGroupName: document.querySelector('#newGroupName'),
+  newGroupFolder: document.querySelector('#newGroupFolder'),
+  createGroupBtn: document.querySelector('#createGroupBtn'),
+  groupsList: document.querySelector('#groupsList'),
+  inviteGroupSelect: document.querySelector('#inviteGroupSelect'),
+  inviteEmail: document.querySelector('#inviteEmail'),
+  inviteRole: document.querySelector('#inviteRole'),
+  inviteGroupBtn: document.querySelector('#inviteGroupBtn'),
+  groupMembers: document.querySelector('#groupMembers'),
+  addScopeHint: document.querySelector('#addScopeHint'),
+  globalSearch: document.querySelector('#globalSearch'),
+  runGlobalSearch: document.querySelector('#runGlobalSearch'),
+  searchResults: document.querySelector('#searchResults'),
+  syncManifest: document.querySelector('#syncManifest'),
+  pullManifest: document.querySelector('#pullManifest'),
+  fullSync: document.querySelector('#fullSync'),
+  manifestStatus: document.querySelector('#manifestStatus'),
+  acceptInvitesBtn: document.querySelector('#acceptInvitesBtn'),
+  pendingInvites: document.querySelector('#pendingInvites'),
   projectProviderGithub: document.querySelector('#projectProviderGithub'),
   projectProviderGitlab: document.querySelector('#projectProviderGitlab'),
   projectProviderGit: document.querySelector('#projectProviderGit'),
@@ -134,6 +234,8 @@ const elements = {
   scopes: document.querySelector('#scopes'),
   loginBadge: document.querySelector('#loginBadge'),
   notice: document.querySelector('#notice'),
+  noticeText: document.querySelector('#noticeText'),
+  noticeClose: document.querySelector('#noticeClose'),
   selectedFiles: document.querySelector('#selectedFiles'),
   passphrase: document.querySelector('#passphrase'),
   records: document.querySelector('#records'),
@@ -175,16 +277,22 @@ let kbSourcesDraft = [];
 let vectorSourcesDraft = [];
 let obsidianSourcesDraft = [];
 let pendingVerifyCode = '';
+let refreshedModels = [];
 
 function showNotice(message, isError = false) {
-  elements.notice.textContent = message;
+  elements.noticeText.textContent = message;
   elements.notice.className = isError ? 'notice error' : 'notice';
 }
 
 function clearNotice() {
   elements.notice.className = 'notice hidden';
-  elements.notice.textContent = '';
+  elements.noticeText.textContent = '';
   elements.loginHint.textContent = '';
+}
+
+function dismissNotice() {
+  elements.notice.className = 'notice hidden';
+  elements.noticeText.textContent = '';
 }
 
 function setLoginHint(message, isError = false) {
@@ -219,6 +327,7 @@ function cryptoRandomId() {
 
 function setBusy(isBusy) {
   for (const button of document.querySelectorAll('button')) {
+    if (button === elements.noticeClose) continue;
     button.disabled = isBusy;
   }
 }
@@ -241,6 +350,18 @@ async function run(action, successMessage, loginArea = false) {
   } finally {
     setBusy(false);
   }
+}
+
+function hasFeishuOAuthConfig() {
+  return Boolean(state?.settings?.appId && state?.settings?.appSecret);
+}
+
+async function openFeishuOAuthSetup() {
+  activeView = 'config';
+  renderActiveView();
+  openConfigForm('feishu');
+  await api.openExternal(FEISHU_APP_CREDENTIALS_URL);
+  showNotice('已打开飞书开放平台应用管理页。请选择或创建企业自建应用，在“凭证与基础信息”里复制 App ID / App Secret；同时把本页 OAuth 回调地址填到应用安全设置里。保存后再点“未登录飞书”即可自动获取登录信息。', true);
 }
 
 function renderAuthMode() {
@@ -269,13 +390,85 @@ function renderUploadMode() {
 
 function renderActiveView() {
   elements.navLibrary.classList.toggle('active', activeView === 'library');
+  elements.navGroups.classList.toggle('active', activeView === 'groups');
   elements.navProjects.classList.toggle('active', activeView === 'projects');
   elements.navAdd.classList.toggle('active', activeView === 'add');
   elements.navConfig.classList.toggle('active', activeView === 'config');
   elements.libraryView.classList.toggle('hidden', activeView !== 'library');
+  elements.groupsView.classList.toggle('hidden', activeView !== 'groups');
   elements.projectsView.classList.toggle('hidden', activeView !== 'projects');
   elements.addView.classList.toggle('hidden', activeView !== 'add');
   elements.configView.classList.toggle('hidden', activeView !== 'config');
+}
+
+function currentScopePayload() {
+  const ctx = state?.context || { scope: 'personal', groupId: '' };
+  if (ctx.scope === 'group' && ctx.groupId) {
+    return { scope: 'group', groupId: ctx.groupId };
+  }
+  return { scope: 'personal' };
+}
+
+function renderContext() {
+  if (!state || !elements.contextSelect) return;
+  const groups = state.groups || [];
+  const ctx = state.context || { scope: 'personal', groupId: '', groupName: '' };
+  elements.contextSelect.innerHTML = '<option value="personal">个人</option>'
+    + groups.map((g) => `<option value="group:${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  elements.contextSelect.value = ctx.scope === 'group' && ctx.groupId ? `group:${ctx.groupId}` : 'personal';
+  if (elements.addScopeHint) {
+    elements.addScopeHint.textContent = ctx.scope === 'group'
+      ? `将保存到用户组：${ctx.groupName || ctx.groupId}`
+      : '将保存到：个人空间（不与其他用户共享）';
+  }
+  if (elements.inviteGroupSelect) {
+    elements.inviteGroupSelect.innerHTML = groups.map((g) => (
+      `<option value="${g.id}">${escapeHtml(g.name)}</option>`
+    )).join('') || '<option value="">暂无用户组</option>';
+  }
+}
+
+function renderPendingInvites() {
+  const invites = state?.pendingInvites || [];
+  if (!elements.pendingInvites) return;
+  elements.pendingInvites.innerHTML = invites.length
+    ? invites.map((inv) => `
+      <div class="sourceItem">
+        <div><strong>${escapeHtml(inv.groupName)}</strong><span>${escapeHtml(inv.role)} · 待接受</span></div>
+      </div>
+    `).join('')
+    : '<div class="muted">没有待处理邀请</div>';
+}
+
+function renderManifestStatus() {
+  if (!elements.manifestStatus) return;
+  const meta = state?.manifestMeta;
+  const ctx = state?.context || {};
+  if (!meta) {
+    elements.manifestStatus.textContent = `当前上下文：${ctx.scope === 'group' ? ctx.groupName : '个人'} · 尚未同步清单`;
+    return;
+  }
+  elements.manifestStatus.textContent = `清单 token: ${meta.fileToken ? meta.fileToken.slice(0, 12) + '…' : '-'} · 上传: ${meta.syncedAt || '-'} · 拉取: ${meta.pulledAt || '-'}`;
+}
+
+function renderGroups() {
+  const groups = state?.groups || [];
+  elements.groupsList.innerHTML = groups.length
+    ? groups.map((g) => `
+      <div class="sourceItem">
+        <div>
+          <strong>${escapeHtml(g.name)}</strong>
+          <span>${escapeHtml(g.role)} · ${escapeHtml(g.slug || '')}</span>
+        </div>
+        <div class="actions">
+          <button data-group-switch="${g.id}">切换</button>
+          <button data-group-members="${g.id}">成员</button>
+          ${['owner', 'admin'].includes(g.role) ? `<button data-group-rotate="${g.id}">轮换密钥</button>` : ''}
+          <button data-group-leave="${g.id}">离开</button>
+        </div>
+      </div>
+    `).join('')
+    : '<div class="muted">还没有用户组，请先创建。</div>';
 }
 
 function render() {
@@ -286,6 +479,7 @@ function render() {
   renderAuthMode();
   renderUploadMode();
   renderActiveView();
+  renderContext();
 
   if (!loggedIn) {
     setLoginHint(state.auth && state.auth.hasUsers ? '请输入邮箱和本地密码登录。' : '还没有本地账号，请注册第一个账号。');
@@ -323,6 +517,9 @@ function render() {
 
   renderRecords();
   renderItems();
+  renderGroups();
+  renderPendingInvites();
+  renderManifestStatus();
   renderSources();
   renderConfigCenter();
   renderProjects();
@@ -424,10 +621,34 @@ function typeLabel(type) {
   }[type] || type;
 }
 
+function llmProviderOptions(selectedProvider) {
+  return Object.entries(LLM_PROVIDERS).map(([value, provider]) => (
+    `<option value="${escapeHtml(value)}" ${value === selectedProvider ? 'selected' : ''}>${escapeHtml(provider.label)}</option>`
+  )).join('');
+}
+
+function llmModelOptions(providerKey, selectedModel) {
+  const defaults = LLM_PROVIDERS[providerKey]?.models || [];
+  const models = [...new Set([...refreshedModels, ...defaults, selectedModel].filter(Boolean))];
+  if (!models.length) return '<option value="">请先刷新或手动输入模型</option>';
+  return models.map((model) => (
+    `<option value="${escapeHtml(model)}" ${model === selectedModel ? 'selected' : ''}>${escapeHtml(model)}</option>`
+  )).join('');
+}
+
+function preferredModel(providerKey, currentModel = '') {
+  const provider = LLM_PROVIDERS[providerKey] || LLM_PROVIDERS.openai;
+  if (currentModel && provider.models.includes(currentModel)) return currentModel;
+  return provider.models[0] || currentModel || '';
+}
+
 function renderDynamicConfigFields() {
   if (!elements.dynamicConfigFields) return;
   const type = elements.configType.value;
   const ai = state?.knowledgeCenter?.aiProfile || {};
+  const providerKey = ai.provider && LLM_PROVIDERS[ai.provider] ? ai.provider : 'openai';
+  const provider = LLM_PROVIDERS[providerKey] || LLM_PROVIDERS.openai;
+  const selectedModel = preferredModel(providerKey, ai.model || '');
   const templates = {
     feishu: `
       <label>App ID<input data-field="appId" value="${escapeHtml(state?.settings?.appId || '')}" placeholder="cli_xxx" /></label>
@@ -435,10 +656,19 @@ function renderDynamicConfigFields() {
       <label>飞书文件夹 Token<input data-field="folderToken" value="${escapeHtml(state?.settings?.folderToken || 'root')}" placeholder="root 或 fldcn..." /></label>
     `,
     llm: `
-      <label>Base URL<input data-field="baseUrl" value="${escapeHtml(ai.baseUrl || '')}" placeholder="https://api.openai.com/v1" /></label>
+      <label>模型供应商<select data-field="provider" id="llmProviderSelect">${llmProviderOptions(providerKey)}</select></label>
+      <label>Base URL<input data-field="baseUrl" id="llmBaseUrlDynamic" value="${escapeHtml(ai.baseUrl || provider.baseUrl || '')}" placeholder="https://api.openai.com/v1" /></label>
       <label>API Key<input data-field="apiKey" type="password" value="${escapeHtml(ai.apiKey || '')}" placeholder="sk-..." /></label>
-      <label>模型<input data-field="model" value="${escapeHtml(ai.model || '')}" placeholder="gpt-4.1-mini / qwen-plus" /></label>
+      <label>
+        模型
+        <div class="inlineControl">
+          <select data-field="model" id="llmModelSelect">${llmModelOptions(providerKey, selectedModel)}</select>
+          <button type="button" class="small" data-action="refresh-models">刷新</button>
+        </div>
+      </label>
+      <label>手动模型名<input data-field="modelOverride" value="" placeholder="列表没有时，在这里输入模型名" /></label>
       <label>Temperature<input data-field="temperature" value="${escapeHtml(ai.temperature ?? 0.2)}" /></label>
+      <button type="button" class="full" data-action="test-model">测试模型连接</button>
     `,
     knowledge: `
       <label>名称<input data-field="name" placeholder="公司知识库" /></label>
@@ -470,6 +700,8 @@ function readConfigForm() {
   for (const input of elements.dynamicConfigFields.querySelectorAll('[data-field]')) {
     data[input.dataset.field] = input.type === 'checkbox' ? input.checked : input.value;
   }
+  if (data.modelOverride && data.modelOverride.trim()) data.model = data.modelOverride.trim();
+  delete data.modelOverride;
   return data;
 }
 
@@ -585,14 +817,17 @@ function renderItems() {
         <pre id="itemText-${item.id}" class="maskedText">${escapeHtml(item.maskedText)}</pre>
       `;
     } else {
+      const scopeBadge = item.scope === 'group' ? '<span class="scopeBadge">组</span>' : '';
+      const remoteBadge = item.remoteOnly ? '<span class="scopeBadge warn">待下载</span>' : '';
       card.innerHTML = `
         <div class="itemHeader">
           <div>
-            <strong>${escapeHtml(item.name)}</strong>
+            <strong>${escapeHtml(item.name)}</strong> ${scopeBadge} ${remoteBadge}
             <div class="muted">文本 · ${formatBytes(item.size)}</div>
           </div>
           <div class="actions">
             <button data-item-action="unlock" data-id="${item.id}">解锁查看</button>
+            ${item.scope === 'personal' && item.localOnly ? `<button data-item-action="copy-group" data-id="${item.id}">复制到组</button>` : ''}
             <button data-item-action="forget" data-id="${item.id}">移除</button>
           </div>
         </div>
@@ -634,10 +869,13 @@ elements.localSubmit.addEventListener('click', async () => {
     ? await run(() => api.register(payload), '注册成功', true)
     : await run(() => api.loginLocal(payload), '登录成功', true);
   if (next) {
-    state = next;
+    state = next.state || next;
     elements.localPassword.value = '';
+    const accepted = next.acceptedInvites;
     if (next.recoveryCode) {
       setLoginHint(`注册成功。请保存恢复码：${next.recoveryCode}`);
+    } else if (accepted?.length) {
+      setLoginHint(`已自动加入 ${accepted.length} 个用户组`);
     }
     render();
   }
@@ -654,12 +892,190 @@ elements.sendVerifyCode.addEventListener('click', () => {
   setLoginHint(`${channel}验证码已发送。开发模式验证码：${pendingVerifyCode}`);
 });
 
-for (const button of [elements.navLibrary, elements.navProjects, elements.navAdd, elements.navConfig]) {
+elements.noticeClose.addEventListener('click', dismissNotice);
+
+for (const button of [elements.navLibrary, elements.navGroups, elements.navProjects, elements.navAdd, elements.navConfig]) {
   button.addEventListener('click', () => {
     activeView = button.dataset.view;
     renderActiveView();
   });
 }
+
+elements.contextSelect.addEventListener('change', async () => {
+  const value = elements.contextSelect.value;
+  const payload = value === 'personal'
+    ? { scope: 'personal' }
+    : { scope: 'group', groupId: value.replace('group:', '') };
+  const next = await run(() => api.setContext(payload), '已切换工作上下文');
+  if (next) {
+    state = next;
+    render();
+  }
+});
+
+elements.createGroupBtn.addEventListener('click', async () => {
+  const next = await run(() => api.createGroup({
+    name: elements.newGroupName.value,
+    feishuFolderToken: elements.newGroupFolder.value,
+  }), '用户组已创建');
+  if (next) {
+    state = next;
+    elements.newGroupName.value = '';
+    elements.newGroupFolder.value = '';
+    render();
+  }
+});
+
+elements.inviteGroupBtn.addEventListener('click', async () => {
+  const result = await run(() => api.inviteToGroup({
+    groupId: elements.inviteGroupSelect.value,
+    email: elements.inviteEmail.value,
+    role: elements.inviteRole.value,
+  }), '邀请已处理');
+  if (result) {
+    state = result.state;
+    elements.inviteEmail.value = '';
+    if (result.pending) {
+      showNotice(result.userExists
+        ? `已向 ${result.email} 发送邀请，对方登录后将自动加入`
+        : `已记录待注册邀请：${result.email}`);
+    }
+    render();
+  }
+});
+
+elements.groupsList.addEventListener('click', async (event) => {
+  const switchBtn = event.target.closest('button[data-group-switch]');
+  if (switchBtn) {
+    const next = await run(() => api.setContext({ scope: 'group', groupId: switchBtn.dataset.groupSwitch }), '已切换到该组');
+    if (next) { state = next; activeView = 'library'; render(); }
+    return;
+  }
+  const membersBtn = event.target.closest('button[data-group-members]');
+  if (membersBtn) {
+    const members = await run(() => api.listGroupMembers(membersBtn.dataset.groupMembers));
+    if (members) {
+      const canManage = (state.groups || []).find((g) => g.id === membersBtn.dataset.groupMembers);
+      const isAdmin = canManage && ['owner', 'admin'].includes(canManage.role);
+      elements.groupMembers.innerHTML = members.map((m) => `
+        <div class="sourceItem">
+          <div><strong>${escapeHtml(m.username)}</strong><span>${escapeHtml(m.email)} · ${escapeHtml(m.role)}</span></div>
+          ${isAdmin && m.role !== 'owner' ? `
+            <div class="actions">
+              <button data-member-remove="${membersBtn.dataset.groupMembers}" data-user-id="${m.id}">移除</button>
+              <button data-member-role="${membersBtn.dataset.groupMembers}" data-user-id="${m.id}" data-role="admin">设管理员</button>
+            </div>
+          ` : ''}
+        </div>
+      `).join('');
+    }
+    return;
+  }
+  const leaveBtn = event.target.closest('button[data-group-leave]');
+  if (leaveBtn) {
+    const next = await run(() => api.leaveGroup(leaveBtn.dataset.groupLeave), '已离开用户组');
+    if (next) { state = next; render(); }
+    return;
+  }
+  const rotateBtn = event.target.closest('button[data-group-rotate]');
+  if (rotateBtn) {
+    const result = await run(() => api.rotateGroupKey(rotateBtn.dataset.groupRotate), '组密钥已轮换');
+    if (result) {
+      state = result.state;
+      if (result.needsReinvite?.length) {
+        showNotice(`已轮换密钥，${result.needsReinvite.length} 名成员需重新邀请`, true);
+      }
+      render();
+    }
+  }
+});
+
+elements.groupMembers.addEventListener('click', async (event) => {
+  const removeBtn = event.target.closest('button[data-member-remove]');
+  if (removeBtn) {
+    const next = await run(() => api.removeGroupMember({
+      groupId: removeBtn.dataset.memberRemove,
+      userId: removeBtn.dataset.userId,
+    }), '成员已移除');
+    if (next) { state = next; render(); }
+    return;
+  }
+  const roleBtn = event.target.closest('button[data-member-role]');
+  if (roleBtn) {
+    const next = await run(() => api.updateMemberRole({
+      groupId: roleBtn.dataset.memberRole,
+      userId: roleBtn.dataset.userId,
+      role: roleBtn.dataset.role,
+    }), '角色已更新');
+    if (next) { state = next; render(); }
+  }
+});
+
+elements.acceptInvitesBtn.addEventListener('click', async () => {
+  const result = await run(() => api.acceptPendingInvites(), '已处理邀请');
+  if (result) {
+    state = result.state;
+    if (result.accepted?.length) showNotice(`已加入 ${result.accepted.length} 个用户组`);
+    render();
+  }
+});
+
+elements.runGlobalSearch.addEventListener('click', async () => {
+  const q = elements.globalSearch.value.trim();
+  if (!q) return;
+  const result = await run(() => api.search({ query: q }));
+  if (result) {
+    state = result.state;
+    elements.searchResults.innerHTML = (result.results || []).map((r) => `
+      <div class="evidenceItem"><span>${escapeHtml(r.source)} · ${escapeHtml(r.title)}</span><p>${escapeHtml(r.content || '')}</p></div>
+    `).join('') || '<div class="muted">无匹配结果</div>';
+    render();
+  }
+});
+
+elements.globalSearch.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') elements.runGlobalSearch.click();
+});
+
+function manifestPayload() {
+  return { ...currentScopePayload(), passphrase: elements.passphrase.value };
+}
+
+elements.syncManifest.addEventListener('click', async () => {
+  if (elements.passphrase.value.length < 8) {
+    showNotice('请填写飞书加密口令以同步目录清单', true);
+    return;
+  }
+  const next = await run(() => api.syncManifest(manifestPayload()), '目录清单已上传到飞书');
+  if (next?.state) { state = next.state; render(); }
+});
+
+elements.pullManifest.addEventListener('click', async () => {
+  if (elements.passphrase.value.length < 8) {
+    showNotice('请填写飞书加密口令', true);
+    return;
+  }
+  const next = await run(() => api.pullManifest(manifestPayload()), '已从飞书拉取并合并清单');
+  if (next?.state) {
+    state = next.state;
+    if (next.stats) showNotice(`合并完成：新增 ${next.stats.addedItems} 条，更新 ${next.stats.updatedItems} 条`);
+    render();
+  }
+});
+
+elements.fullSync.addEventListener('click', async () => {
+  if (elements.passphrase.value.length < 8) {
+    showNotice('请填写飞书加密口令', true);
+    return;
+  }
+  const next = await run(() => api.fullSync(manifestPayload()), '完整同步已完成');
+  if (next?.state) {
+    state = next.state;
+    if (next.pullError) showNotice(`拉取: ${next.pullError}`, true);
+    if (next.pushError) showNotice(`上传: ${next.pushError}`, true);
+    render();
+  }
+});
 
 for (const button of [elements.projectProviderGithub, elements.projectProviderGitlab, elements.projectProviderGit, elements.projectProviderSvn]) {
   button.addEventListener('click', () => {
@@ -676,6 +1092,7 @@ elements.saveProjectAccount.addEventListener('click', async () => {
     label: elements.projectAccountLabel.value,
     username: elements.projectAccountUsername.value,
     secret: elements.projectAccountSecret.value,
+    ...currentScopePayload(),
   }), '项目账号已保存');
   if (next) {
     state = next;
@@ -701,6 +1118,7 @@ elements.saveProjectRepo.addEventListener('click', async () => {
     remoteUrl: elements.projectRemoteUrl.value,
     localPath: elements.projectLocalPath.value,
     migrationDir: elements.projectMigrationDir.value,
+    ...currentScopePayload(),
   }), '项目配置已保存');
   if (next) {
     state = next;
@@ -754,7 +1172,68 @@ elements.cancelConfigForm.addEventListener('click', () => {
 });
 
 elements.configType.addEventListener('change', () => {
+  refreshedModels = [];
   renderDynamicConfigFields();
+});
+
+elements.dynamicConfigFields.addEventListener('change', (event) => {
+  const target = event.target;
+  if (target && target.id === 'llmProviderSelect') {
+    const provider = LLM_PROVIDERS[target.value] || LLM_PROVIDERS.openai;
+    const baseUrl = elements.dynamicConfigFields.querySelector('#llmBaseUrlDynamic');
+    if (baseUrl) baseUrl.value = provider.baseUrl || '';
+    refreshedModels = [];
+    const modelSelect = elements.dynamicConfigFields.querySelector('#llmModelSelect');
+    if (modelSelect) modelSelect.innerHTML = llmModelOptions(target.value, provider.models[0] || '');
+  }
+});
+
+elements.dynamicConfigFields.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action="refresh-models"]');
+  if (!button) return;
+  const data = readConfigForm();
+  if (!data.baseUrl) {
+    showNotice('请先选择供应商或填写 Base URL', true);
+    return;
+  }
+  setBusy(true);
+  clearNotice();
+  try {
+    const result = await api.listModels(data);
+    refreshedModels = Array.isArray(result.models) ? result.models : [];
+    if (!refreshedModels.length) throw new Error('远程接口没有返回模型列表');
+    showNotice(`模型列表已刷新：${refreshedModels.length} 个`);
+  } catch (error) {
+    const provider = LLM_PROVIDERS[data.provider] || LLM_PROVIDERS.openai;
+    refreshedModels = provider.models || [];
+    showNotice(`远程刷新失败，已切换为 ${provider.label} 的内置最新模型列表。原因：${error && error.message ? error.message : String(error)}`, true);
+  } finally {
+    const selected = refreshedModels[0] || data.model;
+    const ai = state.knowledgeCenter?.aiProfile || {};
+    state = {
+      ...state,
+      knowledgeCenter: {
+        ...state.knowledgeCenter,
+        aiProfile: { ...ai, ...data, model: selected },
+      },
+    };
+    renderDynamicConfigFields();
+    setBusy(false);
+  }
+});
+
+elements.dynamicConfigFields.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action="test-model"]');
+  if (!button) return;
+  const data = readConfigForm();
+  if (!data.baseUrl || !data.model) {
+    showNotice('请先选择供应商、Base URL 和模型', true);
+    return;
+  }
+  const result = await run(() => api.testModel(data));
+  if (result && result.ok) {
+    showNotice(`模型连接正常：${result.reply || '测试通过'}`);
+  }
 });
 
 elements.saveConfigDynamic.addEventListener('click', async () => {
@@ -764,7 +1243,7 @@ elements.saveConfigDynamic.addEventListener('click', async () => {
   if (type === 'feishu') {
     next = await run(() => api.saveSettings({ ...data, redirectPort: 37891 }), '飞书配置已保存');
   } else if (type === 'llm') {
-    next = await run(() => api.saveAiProfile({ provider: 'openai-compatible', ...data }), '大模型配置已保存');
+    next = await run(() => api.saveAiProfile(data), '大模型配置已保存');
   } else if (type === 'knowledge') {
     next = await run(() => api.saveKnowledgeSources([{ id: cryptoRandomId(), enabled: true, ...data }, ...kbSourcesDraft]), '知识库配置已保存');
   } else if (type === 'vector') {
@@ -831,6 +1310,7 @@ elements.saveManualContent.addEventListener('click', async () => {
     title: elements.manualTitle.value,
     url: elements.manualUrl.value,
     content: elements.manualText.value,
+    ...currentScopePayload(),
   }), '内容已保存到本地内容库');
   if (result) {
     state = result;
@@ -989,7 +1469,7 @@ elements.runKnowledgeQuery.addEventListener('click', async () => {
     return;
   }
   elements.queryResult.textContent = '正在检索知识库和向量库，并生成答案...';
-  const result = await run(() => api.queryKnowledgeCenter({ question }), '检索完成');
+  const result = await run(() => api.queryKnowledgeCenter({ question, context: state.context }), '检索完成');
   if (result) {
     state = result.state;
     elements.queryResult.innerHTML = `
@@ -1009,6 +1489,10 @@ elements.runKnowledgeQuery.addEventListener('click', async () => {
 });
 
 elements.login.addEventListener('click', async () => {
+  if (!hasFeishuOAuthConfig()) {
+    await run(() => openFeishuOAuthSetup());
+    return;
+  }
   const next = await run(() => api.login(), '飞书账号已登录');
   if (next) {
     state = next;
@@ -1025,9 +1509,30 @@ elements.loginBadge.addEventListener('click', async () => {
     }
     return;
   }
-  activeView = 'config';
-  renderActiveView();
-  openConfigForm('feishu');
+  setBusy(true);
+  clearNotice();
+  try {
+    if (!hasFeishuOAuthConfig()) {
+      await openFeishuOAuthSetup();
+      return;
+    }
+    const next = await api.login();
+    state = next;
+    showNotice('飞书账号已登录');
+    render();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    if (message.includes('已关闭') || message.includes('已取消')) {
+      showNotice(message, true);
+      return;
+    }
+    activeView = 'config';
+    renderActiveView();
+    openConfigForm('feishu');
+    showNotice(`${message}。请在这里保存飞书配置后再点击登录。`, true);
+  } finally {
+    setBusy(false);
+  }
 });
 
 elements.logout.addEventListener('click', async () => {
@@ -1060,10 +1565,12 @@ elements.upload.addEventListener('click', async () => {
       name: elements.secretName.value,
       text: elements.secretText.value,
       passphrase: elements.passphrase.value,
+      ...currentScopePayload(),
     })
     : () => api.uploadFiles({
       filePaths: selectedFiles,
       passphrase: elements.passphrase.value,
+      ...currentScopePayload(),
     });
   const result = await run(action, '已加密同步到飞书');
   if (result) {
@@ -1130,6 +1637,17 @@ elements.items.addEventListener('click', async (event) => {
       state = next;
       render();
     }
+    return;
+  }
+
+  if (button.dataset.itemAction === 'copy-group') {
+    const groupId = state.context?.groupId || (state.groups?.[0]?.id);
+    if (!groupId) {
+      showNotice('请先创建或切换到目标用户组', true);
+      return;
+    }
+    const next = await run(() => api.copyItemToGroup({ itemId, groupId }), '已复制到用户组');
+    if (next) { state = next; render(); }
     return;
   }
 

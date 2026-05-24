@@ -6,6 +6,12 @@ const https = require('https');
 const path = require('path');
 const { execFile } = require('child_process');
 const initSqlJs = require('sql.js');
+const { migrateSchema } = require('./core/schema');
+const groupService = require('./core/groups');
+const searchService = require('./core/search');
+const manifestService = require('./core/manifest-sync');
+const groupCrypto = require('./core/group-crypto');
+const feishuDrive = require('./core/feishu-drive');
 
 const DEFAULT_SETTINGS = {
   appId: '',
@@ -24,10 +30,12 @@ const REQUIRED_SCOPES = ['drive:drive', 'drive:drive:readonly', 'auth:user.id:re
 
 let mainWindow = null;
 let pendingLogin = null;
+let feishuAuthWindow = null;
 let SQL = null;
 let db = null;
 let activeUser = null;
 let activePassword = '';
+let activeContext = { scope: 'personal', groupId: '' };
 
 function databasePath() {
   return path.join(app.getPath('userData'), 'secure-vault.sqlite');
@@ -173,8 +181,66 @@ async function ensureDatabase() {
   ensureColumn('users', 'recovery_email', 'TEXT');
   ensureColumn('users', 'recovery_code_hash', 'TEXT');
   ensureColumn('users', 'recovery_code_salt', 'TEXT');
+  migrateSchema(db);
   saveDatabase();
   return db;
+}
+
+function getContext() {
+  if (!activeUser) return { scope: 'personal', groupId: '', groupName: '' };
+  const stored = getStateValue(`context:${activeUser.id}`, null);
+  if (stored && stored.scope === 'group' && stored.groupId) {
+    const g = queryOne('SELECT * FROM groups WHERE id = ?', [stored.groupId]);
+    const member = queryOne(
+      'SELECT 1 FROM group_memberships WHERE group_id = ? AND user_id = ? AND status = ?',
+      [stored.groupId, activeUser.id, 'active'],
+    );
+    if (g && member) {
+      return { scope: 'group', groupId: stored.groupId, groupName: g.name };
+    }
+  }
+  return { scope: 'personal', groupId: '', groupName: '' };
+}
+
+function setContext(input) {
+  const user = requireUser();
+  const scope = input.scope === 'group' ? 'group' : 'personal';
+  const groupId = scope === 'group' ? String(input.groupId || '') : '';
+  if (scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, groupId, user.id);
+  }
+  activeContext = scope === 'group'
+    ? { scope: 'group', groupId, groupName: queryOne('SELECT name FROM groups WHERE id = ?', [groupId])?.name || '' }
+    : { scope: 'personal', groupId: '', groupName: '' };
+  setStateValue(`context:${user.id}`, activeContext);
+  return activeContext;
+}
+
+function resolveScopeFromInput(input) {
+  const ctx = getContext();
+  const scope = input?.scope === 'group' || (input?.groupId && !input?.forcePersonal)
+    ? 'group'
+    : (input?.scope === 'personal' ? 'personal' : ctx.scope);
+  const groupId = scope === 'group' ? String(input?.groupId || ctx.groupId || '') : '';
+  if (scope === 'group' && !groupId) throw new Error('请选择用户组');
+  return { scope, groupId };
+}
+
+function encryptContent(bytes, scope, groupId, user, password) {
+  if (scope === 'group') {
+    const gk = groupService.getGroupKeyForUser(db, queryOne, groupId, user.id, user, password);
+    return groupCrypto.encryptWithGroupKey(bytes, gk);
+  }
+  return encryptForLocalUser(bytes, password, user);
+}
+
+function decryptContent(item, user, password) {
+  const scope = item.scope || 'personal';
+  if (scope === 'group' && item.group_id) {
+    const gk = groupService.getGroupKeyForUser(db, queryOne, item.group_id, user.id, user, password);
+    return groupCrypto.decryptWithGroupKey(item, gk);
+  }
+  return decryptForLocalUser(item, password, user);
 }
 
 function ensureColumn(table, column, type) {
@@ -336,9 +402,66 @@ function setFeishuToken(token) {
   setStateValue('feishuToken', token);
 }
 
+function itemsForContext(userId, context) {
+  const libs = context.scope === 'group' && context.groupId
+    ? queryAll(
+      'SELECT * FROM library_items WHERE scope = ? AND group_id = ? ORDER BY created_at DESC',
+      ['group', context.groupId],
+    )
+    : queryAll(
+      `SELECT * FROM library_items WHERE user_id = ? AND (scope IS NULL OR scope = 'personal')
+       ORDER BY created_at DESC`,
+      [userId],
+    );
+  const decrypted = context.scope === 'personal'
+    ? queryAll('SELECT * FROM decrypted_items WHERE user_id = ? AND (scope IS NULL OR scope = ?) ORDER BY downloaded_at DESC', [userId, 'personal']).map(maskItem)
+    : queryAll('SELECT * FROM decrypted_items WHERE scope = ? AND group_id = ? ORDER BY downloaded_at DESC', ['group', context.groupId]).map(maskItem);
+  return [...libs.map(maskLibraryItem), ...decrypted];
+}
+
+function recordsForContext(userId, context) {
+  if (context.scope === 'group' && context.groupId) {
+    return queryAll(
+      'SELECT * FROM records WHERE scope = ? AND group_id = ? ORDER BY uploaded_at DESC',
+      ['group', context.groupId],
+    ).map(normalizeRecord);
+  }
+  return queryAll(
+    `SELECT * FROM records WHERE user_id = ? AND (scope IS NULL OR scope = 'personal') ORDER BY uploaded_at DESC`,
+    [userId],
+  ).map(normalizeRecord);
+}
+
+function projectsForContext(userId, context) {
+  if (context.scope === 'group' && context.groupId) {
+    return {
+      accounts: queryAll(
+        'SELECT * FROM project_accounts WHERE scope = ? AND group_id = ? ORDER BY created_at DESC',
+        ['group', context.groupId],
+      ).map(normalizeProjectAccount),
+      repositories: queryAll(
+        'SELECT * FROM project_repositories WHERE scope = ? AND group_id = ? ORDER BY created_at DESC',
+        ['group', context.groupId],
+      ).map(normalizeProjectRepository),
+    };
+  }
+  return {
+    accounts: queryAll(
+      `SELECT * FROM project_accounts WHERE user_id = ? AND (scope IS NULL OR scope = 'personal') ORDER BY created_at DESC`,
+      [userId],
+    ).map(normalizeProjectAccount),
+    repositories: queryAll(
+      `SELECT * FROM project_repositories WHERE user_id = ? AND (scope IS NULL OR scope = 'personal') ORDER BY created_at DESC`,
+      [userId],
+    ).map(normalizeProjectRepository),
+  };
+}
+
 function publicState() {
   const settings = getSettings();
   const token = getFeishuToken();
+  const context = activeUser ? getContext() : { scope: 'personal', groupId: '', groupName: '' };
+  activeContext = context;
   const user = activeUser ? {
     id: activeUser.id,
     email: activeUser.email,
@@ -346,17 +469,10 @@ function publicState() {
     phone: activeUser.phone || '',
     recoveryEmail: activeUser.recovery_email || '',
   } : null;
-  const records = activeUser
-    ? queryAll('SELECT * FROM records WHERE user_id = ? ORDER BY uploaded_at DESC', [activeUser.id]).map(normalizeRecord)
-    : [];
-  const items = activeUser
-    ? queryAll('SELECT * FROM decrypted_items WHERE user_id = ? ORDER BY downloaded_at DESC', [activeUser.id]).map(maskItem)
-    : [];
-  const libraryItems = activeUser
-    ? [
-      ...queryAll('SELECT * FROM library_items WHERE user_id = ? ORDER BY created_at DESC', [activeUser.id]).map(maskLibraryItem),
-      ...items,
-    ]
+  const records = activeUser ? recordsForContext(activeUser.id, context) : [];
+  const libraryItems = activeUser ? itemsForContext(activeUser.id, context) : [];
+  const groups = activeUser
+    ? groupService.getUserGroups(db, queryAll, activeUser.id).map(groupService.normalizeGroup)
     : [];
   const aiProfile = activeUser ? normalizeAiProfile(queryOne('SELECT * FROM ai_profiles WHERE user_id = ?', [activeUser.id])) : null;
   const knowledgeSources = activeUser
@@ -371,12 +487,11 @@ function publicState() {
   const queryLogs = activeUser
     ? queryAll('SELECT * FROM query_logs WHERE user_id = ? ORDER BY created_at DESC LIMIT 20', [activeUser.id]).map(normalizeQueryLog)
     : [];
-  const projectAccounts = activeUser
-    ? queryAll('SELECT * FROM project_accounts WHERE user_id = ? ORDER BY created_at DESC', [activeUser.id]).map(normalizeProjectAccount)
-    : [];
-  const projectRepositories = activeUser
-    ? queryAll('SELECT * FROM project_repositories WHERE user_id = ? ORDER BY created_at DESC', [activeUser.id]).map(normalizeProjectRepository)
-    : [];
+  const projectData = activeUser ? projectsForContext(activeUser.id, context) : { accounts: [], repositories: [] };
+  const pendingInvites = activeUser ? groupService.listPendingInvites(db, queryAll, activeUser) : [];
+  const manifestMeta = activeUser
+    ? getManifestMeta(context.scope, context.groupId, activeUser.id)
+    : null;
   return {
     auth: {
       hasUsers: Boolean(queryOne('SELECT id FROM users LIMIT 1')),
@@ -389,6 +504,10 @@ function publicState() {
     },
     isFeishuLoggedIn: Boolean(token && token.accessToken),
     feishuUser: token && token.user,
+    context,
+    groups,
+    pendingInvites,
+    manifestMeta,
     records,
     items: libraryItems,
     knowledgeCenter: {
@@ -398,10 +517,7 @@ function publicState() {
       obsidianSources,
       queryLogs,
     },
-    projects: {
-      accounts: projectAccounts,
-      repositories: projectRepositories,
-    },
+    projects: projectData,
     redirectUri: `http://127.0.0.1:${settings.redirectPort}/feishu/oauth/callback`,
     requiredScopes: REQUIRED_SCOPES,
     databasePath: databasePath(),
@@ -433,8 +549,12 @@ function maskLibraryItem(row) {
     savedPath: '',
     size,
     downloadedAt: row.created_at,
+    scope: row.scope || 'personal',
+    groupId: row.group_id || '',
+    tags: row.tags || '',
     maskedText: ['text', 'web', 'video', 'secret'].includes(row.kind) ? '*'.repeat(Math.max(8, Math.min(size, 80))) : '',
     localOnly: true,
+    remoteOnly: Boolean(row.remote_only),
   };
 }
 
@@ -521,6 +641,9 @@ function normalizeRecord(row) {
     uploadedAt: row.uploaded_at,
     algorithm: row.algorithm,
     kind: row.kind,
+    scope: row.scope || 'personal',
+    groupId: row.group_id || '',
+    assetId: row.asset_id || '',
   };
 }
 
@@ -535,6 +658,8 @@ function maskItem(row) {
     savedPath: row.saved_path || '',
     size,
     downloadedAt: row.downloaded_at,
+    scope: row.scope || 'personal',
+    groupId: row.group_id || '',
     maskedText: row.kind === 'text' ? '*'.repeat(Math.max(8, Math.min(size, 80))) : '',
   };
 }
@@ -816,16 +941,154 @@ async function refreshFeishuTokenIfNeeded() {
   return next;
 }
 
-async function uploadVaultPayload(payload, passphrase) {
+function manifestStateKey(scope, groupId, userId) {
+  return `manifest:${scope}:${groupId || userId}`;
+}
+
+function getManifestMeta(scope, groupId, userId) {
+  return getStateValue(manifestStateKey(scope, groupId, userId), null);
+}
+
+async function listFeishuFolderFiles(folderToken) {
+  const token = await refreshFeishuTokenIfNeeded();
+  const response = await requestJson(
+    'GET',
+    `${FEISHU_API}/open-apis/drive/v1/files?folder_token=${encodeURIComponent(folderToken)}&page_size=200`,
+    { headers: { Authorization: `Bearer ${token.accessToken}` } },
+  );
+  return feishuDrive.parseListFilesResponse(ensureFeishuPayload(response, '列出飞书文件失败'));
+}
+
+async function downloadFeishuFileBuffer(fileToken) {
+  const token = await refreshFeishuTokenIfNeeded();
+  const response = await requestBuffer(
+    'GET',
+    `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}/download`,
+    { headers: { Authorization: `Bearer ${token.accessToken}` } },
+  );
+  if (response.status >= 400) {
+    throw new Error(`下载飞书文件失败：HTTP ${response.status}`);
+  }
+  return response.body;
+}
+
+async function resolveManifestFileToken(scope, groupId, userId, fileName) {
+  const meta = getManifestMeta(scope, groupId, userId);
+  if (meta && meta.fileToken) return meta.fileToken;
+  const settings = getSettings();
+  const parentNode = scope === 'group'
+    ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [groupId])?.feishu_folder_token || settings.folderToken || 'root')
+    : (settings.folderToken || 'root');
+  const files = await listFeishuFolderFiles(parentNode);
+  const found = feishuDrive.findManifestFile(files, fileName);
+  return found ? found.token : null;
+}
+
+async function pushManifestToFeishu(payload) {
+  const user = requireUser();
+  const passphrase = String(payload.passphrase || '');
+  if (passphrase.length < 8) throw new Error('同步口令至少需要 8 个字符');
+  const { scope, groupId } = resolveScopeFromInput(payload || {});
+  const manifest = manifestService.buildManifestEntries(db, queryAll, user.id, scope, groupId);
+  const encrypted = manifestService.encryptManifest(manifest, passphrase, encryptVaultPayload);
+  const fileName = manifestService.manifestFileName(scope, groupId, user.id);
+  const settings = getSettings();
+  const token = await refreshFeishuTokenIfNeeded();
+  const parentNode = scope === 'group'
+    ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [groupId])?.feishu_folder_token || settings.folderToken || 'root')
+    : (settings.folderToken || 'root');
+  const multipart = buildMultipart({
+    file_name: fileName,
+    parent_type: 'explorer',
+    parent_node: parentNode,
+    size: String(encrypted.length),
+  }, { name: fileName, bytes: encrypted });
+  const response = await requestBuffer('POST', `${FEISHU_API}/open-apis/drive/v1/files/upload_all`, {
+    headers: {
+      Authorization: `Bearer ${token.accessToken}`,
+      'Content-Type': `multipart/form-data; boundary=${multipart.boundary}`,
+    },
+    body: multipart.body,
+  });
+  const data = ensureFeishuPayload(JSON.parse(response.body.toString('utf8')), '同步 manifest 失败');
+  setStateValue(manifestStateKey(scope, groupId, user.id), {
+    fileToken: data.file_token,
+    url: data.url || '',
+    syncedAt: new Date().toISOString(),
+  });
+  saveDatabase();
+  return { ok: true, fileToken: data.file_token };
+}
+
+async function pullManifestFromFeishu(payload) {
+  const user = requireUser();
+  requireSessionPassword();
+  const passphrase = String(payload.passphrase || '');
+  if (passphrase.length < 8) throw new Error('同步口令至少需要 8 个字符');
+  const { scope, groupId } = resolveScopeFromInput(payload || {});
+  const fileName = manifestService.manifestFileName(scope, groupId, user.id);
+  const fileToken = await resolveManifestFileToken(scope, groupId, user.id, fileName);
+  if (!fileToken) throw new Error('云端未找到目录清单，请先执行「上传目录清单」');
+  const buffer = await downloadFeishuFileBuffer(fileToken);
+  const remote = manifestService.decryptManifest(buffer, passphrase, decryptVaultPayload);
+  const local = manifestService.buildManifestEntries(db, queryAll, user.id, scope, groupId);
+  const merged = manifestService.mergeManifests(local, remote);
+  const stats = manifestService.applyManifestToDatabase(db, queryOne, queryAll, saveDatabase, user, scope, groupId, merged, {
+    indexAsset: searchService.indexAsset,
+    encryptContent,
+    requireSessionPassword,
+  });
+  setStateValue(manifestStateKey(scope, groupId, user.id), {
+    ...(getManifestMeta(scope, groupId, user.id) || {}),
+    fileToken,
+    pulledAt: new Date().toISOString(),
+  });
+  saveDatabase();
+  return { stats, mergedAt: merged.updatedAt };
+}
+
+async function fullSyncManifest(payload) {
+  const result = { pull: null, push: null, pullError: null, pushError: null };
+  try {
+    result.pull = await pullManifestFromFeishu(payload);
+  } catch (error) {
+    result.pullError = String(error.message || error);
+  }
+  try {
+    result.push = await pushManifestToFeishu(payload);
+  } catch (error) {
+    result.pushError = String(error.message || error);
+  }
+  if (result.pullError && result.pushError) {
+    throw new Error(`同步失败：拉取 ${result.pullError}；上传 ${result.pushError}`);
+  }
+  return { ...result, state: publicState() };
+}
+
+function afterAuthSuccess(user, password) {
+  const accepted = groupService.processPendingInvitesForUser(db, saveDatabase, queryOne, queryAll, user, password);
+  searchService.reindexAllForUser(db, queryAll, user.id);
+  saveDatabase();
+  return accepted;
+}
+
+async function uploadVaultPayload(payload, passphrase, scopeMeta = {}) {
   const user = requireUser();
   const settings = getSettings();
+  const { scope, groupId } = scopeMeta.scope ? scopeMeta : resolveScopeFromInput(scopeMeta);
+  if (scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
+  }
   const token = await refreshFeishuTokenIfNeeded();
   const encrypted = encryptVaultPayload(payload, passphrase);
   const uploadName = `${payload.name}.axonvault`;
+  const parentNode = scope === 'group'
+    ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [groupId])?.feishu_folder_token || settings.folderToken || 'root')
+    : (settings.folderToken || 'root');
   const multipart = buildMultipart({
     file_name: uploadName,
     parent_type: 'explorer',
-    parent_node: settings.folderToken || 'root',
+    parent_node: parentNode,
     size: String(encrypted.length),
   }, { name: uploadName, bytes: encrypted });
 
@@ -849,12 +1112,18 @@ async function uploadVaultPayload(payload, passphrase) {
     uploadedAt: new Date().toISOString(),
     algorithm: 'AES-256-GCM/PBKDF2-SHA256',
     kind: payload.kind,
+    scope,
+    groupId: scope === 'group' ? groupId : null,
+    assetId: payload.assetId || null,
   };
   db.run(
     `INSERT OR REPLACE INTO records
-      (id, user_id, local_path, file_name, size, token, url, uploaded_at, algorithm, kind)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [record.id, user.id, record.localPath, record.fileName, record.size, record.token, record.url, record.uploadedAt, record.algorithm, record.kind],
+      (id, user_id, local_path, file_name, size, token, url, uploaded_at, algorithm, kind, scope, group_id, created_by, asset_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.id, user.id, record.localPath, record.fileName, record.size, record.token, record.url,
+      record.uploadedAt, record.algorithm, record.kind, scope, record.groupId, user.id, record.assetId,
+    ],
   );
   saveDatabase();
   return record;
@@ -863,8 +1132,13 @@ async function uploadVaultPayload(payload, passphrase) {
 async function downloadRecordToLocal(recordId, feishuPassphrase) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
-  const row = queryOne('SELECT * FROM records WHERE id = ? AND user_id = ?', [recordId, user.id]);
+  const row = queryOne('SELECT * FROM records WHERE id = ?', [recordId]);
   if (!row) throw new Error('找不到这条同步记录');
+  if (row.scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, row.group_id, user.id);
+  } else if (row.user_id !== user.id) {
+    throw new Error('找不到这条同步记录');
+  }
   const record = normalizeRecord(row);
   const token = await refreshFeishuTokenIfNeeded();
   const response = await requestBuffer('GET', `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(record.token)}/download`, {
@@ -877,13 +1151,15 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
   const plainBytes = payload.kind === 'text'
     ? Buffer.from(payload.text || '', 'utf8')
     : Buffer.from(payload.contentBase64 || '', 'base64');
-  const local = encryptForLocalUser(plainBytes, localPassword, user);
+  const scope = record.scope || 'personal';
+  const groupId = record.groupId || record.group_id || null;
+  const local = encryptContent(plainBytes, scope, groupId, user, localPassword);
   const existing = queryOne('SELECT id FROM decrypted_items WHERE record_id = ? AND user_id = ?', [record.id, user.id]);
   const itemId = existing ? existing.id : crypto.randomUUID();
   db.run(
     `INSERT OR REPLACE INTO decrypted_items
-      (id, user_id, record_id, kind, name, source_path, saved_path, content_ciphertext, content_iv, content_tag, size, downloaded_at)
-      VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT saved_path FROM decrypted_items WHERE id = ?), ''), ?, ?, ?, ?, ?)`,
+      (id, user_id, record_id, kind, name, source_path, saved_path, content_ciphertext, content_iv, content_tag, size, downloaded_at, scope, group_id, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT saved_path FROM decrypted_items WHERE id = ?), ''), ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       itemId,
       user.id,
@@ -897,8 +1173,21 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
       local.tag,
       plainBytes.length,
       new Date().toISOString(),
+      scope,
+      groupId,
+      user.id,
     ],
   );
+  searchService.indexAsset(db, {
+    assetId: itemId,
+    ownerUserId: user.id,
+    scope,
+    groupId: groupId || '',
+    kind: payload.kind,
+    sourceTable: 'decrypted_items',
+    title: payload.name || record.fileName,
+    tags: '',
+  });
   saveDatabase();
   return publicState();
 }
@@ -920,6 +1209,54 @@ function saveAiProfile(input) {
   );
   saveDatabase();
   return publicState();
+}
+
+function llmHeaders(profile) {
+  if (profile.provider === 'claude') {
+    return {
+      ...(profile.apiKey ? { 'x-api-key': profile.apiKey } : {}),
+      'anthropic-version': '2023-06-01',
+    };
+  }
+  return profile.apiKey ? { Authorization: `Bearer ${profile.apiKey}` } : {};
+}
+
+async function listLlmModels(input) {
+  const profile = {
+    provider: String(input.provider || 'openai'),
+    baseUrl: String(input.baseUrl || '').trim(),
+    apiKey: input.apiKey === '********' ? '' : String(input.apiKey || '').trim(),
+  };
+  if (!profile.baseUrl) throw new Error('请先填写模型 Base URL');
+  const endpoint = `${profile.baseUrl.replace(/\/$/, '')}/models`;
+  const payload = await requestAnyJson('GET', endpoint, {
+    headers: llmHeaders(profile),
+  });
+  const rawModels = Array.isArray(payload.data) ? payload.data : (Array.isArray(payload.models) ? payload.models : []);
+  const models = rawModels
+    .map((item) => (typeof item === 'string' ? item : item.id || item.name || item.model))
+    .filter(Boolean)
+    .map(String);
+  if (!models.length) throw new Error('远程接口没有返回可识别的模型列表');
+  return { models: [...new Set(models)] };
+}
+
+async function testLlmProfile(input) {
+  const profile = {
+    provider: String(input.provider || 'openai'),
+    base_url: String(input.baseUrl || '').trim(),
+    api_key: input.apiKey === '********' ? '' : String(input.apiKey || '').trim(),
+    model: String(input.model || '').trim(),
+    temperature: Number.isFinite(Number(input.temperature)) ? Number(input.temperature) : 0.2,
+  };
+  if (!profile.base_url) throw new Error('请先填写模型 Base URL');
+  if (!profile.model) throw new Error('请先选择模型');
+  const result = await synthesizeWithLlm(profile, '请只回复“连接成功”。', [{
+    source: 'VaultMind',
+    title: '模型连接测试',
+    content: '这是一次最小化模型连通性测试。',
+  }]);
+  return { ok: true, reply: String(result.answer || '').slice(0, 240) };
 }
 
 function saveRemoteSources(table, sources) {
@@ -995,37 +1332,64 @@ function saveObsidianSources(sources) {
 function createLibraryItem(input) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
+  const { scope, groupId } = resolveScopeFromInput(input);
+  if (scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
+  }
   const kind = String(input.kind || 'text');
   const title = String(input.title || '').trim();
   const url = String(input.url || '').trim();
   const text = String(input.content || '').trim();
+  const tags = JSON.stringify(Array.isArray(input.tags) ? input.tags : String(input.tags || '').split(/[,，\s]+/).filter(Boolean));
   if (!['text', 'secret', 'web', 'video'].includes(kind)) throw new Error('不支持的内容类型');
   if (!title) throw new Error('请输入标题');
   if ((kind === 'web' || kind === 'video') && !url) throw new Error('请输入链接');
   if ((kind === 'text' || kind === 'secret') && !text) throw new Error('请输入内容');
   const body = JSON.stringify({ kind, title, url, content: text });
   const bytes = Buffer.from(body, 'utf8');
-  const local = encryptForLocalUser(bytes, localPassword, user);
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const local = encryptContent(bytes, scope, groupId, user, localPassword);
   db.run(
     `INSERT INTO library_items
-      (id, user_id, kind, title, url, content_ciphertext, content_iv, content_tag, size, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [crypto.randomUUID(), user.id, kind, title, url, local.ciphertext, local.iv, local.tag, bytes.length, new Date().toISOString()],
+      (id, user_id, kind, title, url, content_ciphertext, content_iv, content_tag, size, created_at, scope, group_id, created_by, tags, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, user.id, kind, title, url, local.ciphertext, local.iv, local.tag, bytes.length, now, scope, scope === 'group' ? groupId : null, user.id, tags, now],
   );
+  searchService.indexAsset(db, {
+    assetId: id,
+    ownerUserId: user.id,
+    scope,
+    groupId: scope === 'group' ? groupId : '',
+    kind,
+    sourceTable: 'library_items',
+    title,
+    tags,
+  });
   saveDatabase();
   return publicState();
 }
 
 function unlockLibraryItem(itemId, localPassword) {
   const user = requireUser();
-  const lib = queryOne('SELECT * FROM library_items WHERE id = ? AND user_id = ?', [itemId, user.id]);
+  const lib = queryOne('SELECT * FROM library_items WHERE id = ?', [itemId]);
   if (lib) {
-    const bytes = decryptForLocalUser(lib, localPassword, user);
+    if (lib.scope === 'group') {
+      groupService.requireGroupAccess(db, queryOne, lib.group_id, user.id);
+    } else if (lib.user_id !== user.id) {
+      throw new Error('找不到这条本地内容');
+    }
+    const bytes = decryptContent(lib, user, localPassword);
     return { id: lib.id, name: lib.title, ...JSON.parse(bytes.toString('utf8')) };
   }
-  const row = queryOne('SELECT * FROM decrypted_items WHERE id = ? AND user_id = ?', [itemId, user.id]);
+  const row = queryOne('SELECT * FROM decrypted_items WHERE id = ?', [itemId]);
   if (!row) throw new Error('找不到这条本地内容');
-  const bytes = decryptForLocalUser(row, localPassword, user);
+  if (row.scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, row.group_id, user.id);
+  } else if (row.user_id !== user.id) {
+    throw new Error('找不到这条本地内容');
+  }
+  const bytes = decryptContent(row, user, localPassword);
   if (row.kind !== 'text') throw new Error('这个条目是文件，请使用保存到本地');
   return { id: row.id, name: row.name, title: row.name, kind: 'text', content: bytes.toString('utf8') };
 }
@@ -1051,18 +1415,22 @@ function runCommand(command, args, options = {}) {
 function saveProjectAccount(input) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
+  const { scope, groupId } = resolveScopeFromInput(input);
+  if (scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
+  }
   const provider = String(input.provider || 'github');
   const label = String(input.label || '').trim();
   const username = String(input.username || '').trim();
   const secret = String(input.secret || '');
   if (!label) throw new Error('请输入账号名称');
   if (!secret) throw new Error('请输入 token 或密码');
-  const encrypted = encryptForLocalUser(Buffer.from(secret, 'utf8'), localPassword, user);
+  const encrypted = encryptContent(Buffer.from(secret, 'utf8'), scope, groupId, user, localPassword);
   db.run(
     `INSERT INTO project_accounts
-      (id, user_id, provider, label, username, secret_ciphertext, secret_iv, secret_tag, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [crypto.randomUUID(), user.id, provider, label, username, encrypted.ciphertext, encrypted.iv, encrypted.tag, new Date().toISOString()],
+      (id, user_id, provider, label, username, secret_ciphertext, secret_iv, secret_tag, created_at, scope, group_id, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [crypto.randomUUID(), user.id, provider, label, username, encrypted.ciphertext, encrypted.iv, encrypted.tag, new Date().toISOString(), scope, scope === 'group' ? groupId : null, user.id],
   );
   saveDatabase();
   return publicState();
@@ -1070,6 +1438,10 @@ function saveProjectAccount(input) {
 
 function saveProjectRepository(input) {
   const user = requireUser();
+  const { scope, groupId } = resolveScopeFromInput(input);
+  if (scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
+  }
   const tool = String(input.tool || 'git');
   const name = String(input.name || '').trim();
   const remoteUrl = String(input.remoteUrl || '').trim();
@@ -1080,9 +1452,9 @@ function saveProjectRepository(input) {
   if (!localPath) throw new Error('请选择或填写本地目录');
   db.run(
     `INSERT INTO project_repositories
-      (id, user_id, account_id, tool, name, remote_url, local_path, migration_dir, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [crypto.randomUUID(), user.id, input.accountId || '', tool, name, remoteUrl, localPath, migrationDir, new Date().toISOString()],
+      (id, user_id, account_id, tool, name, remote_url, local_path, migration_dir, created_at, scope, group_id, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [crypto.randomUUID(), user.id, input.accountId || '', tool, name, remoteUrl, localPath, migrationDir, new Date().toISOString(), scope, scope === 'group' ? groupId : null, user.id],
   );
   saveDatabase();
   return publicState();
@@ -1091,13 +1463,21 @@ function saveProjectRepository(input) {
 function decryptProjectSecret(accountId) {
   if (!accountId) return '';
   const user = requireUser();
-  const row = queryOne('SELECT * FROM project_accounts WHERE id = ? AND user_id = ?', [accountId, user.id]);
+  const row = queryOne('SELECT * FROM project_accounts WHERE id = ?', [accountId]);
   if (!row) return '';
-  return decryptForLocalUser({
+  const password = requireSessionPassword();
+  if (row.scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, row.group_id, user.id);
+  } else if (row.user_id !== user.id) {
+    return '';
+  }
+  return decryptContent({
+    scope: row.scope,
+    group_id: row.group_id,
     content_ciphertext: row.secret_ciphertext,
     content_iv: row.secret_iv,
     content_tag: row.secret_tag,
-  }, requireSessionPassword(), user).toString('utf8');
+  }, user, password).toString('utf8');
 }
 
 function authRemoteUrl(remoteUrl, repo) {
@@ -1113,8 +1493,13 @@ function authRemoteUrl(remoteUrl, repo) {
 
 async function runProjectAction(input) {
   const user = requireUser();
-  const repo = queryOne('SELECT * FROM project_repositories WHERE id = ? AND user_id = ?', [String(input.repoId || ''), user.id]);
+  const repo = queryOne('SELECT * FROM project_repositories WHERE id = ?', [String(input.repoId || '')]);
   if (!repo) throw new Error('找不到项目配置');
+  if (repo.scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, repo.group_id, user.id);
+  } else if (repo.user_id !== user.id) {
+    throw new Error('找不到项目配置');
+  }
   const localPath = repo.local_path;
   const action = String(input.action || 'status');
   const isSvn = repo.tool === 'svn';
@@ -1214,12 +1599,33 @@ async function synthesizeWithLlm(profile, question, evidence) {
       usedLlm: false,
     };
   }
+  if (profile.provider === 'claude') {
+    const prompt = `请基于证据回答用户问题；不要编造；引用证据来源名。\n\n问题：${question}\n\n证据：\n${evidence.map((item, index) => `[${index + 1}] 来源=${item.source}; 标题=${item.title}; 内容=${item.content}`).join('\n\n')}`;
+    const result = await requestAnyJson('POST', `${profile.base_url.replace(/\/$/, '')}/messages`, {
+      headers: llmHeaders({
+        provider: profile.provider,
+        apiKey: profile.api_key,
+      }),
+      body: {
+        model: profile.model,
+        max_tokens: 1600,
+        temperature: profile.temperature,
+        system: '你是严谨、简洁、重视出处的个人知识库助手。',
+        messages: [{ role: 'user', content: prompt }],
+      },
+    });
+    const content = Array.isArray(result.content)
+      ? result.content.map((item) => item.text || '').join('\n').trim()
+      : '';
+    return { answer: content || JSON.stringify(result), usedLlm: true };
+  }
   const endpoint = `${profile.base_url.replace(/\/$/, '')}/chat/completions`;
   const prompt = `你是个人知识库中心的检索助手。请基于证据回答用户问题；不要编造；引用证据来源名。\n\n问题：${question}\n\n证据：\n${evidence.map((item, index) => `[${index + 1}] 来源=${item.source}; 标题=${item.title}; 内容=${item.content}`).join('\n\n')}`;
   const result = await requestAnyJson('POST', endpoint, {
-    headers: {
-      ...(profile.api_key ? { Authorization: `Bearer ${profile.api_key}` } : {}),
-    },
+    headers: llmHeaders({
+      provider: profile.provider,
+      apiKey: profile.api_key,
+    }),
     body: {
       model: profile.model,
       temperature: profile.temperature,
@@ -1235,15 +1641,26 @@ async function synthesizeWithLlm(profile, question, evidence) {
   return { answer: content || JSON.stringify(result), usedLlm: true };
 }
 
-async function queryKnowledgeCenter(question) {
+async function queryKnowledgeCenter(question, options = {}) {
   const user = requireUser();
   const cleanQuestion = String(question || '').trim();
   if (!cleanQuestion) throw new Error('请输入要检索的问题');
-  const knowledgeSources = queryAll('SELECT * FROM knowledge_sources WHERE user_id = ? AND enabled = 1', [user.id]);
-  const vectorSources = queryAll('SELECT * FROM vector_sources WHERE user_id = ? AND enabled = 1', [user.id]);
-  const obsidianSources = queryAll('SELECT * FROM obsidian_sources WHERE user_id = ? AND enabled = 1', [user.id]);
+  const context = options.context || getContext();
+  const includePersonal = options.includePersonal !== false && context.scope !== 'group';
+  const searchContext = options.searchScope === 'all'
+    ? { scope: 'all', groupId: '' }
+    : context;
+  const knowledgeSources = includePersonal
+    ? queryAll('SELECT * FROM knowledge_sources WHERE user_id = ? AND enabled = 1', [user.id])
+    : [];
+  const vectorSources = includePersonal
+    ? queryAll('SELECT * FROM vector_sources WHERE user_id = ? AND enabled = 1', [user.id])
+    : [];
+  const obsidianSources = includePersonal
+    ? queryAll('SELECT * FROM obsidian_sources WHERE user_id = ? AND enabled = 1', [user.id])
+    : [];
   const aiProfile = queryOne('SELECT * FROM ai_profiles WHERE user_id = ?', [user.id]);
-  const evidence = [];
+  const evidence = [...searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext)];
 
   for (const source of knowledgeSources) {
     try {
@@ -1268,7 +1685,7 @@ async function queryKnowledgeCenter(question) {
   }
 
   if (evidence.length === 0) {
-    throw new Error('没有启用的知识库或向量库，请先添加配置');
+    throw new Error('没有匹配内容。请添加本地条目或配置远程知识库/向量库/Obsidian');
   }
   const synthesis = await synthesizeWithLlm(aiProfile, cleanQuestion, evidence);
   const log = {
@@ -1301,6 +1718,40 @@ function createWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+}
+
+function cancelPendingFeishuLogin(reason = '飞书登录已取消') {
+  if (!pendingLogin) return;
+  const { server, reject } = pendingLogin;
+  pendingLogin = null;
+  try {
+    server.close();
+  } catch {
+    // Server may already be closed by the OAuth callback.
+  }
+  if (typeof reject === 'function') reject(new Error(reason));
+}
+
+function openFeishuAuthWindow(authUrl) {
+  if (feishuAuthWindow && !feishuAuthWindow.isDestroyed()) {
+    feishuAuthWindow.close();
+  }
+  feishuAuthWindow = new BrowserWindow({
+    width: 960,
+    height: 760,
+    title: '登录飞书',
+    parent: mainWindow || undefined,
+    modal: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  feishuAuthWindow.on('closed', () => {
+    feishuAuthWindow = null;
+    cancelPendingFeishuLogin('飞书登录窗口已关闭');
+  });
+  feishuAuthWindow.loadURL(authUrl);
 }
 
 function registerHandlers() {
@@ -1346,7 +1797,8 @@ function registerHandlers() {
     activeUser = user;
     activePassword = password;
     createLocalSession(user.id);
-    return { ...publicState(), recoveryCode };
+    const acceptedInvites = afterAuthSuccess(user, password);
+    return { ...publicState(), recoveryCode, acceptedInvites };
   });
 
   ipcMain.handle('vault:loginLocal', async (_event, input) => {
@@ -1360,7 +1812,8 @@ function registerHandlers() {
     activeUser = user;
     activePassword = password;
     createLocalSession(user.id);
-    return publicState();
+    const acceptedInvites = afterAuthSuccess(user, password);
+    return { ...publicState(), acceptedInvites };
   });
 
   ipcMain.handle('vault:logoutLocal', async () => {
@@ -1416,8 +1869,7 @@ function registerHandlers() {
       throw new Error('请先填写飞书 App ID 和 App Secret');
     }
     if (pendingLogin) {
-      pendingLogin.server.close();
-      pendingLogin = null;
+      cancelPendingFeishuLogin('新的飞书登录已开始');
     }
 
     const stateValue = crypto.randomBytes(18).toString('hex');
@@ -1435,25 +1887,31 @@ function registerHandlers() {
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end('<h2>飞书登录成功，可以回到 VaultMind。</h2>');
           server.close();
+          if (feishuAuthWindow && !feishuAuthWindow.isDestroyed()) {
+            feishuAuthWindow.close();
+          }
           pendingLogin = null;
           resolve();
         } catch (err) {
           res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(`<h2>飞书登录失败</h2><pre>${String(err)}</pre>`);
           server.close();
+          if (feishuAuthWindow && !feishuAuthWindow.isDestroyed()) {
+            feishuAuthWindow.close();
+          }
           pendingLogin = null;
           reject(err);
         }
       });
       server.listen(settings.redirectPort, '127.0.0.1', () => {
-        pendingLogin = { server };
+        pendingLogin = { server, reject };
         const authUrl = new URL(FEISHU_AUTH);
         authUrl.searchParams.set('client_id', settings.appId);
         authUrl.searchParams.set('response_type', 'code');
         authUrl.searchParams.set('redirect_uri', redirectUri);
         authUrl.searchParams.set('scope', REQUIRED_SCOPES);
         authUrl.searchParams.set('state', stateValue);
-        shell.openExternal(authUrl.toString()).catch(reject);
+        openFeishuAuthWindow(authUrl.toString());
       });
       server.on('error', reject);
     });
@@ -1488,16 +1946,18 @@ function registerHandlers() {
     await ensureDatabase();
     const filePaths = Array.isArray(payload && payload.filePaths) ? payload.filePaths : [];
     if (filePaths.length === 0) throw new Error('请选择至少一个本地文件');
+    const scopeMeta = resolveScopeFromInput(payload || {});
     const records = [];
     for (const filePath of filePaths) {
-      records.push(await uploadVaultPayload(payloadFromFile(filePath), String(payload.passphrase || '')));
+      records.push(await uploadVaultPayload(payloadFromFile(filePath), String(payload.passphrase || ''), scopeMeta));
     }
     return { state: publicState(), records };
   });
 
   ipcMain.handle('vault:uploadText', async (_event, payload) => {
     await ensureDatabase();
-    const record = await uploadVaultPayload(payloadFromText(payload.name, payload.text), String(payload.passphrase || ''));
+    const scopeMeta = resolveScopeFromInput(payload || {});
+    const record = await uploadVaultPayload(payloadFromText(payload.name, payload.text), String(payload.passphrase || ''), scopeMeta);
     return { state: publicState(), records: [record] };
   });
 
@@ -1515,15 +1975,20 @@ function registerHandlers() {
   ipcMain.handle('vault:saveItemFile', async (_event, payload) => {
     await ensureDatabase();
     const user = requireUser();
-    const row = queryOne('SELECT * FROM decrypted_items WHERE id = ? AND user_id = ?', [String(payload.itemId || ''), user.id]);
+    const row = queryOne('SELECT * FROM decrypted_items WHERE id = ?', [String(payload.itemId || '')]);
     if (!row) throw new Error('找不到这条本地文件');
+    if (row.scope === 'group') {
+      groupService.requireGroupAccess(db, queryOne, row.group_id, user.id);
+    } else if (row.user_id !== user.id) {
+      throw new Error('找不到这条本地文件');
+    }
     if (row.kind !== 'file') throw new Error('这个条目不是文件');
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '保存文件到本地',
       defaultPath: row.name,
     });
     if (result.canceled || !result.filePath) return publicState();
-    const bytes = decryptForLocalUser(row, String(payload.localPassword || ''), user);
+    const bytes = decryptContent(row, user, String(payload.localPassword || ''));
     fs.writeFileSync(result.filePath, bytes);
     db.run('UPDATE decrypted_items SET saved_path = ? WHERE id = ?', [result.filePath, row.id]);
     saveDatabase();
@@ -1533,8 +1998,16 @@ function registerHandlers() {
   ipcMain.handle('vault:forgetRecord', async (_event, recordId) => {
     await ensureDatabase();
     const user = requireUser();
-    db.run('DELETE FROM records WHERE id = ? AND user_id = ?', [recordId, user.id]);
-    db.run('DELETE FROM decrypted_items WHERE record_id = ? AND user_id = ?', [recordId, user.id]);
+    const row = queryOne('SELECT * FROM records WHERE id = ?', [recordId]);
+    if (row) {
+      if (row.scope === 'group') {
+        groupService.requireGroupAccess(db, queryOne, row.group_id, user.id, ['owner', 'admin', 'member']);
+      } else if (row.user_id !== user.id) {
+        throw new Error('无权移除此记录');
+      }
+    }
+    db.run('DELETE FROM records WHERE id = ?', [recordId]);
+    db.run('DELETE FROM decrypted_items WHERE record_id = ?', [recordId]);
     saveDatabase();
     return publicState();
   });
@@ -1542,8 +2015,9 @@ function registerHandlers() {
   ipcMain.handle('vault:forgetItem', async (_event, itemId) => {
     await ensureDatabase();
     const user = requireUser();
-    db.run('DELETE FROM decrypted_items WHERE id = ? AND user_id = ?', [itemId, user.id]);
-    db.run('DELETE FROM library_items WHERE id = ? AND user_id = ?', [itemId, user.id]);
+    db.run('DELETE FROM decrypted_items WHERE id = ?', [itemId]);
+    db.run('DELETE FROM library_items WHERE id = ?', [itemId]);
+    searchService.removeAssetIndex(db, itemId);
     saveDatabase();
     return publicState();
   });
@@ -1581,6 +2055,28 @@ function registerHandlers() {
     return saveAiProfile(input || {});
   });
 
+  ipcMain.handle('vault:listModels', async (_event, input) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const previous = queryOne('SELECT api_key FROM ai_profiles WHERE user_id = ?', [user.id]);
+    const payload = {
+      ...(input || {}),
+      apiKey: input && input.apiKey === '********' ? (previous && previous.api_key ? previous.api_key : '') : input?.apiKey,
+    };
+    return listLlmModels(payload);
+  });
+
+  ipcMain.handle('vault:testModel', async (_event, input) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const previous = queryOne('SELECT api_key FROM ai_profiles WHERE user_id = ?', [user.id]);
+    const payload = {
+      ...(input || {}),
+      apiKey: input && input.apiKey === '********' ? (previous && previous.api_key ? previous.api_key : '') : input?.apiKey,
+    };
+    return testLlmProfile(payload);
+  });
+
   ipcMain.handle('vault:saveKnowledgeSources', async (_event, sources) => {
     await ensureDatabase();
     return saveRemoteSources('knowledge_sources', sources);
@@ -1598,7 +2094,141 @@ function registerHandlers() {
 
   ipcMain.handle('vault:queryKnowledgeCenter', async (_event, payload) => {
     await ensureDatabase();
-    return queryKnowledgeCenter(payload && payload.question);
+    return queryKnowledgeCenter(payload && payload.question, payload || {});
+  });
+
+  ipcMain.handle('vault:setContext', async (_event, input) => {
+    await ensureDatabase();
+    requireUser();
+    setContext(input || {});
+    return publicState();
+  });
+
+  ipcMain.handle('vault:createGroup', async (_event, input) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const password = requireSessionPassword();
+    groupService.createGroup(db, saveDatabase, queryOne, user, password, input || {});
+    return publicState();
+  });
+
+  ipcMain.handle('vault:inviteToGroup', async (_event, input) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const password = requireSessionPassword();
+    const result = groupService.inviteToGroup(db, saveDatabase, queryOne, queryAll, user, password, input || {});
+    return { ...result, state: publicState() };
+  });
+
+  ipcMain.handle('vault:leaveGroup', async (_event, groupId) => {
+    await ensureDatabase();
+    groupService.leaveGroup(db, saveDatabase, queryOne, queryAll, requireUser(), String(groupId || ''));
+    if (getContext().groupId === groupId) setContext({ scope: 'personal' });
+    return publicState();
+  });
+
+  ipcMain.handle('vault:removeGroupMember', async (_event, payload) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const password = requireSessionPassword();
+    groupService.removeGroupMember(db, saveDatabase, queryOne, queryAll, user, password, payload || {});
+    return publicState();
+  });
+
+  ipcMain.handle('vault:rotateGroupKey', async (_event, groupId) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const password = requireSessionPassword();
+    const result = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, user, password, String(groupId || ''));
+    return { ...result, state: publicState() };
+  });
+
+  ipcMain.handle('vault:updateMemberRole', async (_event, payload) => {
+    await ensureDatabase();
+    groupService.updateMemberRole(db, saveDatabase, queryOne, requireUser(), payload || {});
+    return publicState();
+  });
+
+  ipcMain.handle('vault:transferGroupOwnership', async (_event, payload) => {
+    await ensureDatabase();
+    groupService.transferOwnership(db, saveDatabase, queryOne, requireUser(), payload || {});
+    return publicState();
+  });
+
+  ipcMain.handle('vault:acceptPendingInvites', async () => {
+    await ensureDatabase();
+    const user = requireUser();
+    const password = requireSessionPassword();
+    const accepted = groupService.processPendingInvitesForUser(db, saveDatabase, queryOne, queryAll, user, password);
+    return { accepted, state: publicState() };
+  });
+
+  ipcMain.handle('vault:listGroupMembers', async (_event, groupId) => {
+    await ensureDatabase();
+    const user = requireUser();
+    return groupService.listGroupMembers(db, queryAll, queryOne, String(groupId || ''), user.id);
+  });
+
+  ipcMain.handle('vault:search', async (_event, payload) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const q = String(payload?.query || '').trim();
+    if (!q) return { results: [], state: publicState() };
+    const context = payload?.searchScope === 'all'
+      ? { scope: 'all', groupId: '' }
+      : (payload?.context || getContext());
+    const results = searchService.searchLocalAssets(db, queryAll, user.id, q, context);
+    return { results, state: publicState() };
+  });
+
+  ipcMain.handle('vault:reindexSearch', async () => {
+    await ensureDatabase();
+    const user = requireUser();
+    searchService.reindexAllForUser(db, queryAll, user.id);
+    saveDatabase();
+    return publicState();
+  });
+
+  ipcMain.handle('vault:copyItemToGroup', async (_event, payload) => {
+    await ensureDatabase();
+    const user = requireUser();
+    const password = requireSessionPassword();
+    const itemId = String(payload?.itemId || '');
+    const groupId = String(payload?.groupId || '');
+    groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
+    const lib = queryOne('SELECT * FROM library_items WHERE id = ?', [itemId]);
+    if (!lib || lib.scope !== 'personal' || lib.user_id !== user.id) {
+      throw new Error('只能复制自己的个人库条目到组');
+    }
+    const bytes = decryptContent(lib, user, password);
+    createLibraryItem({
+      kind: lib.kind,
+      title: `${lib.title} (组副本)`,
+      url: lib.url || '',
+      content: JSON.parse(bytes.toString('utf8')).content || '',
+      scope: 'group',
+      groupId,
+      tags: lib.tags,
+    });
+    return publicState();
+  });
+
+  ipcMain.handle('vault:syncManifest', async (_event, payload) => {
+    await ensureDatabase();
+    requireUser();
+    const push = await pushManifestToFeishu(payload || {});
+    return { ok: true, fileToken: push.fileToken, state: publicState() };
+  });
+
+  ipcMain.handle('vault:pullManifest', async (_event, payload) => {
+    await ensureDatabase();
+    const result = await pullManifestFromFeishu(payload || {});
+    return { ...result, state: publicState() };
+  });
+
+  ipcMain.handle('vault:fullSync', async (_event, payload) => {
+    await ensureDatabase();
+    return fullSyncManifest(payload || {});
   });
 
   ipcMain.handle('vault:openExternal', (_event, url) => shell.openExternal(String(url)));

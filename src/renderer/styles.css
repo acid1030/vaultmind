@@ -47,6 +47,42 @@ select {
   display: none !important;
 }
 
+.contextSelect {
+  min-width: 140px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+}
+
+.scopeBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(40, 215, 233, 0.2);
+  color: var(--cyan);
+}
+
+.scopeBadge.warn {
+  background: rgba(247, 200, 107, 0.2);
+  color: var(--gold);
+}
+
+.searchResults {
+  margin-bottom: 12px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 16px 0;
+}
+
 .loginView {
   min-height: calc(100vh - 44px);
   display: flex;
@@ -212,6 +248,10 @@ p,
 }
 
 .notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: 14px;
   border-radius: 12px;
   padding: 11px 13px;
@@ -221,10 +261,33 @@ p,
   box-shadow: 0 12px 26px rgba(0, 0, 0, 0.18);
 }
 
+.notice span {
+  min-width: 0;
+  line-height: 1.55;
+}
+
 .notice.error {
   border-color: rgba(251, 113, 133, 0.35);
   color: #fecdd3;
   background: rgba(244, 63, 94, 0.12);
+}
+
+.noticeClose {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border-radius: 8px;
+  line-height: 1;
+  color: currentColor;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  opacity: 0.78;
+}
+
+.noticeClose:hover {
+  opacity: 1;
+  transform: none;
 }
 
 .grid {
@@ -288,25 +351,37 @@ textarea {
 }
 
 select {
-  min-width: 220px;
-  height: 44px;
+  width: 100%;
+  min-width: 260px;
+  height: 46px;
   appearance: none;
-  padding: 0 46px 0 14px;
+  padding: 0 48px 0 16px;
   cursor: pointer;
   color: rgba(247, 251, 255, 0.92);
+  border-color: rgba(40, 215, 233, 0.28);
+  border-radius: 13px;
   background:
-    linear-gradient(45deg, transparent 50%, rgba(223, 252, 255, 0.86) 50%) calc(100% - 23px) 19px / 7px 7px no-repeat,
-    linear-gradient(135deg, rgba(223, 252, 255, 0.86) 50%, transparent 50%) calc(100% - 16px) 19px / 7px 7px no-repeat,
-    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.025)),
-    rgba(4, 9, 16, 0.72);
-  line-height: 44px;
-  font-weight: 650;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.075), 0 10px 22px rgba(0, 0, 0, 0.16);
+    linear-gradient(45deg, transparent 50%, rgba(223, 252, 255, 0.92) 50%) calc(100% - 25px) 20px / 7px 7px no-repeat,
+    linear-gradient(135deg, rgba(223, 252, 255, 0.92) 50%, transparent 50%) calc(100% - 18px) 20px / 7px 7px no-repeat,
+    linear-gradient(180deg, rgba(40, 215, 233, 0.10), rgba(255, 255, 255, 0.025)),
+    rgba(5, 12, 22, 0.88);
+  line-height: 46px;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09), 0 12px 26px rgba(0, 0, 0, 0.20);
 }
 
 select option {
   background: #101722;
   color: #f7fbff;
+}
+
+select:hover {
+  border-color: rgba(40, 215, 233, 0.48);
+  background:
+    linear-gradient(45deg, transparent 50%, rgba(223, 252, 255, 0.95) 50%) calc(100% - 25px) 20px / 7px 7px no-repeat,
+    linear-gradient(135deg, rgba(223, 252, 255, 0.95) 50%, transparent 50%) calc(100% - 18px) 20px / 7px 7px no-repeat,
+    linear-gradient(180deg, rgba(40, 215, 233, 0.14), rgba(255, 255, 255, 0.04)),
+    rgba(5, 12, 22, 0.92);
 }
 
 input {
@@ -411,6 +486,17 @@ button.full {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.inlineControl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.inlineControl select {
+  min-width: 0;
 }
 
 .segmented {

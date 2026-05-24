@@ -1,11 +1,12 @@
 {
   "name": "vaultmind",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "VaultMind - private knowledge center with secure vault and AI retrieval",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node scripts/test-core.js"
   },
   "devDependencies": {
     "electron": "^33.4.11"

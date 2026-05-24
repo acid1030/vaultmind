@@ -59,7 +59,11 @@
             </div>
           </div>
           <div class="statusStack">
+            <select id="contextSelect" class="contextSelect" title="工作上下文">
+              <option value="personal">个人</option>
+            </select>
             <button id="navLibrary" class="navPill active" data-view="library">内容库</button>
+            <button id="navGroups" class="navPill" data-view="groups">用户组</button>
             <button id="navProjects" class="navPill" data-view="projects">项目</button>
             <button id="navAdd" class="navPill" data-view="add">添加</button>
             <button id="navConfig" class="navPill" data-view="config">配置</button>
@@ -68,7 +72,10 @@
           </div>
         </header>
 
-        <section id="notice" class="notice hidden"></section>
+        <section id="notice" class="notice hidden">
+          <span id="noticeText"></span>
+          <button id="noticeClose" class="iconButton noticeClose" aria-label="关闭提示">x</button>
+        </section>
 
         <div class="grid">
           <aside id="configView" class="side viewPane hidden">
@@ -224,9 +231,40 @@
 
           </aside>
 
+          <section id="groupsView" class="side viewPane hidden">
+            <section class="panel">
+              <div class="panelHeader">
+                <h2>用户组</h2>
+              </div>
+              <p class="hint">组内内容使用组密钥加密，组员可见；个人库内容不会自动共享。</p>
+              <label>新建组名称<input id="newGroupName" placeholder="例如：研发团队" /></label>
+              <label>飞书文件夹 Token（可选）<input id="newGroupFolder" placeholder="root 或 fldcn..." /></label>
+              <button id="createGroupBtn" class="primary full">创建用户组</button>
+              <div id="groupsList" class="sourceList"></div>
+              <hr class="divider" />
+              <h3 class="subTitle">邀请成员</h3>
+              <label>目标组
+                <select id="inviteGroupSelect"></select>
+              </label>
+              <label>成员邮箱<input id="inviteEmail" placeholder="已注册用户的邮箱" /></label>
+              <label>角色
+                <select id="inviteRole">
+                  <option value="member">成员</option>
+                  <option value="admin">管理员</option>
+                  <option value="viewer">只读</option>
+                </select>
+              </label>
+              <button id="inviteGroupBtn" class="success full">发送邀请</button>
+              <button id="acceptInvitesBtn" class="full">接受待处理邀请</button>
+              <div id="pendingInvites" class="sourceList"></div>
+              <div id="groupMembers" class="sourceList"></div>
+            </section>
+          </section>
+
           <section id="addView" class="side viewPane hidden">
             <section class="panel">
               <h2>添加内容</h2>
+              <p id="addScopeHint" class="hint">将保存到：个人空间</p>
               <div class="segmented four">
                 <button id="fileMode" class="active">文件</button>
                 <button id="textMode">文本</button>
@@ -277,6 +315,12 @@
                 <input id="passphrase" type="password" placeholder="同步和取回时使用，至少 8 位" />
               </label>
               <button id="upload" class="success">加密并同步到飞书</button>
+              <div class="buttonRow">
+                <button id="pullManifest" class="primary">从飞书拉取清单</button>
+                <button id="syncManifest" class="success">上传清单到飞书</button>
+              </div>
+              <button id="fullSync" class="full">完整同步（先拉取再上传）</button>
+              <p id="manifestStatus" class="hint"></p>
             </section>
           </section>
 
@@ -286,6 +330,14 @@
                 <h2>内容库</h2>
                 <button id="showDatabase" class="small">SQLite</button>
               </div>
+              <label>
+                全局搜索
+                <div class="inlineControl">
+                  <input id="globalSearch" placeholder="搜索标题与标签..." />
+                  <button id="runGlobalSearch" class="small">搜索</button>
+                </div>
+              </label>
+              <div id="searchResults" class="searchResults"></div>
               <label>
                 本地密码
                 <input id="unlockPassword" type="password" placeholder="查看文本或保存文件" />
