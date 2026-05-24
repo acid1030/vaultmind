@@ -12,6 +12,8 @@ const searchService = require('./core/search');
 const manifestService = require('./core/manifest-sync');
 const groupCrypto = require('./core/group-crypto');
 const feishuDrive = require('./core/feishu-drive');
+const feishuWiki = require('./core/feishu-wiki');
+const knowledgeHints = require('./core/knowledge-hints');
 
 const DEFAULT_SETTINGS = {
   appId: '',
@@ -26,7 +28,12 @@ const LOCAL_KEY_ITERATIONS = 180000;
 const MAX_FILE_BYTES = 18 * 1024 * 1024;
 const FEISHU_API = 'https://open.feishu.cn';
 const FEISHU_AUTH = 'https://accounts.feishu.cn/open-apis/authen/v1/authorize';
-const REQUIRED_SCOPES = ['drive:drive', 'drive:drive:readonly', 'auth:user.id:read'].join(' ');
+const REQUIRED_SCOPES = [
+  'drive:drive',
+  'drive:drive:readonly',
+  'auth:user.id:read',
+  'wiki:wiki:readonly',
+].join(' ');
 
 let mainWindow = null;
 let pendingLogin = null;
@@ -492,6 +499,13 @@ function publicState() {
   const manifestMeta = activeUser
     ? getManifestMeta(context.scope, context.groupId, activeUser.id)
     : null;
+  const feishuWikiSettings = getFeishuWikiSettings();
+  const obsidianConfigured = activeUser
+    ? queryAll('SELECT id FROM obsidian_sources WHERE user_id = ? LIMIT 1', [activeUser.id]).length > 0
+    : false;
+  const obsidianEnabled = activeUser
+    ? queryAll('SELECT id FROM obsidian_sources WHERE user_id = ? AND enabled = 1 LIMIT 1', [activeUser.id]).length > 0
+    : false;
   return {
     auth: {
       hasUsers: Boolean(queryOne('SELECT id FROM users LIMIT 1')),
@@ -516,6 +530,16 @@ function publicState() {
       vectorSources,
       obsidianSources,
       queryLogs,
+      feishuWiki: {
+        enabled: feishuWikiSettings.enabled,
+        spaceId: feishuWikiSettings.spaceId || '',
+        available: Boolean(token && token.accessToken),
+      },
+      obsidian: {
+        configured: obsidianConfigured,
+        enabled: obsidianEnabled,
+        localRestUrl: knowledgeHints.OBSIDIAN_LOCAL_URL,
+      },
     },
     projects: projectData,
     redirectUri: `http://127.0.0.1:${settings.redirectPort}/feishu/oauth/callback`,
@@ -949,6 +973,42 @@ function getManifestMeta(scope, groupId, userId) {
   return getStateValue(manifestStateKey(scope, groupId, userId), null);
 }
 
+function getFeishuWikiSettings() {
+  const stored = getStateValue('feishuWiki', {});
+  return {
+    enabled: stored.enabled !== false,
+    spaceId: String(stored.spaceId || '').trim(),
+  };
+}
+
+function saveFeishuWikiSettings(input) {
+  const user = requireUser();
+  const previous = getFeishuWikiSettings();
+  const next = {
+    enabled: input.enabled === false ? false : true,
+    spaceId: input.spaceId === undefined ? previous.spaceId : String(input.spaceId || '').trim(),
+  };
+  setStateValue('feishuWiki', next);
+  saveDatabase();
+  return publicState();
+}
+
+async function callFeishuWikiRetriever(question) {
+  const settings = getFeishuWikiSettings();
+  if (!settings.enabled) return [];
+  const token = await refreshFeishuTokenIfNeeded();
+  const body = {
+    query: feishuWiki.truncateQuery(question),
+    page_size: 12,
+  };
+  if (settings.spaceId) body.space_id = settings.spaceId;
+  const response = await requestJson('POST', `${FEISHU_API}/open-apis/wiki/v2/nodes/search`, {
+    headers: { Authorization: `Bearer ${token.accessToken}` },
+    body,
+  });
+  return feishuWiki.parseSearchResponse(ensureFeishuPayload(response, '搜索飞书知识库失败'));
+}
+
 async function listFeishuFolderFiles(folderToken) {
   const token = await refreshFeishuTokenIfNeeded();
   const response = await requestJson(
@@ -970,6 +1030,82 @@ async function downloadFeishuFileBuffer(fileToken) {
     throw new Error(`下载飞书文件失败：HTTP ${response.status}`);
   }
   return response.body;
+}
+
+async function deleteFeishuFile(fileToken) {
+  const token = await refreshFeishuTokenIfNeeded();
+  const response = await requestJson(
+    'DELETE',
+    `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}`,
+    { headers: { Authorization: `Bearer ${token.accessToken}` } },
+  );
+  ensureFeishuPayload(response, '删除飞书测试文件失败');
+}
+
+async function testFeishuSync(input = {}) {
+  const user = requireUser();
+  const previous = getSettings();
+  const settings = sanitizeSettings({
+    appId: input.appId || previous.appId,
+    appSecret: input.appSecret || previous.appSecret,
+    folderToken: input.folderToken || previous.folderToken,
+    redirectPort: previous.redirectPort,
+  }, previous.appSecret);
+  if (!settings.appId || !settings.appSecret) {
+    throw new Error('请先填写飞书 App ID 和 App Secret');
+  }
+  const feishuToken = getFeishuToken();
+  if (!feishuToken || !feishuToken.accessToken) {
+    throw new Error('请先登录飞书后再测试同步');
+  }
+  const passphrase = String(input.passphrase || '');
+  if (passphrase.length < 8) throw new Error('飞书加密口令至少需要 8 个字符');
+
+  const scopeMeta = resolveScopeFromInput(input);
+  const parentNode = scopeMeta.scope === 'group'
+    ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [scopeMeta.groupId])?.feishu_folder_token
+      || settings.folderToken
+      || 'root')
+    : (settings.folderToken || 'root');
+
+  await listFeishuFolderFiles(parentNode);
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const testName = `vaultmind-sync-test-${stamp}`;
+  const testPayload = payloadFromText(
+    testName,
+    `VaultMind 飞书同步连通性测试\n时间: ${new Date().toISOString()}\n账号: ${user.email || user.username || user.id}\n`,
+  );
+  const uploaded = await uploadVaultPayload(testPayload, passphrase, scopeMeta, {
+    skipRecord: true,
+    parentNode,
+  });
+  const buffer = await downloadFeishuFileBuffer(uploaded.fileToken);
+  const decrypted = decryptVaultPayload(buffer, passphrase);
+  if (!decrypted.text || !String(decrypted.text).includes('VaultMind')) {
+    throw new Error('上传成功但回读解密校验失败，请检查加密口令');
+  }
+
+  let cleanedUp = false;
+  try {
+    await deleteFeishuFile(uploaded.fileToken);
+    cleanedUp = true;
+  } catch {
+    cleanedUp = false;
+  }
+
+  return {
+    ok: true,
+    message: cleanedUp
+      ? '飞书同步测试通过：已上传测试文本、回读解密成功，并已删除云端测试文件。'
+      : '飞书同步测试通过：已上传并回读解密成功（云端测试文件未自动删除，可在飞书云盘中手动移除）。',
+    folderToken: parentNode,
+    fileToken: uploaded.fileToken,
+    url: uploaded.url || '',
+    fileName: uploaded.fileName,
+    feishuUser: feishuToken.user && feishuToken.user.name ? feishuToken.user.name : '',
+    cleanedUp,
+  };
 }
 
 async function resolveManifestFileToken(scope, groupId, userId, fileName) {
@@ -1072,7 +1208,7 @@ function afterAuthSuccess(user, password) {
   return accepted;
 }
 
-async function uploadVaultPayload(payload, passphrase, scopeMeta = {}) {
+async function uploadVaultPayload(payload, passphrase, scopeMeta = {}, options = {}) {
   const user = requireUser();
   const settings = getSettings();
   const { scope, groupId } = scopeMeta.scope ? scopeMeta : resolveScopeFromInput(scopeMeta);
@@ -1082,9 +1218,9 @@ async function uploadVaultPayload(payload, passphrase, scopeMeta = {}) {
   const token = await refreshFeishuTokenIfNeeded();
   const encrypted = encryptVaultPayload(payload, passphrase);
   const uploadName = `${payload.name}.axonvault`;
-  const parentNode = scope === 'group'
+  const parentNode = options.parentNode || (scope === 'group'
     ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [groupId])?.feishu_folder_token || settings.folderToken || 'root')
-    : (settings.folderToken || 'root');
+    : (settings.folderToken || 'root'));
   const multipart = buildMultipart({
     file_name: uploadName,
     parent_type: 'explorer',
@@ -1101,6 +1237,14 @@ async function uploadVaultPayload(payload, passphrase, scopeMeta = {}) {
   });
   const data = ensureFeishuPayload(JSON.parse(response.body.toString('utf8')), '上传到飞书失败');
   if (!data.file_token) throw new Error('飞书没有返回 file_token');
+  if (options.skipRecord) {
+    return {
+      fileToken: data.file_token,
+      url: data.url || '',
+      fileName: uploadName,
+      parentNode,
+    };
+  }
   const record = {
     id: crypto.randomUUID(),
     userId: user.id,
@@ -1660,7 +1804,37 @@ async function queryKnowledgeCenter(question, options = {}) {
     ? queryAll('SELECT * FROM obsidian_sources WHERE user_id = ? AND enabled = 1', [user.id])
     : [];
   const aiProfile = queryOne('SELECT * FROM ai_profiles WHERE user_id = ?', [user.id]);
+  searchService.ensureSearchIndex(db, queryAll, user.id);
+  saveDatabase();
   const evidence = [...searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext)];
+  const setupHints = [];
+
+  const feishuToken = getFeishuToken();
+  if (feishuToken && feishuToken.accessToken && getFeishuWikiSettings().enabled) {
+    try {
+      evidence.push(...await callFeishuWikiRetriever(cleanQuestion));
+    } catch (error) {
+      const message = String(error.message || error);
+      if (message.includes('wiki') || message.includes('权限') || message.includes('scope')) {
+        setupHints.push(knowledgeHints.feishuWikiScopeHint(message));
+      } else {
+        evidence.push({
+          source: '飞书知识库',
+          type: 'feishu_wiki',
+          title: '飞书 Wiki 检索失败',
+          content: message,
+          score: null,
+        });
+      }
+    }
+  } else if (
+    includePersonal
+    && !knowledgeSources.length
+    && !vectorSources.length
+    && !obsidianSources.length
+  ) {
+    setupHints.push(knowledgeHints.feishuWikiLoginHint());
+  }
 
   for (const source of knowledgeSources) {
     try {
@@ -1676,24 +1850,37 @@ async function queryKnowledgeCenter(question, options = {}) {
       evidence.push({ source: source.name, type: 'vector', title: '检索失败', content: String(error.message || error), score: null });
     }
   }
-  for (const source of obsidianSources) {
-    try {
-      evidence.push(...await callObsidianRetriever(source, cleanQuestion));
-    } catch (error) {
-      evidence.push({ source: source.name, type: 'obsidian', title: 'Obsidian 检索失败', content: String(error.message || error), score: null });
+  if (obsidianSources.length) {
+    for (const source of obsidianSources) {
+      try {
+        evidence.push(...await callObsidianRetriever(source, cleanQuestion));
+      } catch (error) {
+        evidence.push({ source: source.name, type: 'obsidian', title: 'Obsidian 检索失败', content: String(error.message || error), score: null });
+      }
     }
+  } else if (includePersonal) {
+    setupHints.push(knowledgeHints.obsidianSetupHint());
   }
 
-  if (evidence.length === 0) {
-    throw new Error('没有匹配内容。请添加本地条目或配置远程知识库/向量库/Obsidian');
+  const hasRemote = Boolean(feishuToken && feishuToken.accessToken && getFeishuWikiSettings().enabled)
+    || knowledgeSources.length + vectorSources.length + obsidianSources.length > 0;
+  const actionableEvidence = evidence.filter((item) => !item.isHint);
+  if (actionableEvidence.length === 0 && setupHints.length === 0) {
+    throw new Error(
+      hasRemote
+        ? '没有匹配内容。请尝试更短的关键词，或检查飞书/远程知识库是否可用。'
+        : '内容库为空。请先在「添加」中保存条目，或登录飞书启用「飞书知识库」检索（配置 → 飞书知识库）。',
+    );
   }
-  const synthesis = await synthesizeWithLlm(aiProfile, cleanQuestion, evidence);
+  const allEvidence = [...actionableEvidence, ...setupHints];
+  const synthesis = await synthesizeWithLlm(aiProfile, cleanQuestion, allEvidence);
   const log = {
     id: crypto.randomUUID(),
     userId: user.id,
     question: cleanQuestion,
     answer: synthesis.answer,
-    evidence,
+    evidence: allEvidence,
+    setupHints,
     createdAt: new Date().toISOString(),
   };
   db.run(
@@ -1701,7 +1888,7 @@ async function queryKnowledgeCenter(question, options = {}) {
     [log.id, user.id, log.question, log.answer, JSON.stringify(log.evidence), log.createdAt],
   );
   saveDatabase();
-  return { ...log, state: publicState(), usedLlm: synthesis.usedLlm };
+  return { ...log, state: publicState(), usedLlm: synthesis.usedLlm, setupHints };
 }
 
 function createWindow() {
@@ -1720,16 +1907,36 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
-function cancelPendingFeishuLogin(reason = '飞书登录已取消') {
+function closeHttpServer(server) {
+  return new Promise((resolve) => {
+    if (!server) {
+      resolve();
+      return;
+    }
+    if (!server.listening) {
+      resolve();
+      return;
+    }
+    server.close(() => resolve());
+  });
+}
+
+async function cancelPendingFeishuLoginAsync(reason = '飞书登录已取消') {
   if (!pendingLogin) return;
   const { server, reject } = pendingLogin;
   pendingLogin = null;
-  try {
-    server.close();
-  } catch {
-    // Server may already be closed by the OAuth callback.
+  await closeHttpServer(server);
+  if (typeof reject === 'function') {
+    try {
+      reject(new Error(reason));
+    } catch {
+      // Promise may already be settled.
+    }
   }
-  if (typeof reject === 'function') reject(new Error(reason));
+}
+
+function cancelPendingFeishuLogin(reason = '飞书登录已取消') {
+  cancelPendingFeishuLoginAsync(reason).catch(() => {});
 }
 
 function openFeishuAuthWindow(authUrl) {
@@ -1861,6 +2068,11 @@ function registerHandlers() {
     return publicState();
   });
 
+  ipcMain.handle('vault:testFeishuSync', async (_event, input) => {
+    await ensureDatabase();
+    return testFeishuSync(input || {});
+  });
+
   ipcMain.handle('vault:login', async () => {
     await ensureDatabase();
     requireUser();
@@ -1868,9 +2080,7 @@ function registerHandlers() {
     if (!settings.appId || !settings.appSecret) {
       throw new Error('请先填写飞书 App ID 和 App Secret');
     }
-    if (pendingLogin) {
-      cancelPendingFeishuLogin('新的飞书登录已开始');
-    }
+    await cancelPendingFeishuLoginAsync('准备新的飞书登录');
 
     const stateValue = crypto.randomBytes(18).toString('hex');
     const redirectUri = `http://127.0.0.1:${settings.redirectPort}/feishu/oauth/callback`;
@@ -1913,7 +2123,18 @@ function registerHandlers() {
         authUrl.searchParams.set('state', stateValue);
         openFeishuAuthWindow(authUrl.toString());
       });
-      server.on('error', reject);
+      server.on('error', (err) => {
+        pendingLogin = null;
+        if (err && err.code === 'EADDRINUSE') {
+          reject(new Error(
+            `OAuth 回调端口 ${settings.redirectPort} 已被占用（可能上次登录未结束或开了多个 VaultMind）。`
+            + ' 请完全退出应用后重试；或在终端执行：'
+            + `lsof -ti :${settings.redirectPort} | xargs kill -9`,
+          ));
+          return;
+        }
+        reject(err);
+      });
     });
     return publicState();
   });
@@ -2092,6 +2313,11 @@ function registerHandlers() {
     return saveObsidianSources(sources);
   });
 
+  ipcMain.handle('vault:saveFeishuWikiSettings', async (_event, input) => {
+    await ensureDatabase();
+    return saveFeishuWikiSettings(input || {});
+  });
+
   ipcMain.handle('vault:queryKnowledgeCenter', async (_event, payload) => {
     await ensureDatabase();
     return queryKnowledgeCenter(payload && payload.question, payload || {});
@@ -2237,6 +2463,10 @@ function registerHandlers() {
     shell.showItemInFolder(databasePath());
   });
 }
+
+app.on('before-quit', () => {
+  cancelPendingFeishuLogin('应用正在退出');
+});
 
 app.whenReady().then(async () => {
   await ensureDatabase();

@@ -10,6 +10,8 @@ const inviteCrypto = require('../src/core/invite-crypto');
 const searchService = require('../src/core/search');
 const manifestService = require('../src/core/manifest-sync');
 const feishuDrive = require('../src/core/feishu-drive');
+const feishuWiki = require('../src/core/feishu-wiki');
+const knowledgeHints = require('../src/core/knowledge-hints');
 
 const LOCAL_KEY_ITERATIONS = 180000;
 
@@ -205,6 +207,14 @@ async function main() {
   });
   assert.equal(files[0].token, 'tok1');
   assert.ok(feishuDrive.findManifestFile(files, 'vaultmind-user-x.axonvault'));
+
+  const wikiHits = feishuWiki.parseSearchResponse({
+    data: { items: [{ title: '部署手册', url: 'https://feishu.cn/wiki/x', node_id: 'n1' }] },
+  });
+  assert.equal(wikiHits[0].type, 'feishu_wiki');
+  assert.equal(feishuWiki.truncateQuery('a'.repeat(60)).length, 50);
+  assert.ok(knowledgeHints.obsidianSetupHint().isHint);
+  assert.ok(knowledgeHints.feishuWikiLoginHint().isHint);
 
   const rotate = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, userA, 'password-a', group.id);
   assert.ok(rotate.keyVersion >= 2);

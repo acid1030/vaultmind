@@ -10,7 +10,15 @@ function createUnavailableApi() {
       items: [],
       context: { scope: 'personal', groupId: '', groupName: '' },
       groups: [],
-      knowledgeCenter: { aiProfile: {}, knowledgeSources: [], vectorSources: [], obsidianSources: [], queryLogs: [] },
+      knowledgeCenter: {
+        aiProfile: {},
+        knowledgeSources: [],
+        vectorSources: [],
+        obsidianSources: [],
+        queryLogs: [],
+        feishuWiki: { enabled: true, spaceId: '', available: false },
+        obsidian: { configured: false, enabled: false, localRestUrl: 'https://127.0.0.1:27124' },
+      },
       redirectUri: 'http://127.0.0.1:37891/feishu/oauth/callback',
       requiredScopes: '',
     }),
@@ -20,6 +28,7 @@ function createUnavailableApi() {
     updateRecovery: fail,
     resetPassword: fail,
     saveSettings: fail,
+    testFeishuSync: fail,
     login: fail,
     logout: fail,
     chooseFiles: fail,
@@ -241,27 +250,30 @@ const elements = {
   records: document.querySelector('#records'),
   items: document.querySelector('#items'),
   saveSettings: document.querySelector('#saveSettings'),
+  feishuTestPassphrase: document.querySelector('#feishuTestPassphrase'),
+  testFeishuSync: document.querySelector('#testFeishuSync'),
   login: document.querySelector('#login'),
   logout: document.querySelector('#logout'),
   chooseFiles: document.querySelector('#chooseFiles'),
-  upload: document.querySelector('#upload'),
   showDatabase: document.querySelector('#showDatabase'),
   fileMode: document.querySelector('#fileMode'),
   textMode: document.querySelector('#textMode'),
   webMode: document.querySelector('#webMode'),
   videoMode: document.querySelector('#videoMode'),
+  addFileBox: document.querySelector('#addFileBox'),
+  addFieldsBox: document.querySelector('#addFieldsBox'),
   manualTitle: document.querySelector('#manualTitle'),
   manualUrl: document.querySelector('#manualUrl'),
   manualUrlWrap: document.querySelector('#manualUrlWrap'),
   manualText: document.querySelector('#manualText'),
   manualTextWrap: document.querySelector('#manualTextWrap'),
-  saveManualContent: document.querySelector('#saveManualContent'),
-  vaultFileMode: document.querySelector('#vaultFileMode'),
-  vaultTextMode: document.querySelector('#vaultTextMode'),
-  fileUploadBox: document.querySelector('#fileUploadBox'),
-  textUploadBox: document.querySelector('#textUploadBox'),
-  secretName: document.querySelector('#secretName'),
-  secretText: document.querySelector('#secretText'),
+  optSaveLocal: document.querySelector('#optSaveLocal'),
+  optSaveLocalWrap: document.querySelector('#optSaveLocalWrap'),
+  optSyncFeishu: document.querySelector('#optSyncFeishu'),
+  optSyncManifest: document.querySelector('#optSyncManifest'),
+  feishuPassphraseWrap: document.querySelector('#feishuPassphraseWrap'),
+  addKnowledgeSources: document.querySelector('#addKnowledgeSources'),
+  submitAdd: document.querySelector('#submitAdd'),
   unlockPassword: document.querySelector('#unlockPassword'),
 };
 
@@ -269,7 +281,6 @@ let state = null;
 let selectedFiles = [];
 let authMode = 'login';
 let uploadMode = 'file';
-let vaultUploadMode = 'file';
 let activeView = 'library';
 let configFormVisible = false;
 let projectProvider = 'github';
@@ -374,18 +385,61 @@ function renderAuthMode() {
 }
 
 function renderUploadMode() {
-  elements.fileMode.classList.toggle('active', uploadMode === 'file');
+  const isFile = uploadMode === 'file';
+  elements.fileMode.classList.toggle('active', isFile);
   elements.textMode.classList.toggle('active', uploadMode === 'text');
   elements.webMode.classList.toggle('active', uploadMode === 'web');
   elements.videoMode.classList.toggle('active', uploadMode === 'video');
+  if (elements.addFileBox) elements.addFileBox.classList.toggle('hidden', !isFile);
+  if (elements.addFieldsBox) elements.addFieldsBox.classList.toggle('hidden', isFile);
   elements.manualUrlWrap.classList.toggle('hidden', !['web', 'video'].includes(uploadMode));
   elements.manualTextWrap.classList.toggle('hidden', ['web', 'video'].includes(uploadMode));
 
-  const isVaultText = vaultUploadMode === 'text';
-  elements.vaultFileMode.classList.toggle('active', !isVaultText);
-  elements.vaultTextMode.classList.toggle('active', isVaultText);
-  elements.fileUploadBox.classList.toggle('hidden', isVaultText);
-  elements.textUploadBox.classList.toggle('hidden', !isVaultText);
+  if (elements.optSaveLocalWrap) {
+    elements.optSaveLocalWrap.classList.toggle('muted', isFile);
+    if (elements.optSaveLocal) {
+      if (isFile) {
+        elements.optSaveLocal.checked = false;
+        elements.optSaveLocal.disabled = true;
+      } else {
+        elements.optSaveLocal.disabled = false;
+        if (!elements.optSaveLocal.checked && !elements.optSyncFeishu?.checked) {
+          elements.optSaveLocal.checked = true;
+        }
+      }
+    }
+  }
+  renderAddSyncOptions();
+}
+
+function renderAddSyncOptions() {
+  if (elements.feishuPassphraseWrap) {
+    elements.feishuPassphraseWrap.classList.toggle('hidden', !elements.optSyncFeishu?.checked);
+  }
+  if (elements.optSyncManifest) {
+    elements.optSyncManifest.disabled = !elements.optSyncFeishu?.checked;
+    if (!elements.optSyncFeishu?.checked) elements.optSyncManifest.checked = false;
+  }
+  if (!elements.addKnowledgeSources) return;
+  const kc = state?.knowledgeCenter || {};
+  const lines = [];
+  if (state?.isFeishuLoggedIn && kc.feishuWiki?.enabled !== false) {
+    lines.push('· 飞书知识库 Wiki：已连接，保存后可在「知识库对话」检索');
+  } else if (state?.settings?.appId) {
+    lines.push('· 飞书知识库 Wiki：需登录飞书（配置中心）');
+  }
+  for (const s of kc.knowledgeSources || []) {
+    if (s.enabled) lines.push(`· 远程知识库：${s.name}`);
+  }
+  for (const s of kc.vectorSources || []) {
+    if (s.enabled) lines.push(`· 向量库：${s.name}`);
+  }
+  for (const s of kc.obsidianSources || []) {
+    if (s.enabled) lines.push(`· Obsidian：${s.name}`);
+  }
+  elements.addKnowledgeSources.innerHTML = lines.length
+    ? `<p>${lines.map((l) => escapeHtml(l)).join('<br />')}</p><p>以上来源在「知识库对话」中检索，无需单独上传；连接请在「配置」中管理。</p>`
+    : '<p>连接飞书 Wiki / 远程知识库 / Obsidian 后，可在「知识库对话」统一检索。</p>';
 }
 
 function renderActiveView() {
@@ -580,6 +634,22 @@ function configCards() {
   for (const item of kbSourcesDraft) cards.push({ type: 'knowledge', title: item.name, status: item.enabled ? '启用' : '停用', meta: item.endpoint, id: item.id });
   for (const item of vectorSourcesDraft) cards.push({ type: 'vector', title: item.name, status: item.enabled ? '启用' : '停用', meta: item.collection || item.endpoint, id: item.id });
   for (const item of obsidianSourcesDraft) cards.push({ type: 'obsidian', title: item.name, status: item.enabled ? '启用' : '停用', meta: item.baseUrl, id: item.id });
+  const fw = state.knowledgeCenter?.feishuWiki || {};
+  cards.push({
+    type: 'feishuWiki',
+    title: '飞书知识库',
+    status: fw.available ? (fw.enabled ? '已启用' : '已停用') : '需登录飞书',
+    meta: fw.spaceId ? `空间 ${fw.spaceId}` : 'Wiki 全文检索（登录后可用）',
+  });
+  const ob = state.knowledgeCenter?.obsidian || {};
+  if (!ob.configured) {
+    cards.push({
+      type: 'obsidian',
+      title: 'Obsidian',
+      status: '未配置',
+      meta: `本地 REST ${ob.localRestUrl || '127.0.0.1:27124'} 或远程 REST`,
+    });
+  }
   cards.push({
     type: 'recovery',
     title: '账户恢复',
@@ -613,6 +683,7 @@ function openConfigForm(type) {
 function typeLabel(type) {
   return {
     feishu: '飞书',
+    feishuWiki: '飞书 Wiki',
     llm: '模型',
     knowledge: '知识库',
     vector: '向量库',
@@ -646,6 +717,8 @@ function renderDynamicConfigFields() {
   if (!elements.dynamicConfigFields) return;
   const type = elements.configType.value;
   const ai = state?.knowledgeCenter?.aiProfile || {};
+  const fw = state?.knowledgeCenter?.feishuWiki || {};
+  const obMeta = state?.knowledgeCenter?.obsidian || {};
   const providerKey = ai.provider && LLM_PROVIDERS[ai.provider] ? ai.provider : 'openai';
   const provider = LLM_PROVIDERS[providerKey] || LLM_PROVIDERS.openai;
   const selectedModel = preferredModel(providerKey, ai.model || '');
@@ -654,6 +727,25 @@ function renderDynamicConfigFields() {
       <label>App ID<input data-field="appId" value="${escapeHtml(state?.settings?.appId || '')}" placeholder="cli_xxx" /></label>
       <label>App Secret<input data-field="appSecret" type="password" value="${escapeHtml(state?.settings?.appSecret || '')}" placeholder="只保存在本机 SQLite" /></label>
       <label>飞书文件夹 Token<input data-field="folderToken" value="${escapeHtml(state?.settings?.folderToken || 'root')}" placeholder="root 或 fldcn..." /></label>
+      <label>OAuth 回调地址（须与飞书后台完全一致）
+        <div class="inlineControl">
+          <input id="feishuRedirectUriField" readonly value="${escapeHtml(state?.redirectUri || 'http://127.0.0.1:37891/feishu/oauth/callback')}" />
+          <button type="button" class="small" data-action="copy-redirect-uri">复制</button>
+        </div>
+      </label>
+      <div class="buttonRow">
+        <button type="button" class="small" data-action="open-feishu-safe">打开飞书「安全设置」</button>
+      </div>
+      <p class="muted">报错 <strong>20029</strong>：把上方地址原样粘贴到 <strong>开发配置 → 安全设置 → 重定向 URL</strong>（必须 <code>127.0.0.1</code>，不能用 <code>localhost</code>，不要末尾 <code>/</code>）。保存后等 1～2 分钟再登录；App ID 须与出错页地址栏里的 <code>app_id</code> 一致。</p>
+      <p class="muted">云盘同步与知识库 Wiki 检索共用飞书登录；Wiki 需在开放平台开通 <code>wiki:wiki:readonly</code> 后重新授权。</p>
+      <label>飞书加密口令（测试用）<input data-field="passphrase" type="password" placeholder="与「添加」页同步口令一致，至少 8 位" /></label>
+      <button type="button" class="full" data-action="test-feishu-sync">测试同步文本到飞书</button>
+      <p class="muted">将加密上传一小段测试文本并回读校验；通过后会尝试删除云端测试文件，不会写入本地同步记录。</p>
+    `,
+    feishuWiki: `
+      <p class="muted">未配置 Obsidian 或自定义知识库时，将优先检索你已可见的飞书 Wiki 文档。请先在顶栏登录飞书。</p>
+      <label class="checkLine"><input data-field="enabled" type="checkbox" ${fw.enabled !== false ? 'checked' : ''} />启用飞书知识库检索</label>
+      <label>知识空间 ID（可选）<input data-field="spaceId" value="${escapeHtml(fw.spaceId || '')}" placeholder="留空则搜索全部可见 Wiki" /></label>
     `,
     llm: `
       <label>模型供应商<select data-field="provider" id="llmProviderSelect">${llmProviderOptions(providerKey)}</select></label>
@@ -682,10 +774,12 @@ function renderDynamicConfigFields() {
       <label>API Key<input data-field="apiKey" type="password" placeholder="可选" /></label>
     `,
     obsidian: `
+      <p class="muted"><strong>方案 A（本机）</strong>：安装 Obsidian → 社区插件「Local REST API」→ 保持库打开 → Base URL 填 <code>${escapeHtml(obMeta.localRestUrl || 'https://127.0.0.1:27124')}</code>。</p>
+      <p class="muted"><strong>方案 B（远程）</strong>：在服务器/NAS 暴露 REST API（或 HTTPS 反代），填写可访问地址与 Token。</p>
       <label>名称<input data-field="name" placeholder="我的 Obsidian Vault" /></label>
-      <label>Base URL<input data-field="baseUrl" placeholder="https://127.0.0.1:27124" /></label>
+      <label>Base URL<input data-field="baseUrl" value="${escapeHtml(obMeta.localRestUrl || 'https://127.0.0.1:27124')}" placeholder="https://127.0.0.1:27124 或 https://nas.example.com/obsidian" /></label>
       <label>API Key<input data-field="apiKey" type="password" placeholder="Local REST API token" /></label>
-      <label class="checkLine"><input data-field="insecureTls" type="checkbox" checked />允许自签名 HTTPS 证书</label>
+      <label class="checkLine"><input data-field="insecureTls" type="checkbox" checked />允许自签名 HTTPS 证书（仅信任环境使用）</label>
     `,
     recovery: `
       <label>绑定手机<input data-field="phone" value="${escapeHtml(state?.auth?.user?.phone || '')}" placeholder="用于找回身份" /></label>
@@ -740,7 +834,7 @@ function renderLastQuery() {
     <pre>${escapeHtml(latest.answer)}</pre>
     <div class="evidenceList">
       ${(latest.evidence || []).slice(0, 5).map((item) => `
-        <div class="evidenceItem">
+        <div class="evidenceItem${item.isHint ? ' setupHint' : ''}">
           <span>${escapeHtml(item.source)} · ${escapeHtml(item.title)}</span>
           <p>${escapeHtml(item.content || '').slice(0, 260)}</p>
         </div>
@@ -1236,12 +1330,59 @@ elements.dynamicConfigFields.addEventListener('click', async (event) => {
   }
 });
 
+elements.dynamicConfigFields.addEventListener('click', async (event) => {
+  const copyBtn = event.target.closest('button[data-action="copy-redirect-uri"]');
+  if (copyBtn) {
+    const field = elements.dynamicConfigFields.querySelector('#feishuRedirectUriField')
+      || document.querySelector('#redirectUri');
+    const text = field?.value || state?.redirectUri || 'http://127.0.0.1:37891/feishu/oauth/callback';
+    try {
+      await navigator.clipboard.writeText(text);
+      showNotice('回调地址已复制，请粘贴到飞书开放平台「重定向 URL」');
+    } catch {
+      showNotice(`请手动复制：${text}`, true);
+    }
+    return;
+  }
+  const safeBtn = event.target.closest('button[data-action="open-feishu-safe"]');
+  if (safeBtn) {
+    const appId = (readConfigForm().appId || state?.settings?.appId || '').trim();
+    const url = appId
+      ? `https://open.feishu.cn/app/${encodeURIComponent(appId)}/safe`
+      : FEISHU_APP_CREDENTIALS_URL;
+    await api.openExternal(url);
+    showNotice('请在「安全设置 → 重定向 URL」中粘贴已复制的回调地址');
+    return;
+  }
+  const button = event.target.closest('button[data-action="test-feishu-sync"]');
+  if (!button) return;
+  const data = readConfigForm();
+  if (!data.passphrase || data.passphrase.length < 8) {
+    showNotice('请填写至少 8 位的飞书加密口令', true);
+    return;
+  }
+  if (!state.isFeishuLoggedIn) {
+    showNotice('请先保存配置并登录飞书', true);
+    return;
+  }
+  await runFeishuSyncTest(data.passphrase, {
+    appId: data.appId,
+    appSecret: data.appSecret,
+    folderToken: data.folderToken,
+  });
+});
+
 elements.saveConfigDynamic.addEventListener('click', async () => {
   const type = elements.configType.value;
   const data = readConfigForm();
   let next = null;
   if (type === 'feishu') {
     next = await run(() => api.saveSettings({ ...data, redirectPort: 37891 }), '飞书配置已保存');
+  } else if (type === 'feishuWiki') {
+    next = await run(() => api.saveFeishuWikiSettings({
+      enabled: data.enabled !== false,
+      spaceId: data.spaceId || '',
+    }), '飞书知识库设置已保存');
   } else if (type === 'llm') {
     next = await run(() => api.saveAiProfile(data), '大模型配置已保存');
   } else if (type === 'knowledge') {
@@ -1294,31 +1435,101 @@ elements.videoMode.addEventListener('click', () => {
   renderUploadMode();
 });
 
-elements.vaultFileMode.addEventListener('click', () => {
-  vaultUploadMode = 'file';
-  renderUploadMode();
+function addFormFeishuText() {
+  const title = elements.manualTitle.value.trim();
+  if (uploadMode === 'web' || uploadMode === 'video') {
+    return { name: title, text: `${title}\n${elements.manualUrl.value.trim()}` };
+  }
+  return { name: title, text: elements.manualText.value };
+}
+
+elements.optSyncFeishu?.addEventListener('change', renderAddSyncOptions);
+elements.optSyncManifest?.addEventListener('change', () => {
+  if (elements.optSyncManifest.checked) elements.optSyncFeishu.checked = true;
+  renderAddSyncOptions();
 });
 
-elements.vaultTextMode.addEventListener('click', () => {
-  vaultUploadMode = 'text';
-  renderUploadMode();
-});
+elements.submitAdd?.addEventListener('click', async () => {
+  const saveLocal = Boolean(elements.optSaveLocal?.checked) && uploadMode !== 'file';
+  const syncFeishu = Boolean(elements.optSyncFeishu?.checked);
+  const syncManifest = Boolean(elements.optSyncManifest?.checked);
 
-elements.saveManualContent.addEventListener('click', async () => {
-  const result = await run(() => api.createLibraryItem({
-    kind: uploadMode === 'file' ? 'text' : uploadMode,
-    title: elements.manualTitle.value,
-    url: elements.manualUrl.value,
-    content: elements.manualText.value,
-    ...currentScopePayload(),
-  }), '内容已保存到本地内容库');
-  if (result) {
-    state = result;
+  if (uploadMode === 'file') {
+    if (!selectedFiles.length) {
+      showNotice('请选择至少一个文件', true);
+      return;
+    }
+    if (!syncFeishu) {
+      showNotice('文件类型请勾选「同步到飞书云盘」', true);
+      return;
+    }
+  } else {
+    if (!elements.manualTitle.value.trim()) {
+      showNotice('请输入标题', true);
+      return;
+    }
+    if (!saveLocal && !syncFeishu) {
+      showNotice('请至少勾选一项：保存到本地 或 同步到飞书', true);
+      return;
+    }
+  }
+
+  if (syncFeishu || syncManifest) {
+    if (!state.isFeishuLoggedIn) {
+      showNotice('请先在配置中心登录飞书', true);
+      return;
+    }
+    if (elements.passphrase.value.length < 8) {
+      showNotice('飞书加密口令至少需要 8 个字符', true);
+      return;
+    }
+  }
+
+  setBusy(true);
+  clearNotice();
+  const scope = currentScopePayload();
+  const passphrase = elements.passphrase.value;
+  try {
+    if (saveLocal) {
+      state = await api.createLibraryItem({
+        kind: uploadMode,
+        title: elements.manualTitle.value,
+        url: elements.manualUrl.value,
+        content: elements.manualText.value,
+        ...scope,
+      });
+    }
+    if (syncFeishu) {
+      if (uploadMode === 'file') {
+        const uploaded = await api.uploadFiles({ filePaths: selectedFiles, passphrase, ...scope });
+        state = uploaded.state;
+      } else {
+        const { name, text } = addFormFeishuText();
+        const uploaded = await api.uploadText({ name, text, passphrase, ...scope });
+        state = uploaded.state;
+      }
+    }
+    if (syncManifest) {
+      const synced = await api.syncManifest({ ...scope, passphrase });
+      state = synced.state || synced;
+    }
+    showNotice('保存完成');
     elements.manualTitle.value = '';
     elements.manualUrl.value = '';
     elements.manualText.value = '';
+    selectedFiles = [];
+    elements.passphrase.value = '';
     activeView = 'library';
     render();
+  } catch (error) {
+    const msg = error && error.message ? error.message : String(error);
+    if (msg.includes('重新登录本地')) {
+      showNotice('本地会话已过期，请退出后重新登录本地账号，再保存。', true);
+    } else {
+      showNotice(msg, true);
+    }
+  } finally {
+    setBusy(false);
   }
 });
 
@@ -1333,6 +1544,31 @@ elements.saveSettings.addEventListener('click', async () => {
     state = next;
     render();
   }
+});
+
+async function runFeishuSyncTest(passphrase, settingsOverride = {}) {
+  if (!passphrase || passphrase.length < 8) {
+    showNotice('请填写至少 8 位的飞书加密口令', true);
+    return;
+  }
+  if (!state.isFeishuLoggedIn) {
+    showNotice('请先保存配置并登录飞书', true);
+    return;
+  }
+  const result = await run(() => api.testFeishuSync({
+    appId: settingsOverride.appId ?? elements.appId?.value,
+    appSecret: settingsOverride.appSecret ?? elements.appSecret?.value,
+    folderToken: settingsOverride.folderToken ?? elements.folderToken?.value,
+    passphrase,
+    context: state.context,
+  }));
+  if (result && result.ok) {
+    showNotice(result.message || '飞书同步测试通过');
+  }
+}
+
+elements.testFeishuSync?.addEventListener('click', async () => {
+  await runFeishuSyncTest(elements.feishuTestPassphrase?.value || elements.passphrase?.value || '');
 });
 
 elements.saveRecovery.addEventListener('click', async () => {
@@ -1468,7 +1704,7 @@ elements.runKnowledgeQuery.addEventListener('click', async () => {
     showNotice('请输入检索问题', true);
     return;
   }
-  elements.queryResult.textContent = '正在检索知识库和向量库，并生成答案...';
+  elements.queryResult.textContent = '正在检索本地库、飞书知识库与其它来源...';
   const result = await run(() => api.queryKnowledgeCenter({ question, context: state.context }), '检索完成');
   if (result) {
     state = result.state;
@@ -1476,12 +1712,16 @@ elements.runKnowledgeQuery.addEventListener('click', async () => {
       <strong>${escapeHtml(question)}</strong>
       <pre>${escapeHtml(result.answer)}</pre>
       <div class="evidenceList">
-        ${(result.evidence || []).map((item) => `
-          <div class="evidenceItem">
+        ${(result.evidence || []).map((item) => {
+          const body = item.content || '';
+          const preview = item.isHint ? body : body.slice(0, 420);
+          return `
+          <div class="evidenceItem${item.isHint ? ' setupHint' : ''}">
             <span>${escapeHtml(item.source)} · ${escapeHtml(item.title)}</span>
-            <p>${escapeHtml(item.content || '').slice(0, 420)}</p>
+            <p>${escapeHtml(preview)}</p>
           </div>
-        `).join('')}
+        `;
+        }).join('')}
       </div>
     `;
     render();
@@ -1526,10 +1766,19 @@ elements.loginBadge.addEventListener('click', async () => {
       showNotice(message, true);
       return;
     }
+    if (message.includes('EADDRINUSE') || message.includes('已被占用')) {
+      showNotice(message, true);
+      return;
+    }
+    if (message.includes('20029') || message.includes('redirect_uri') || message.includes('重定向')) {
+      openConfigForm('feishu');
+      showNotice('飞书 20029：请在配置页复制回调地址，粘贴到飞书开放平台「安全设置 → 重定向 URL」后重试。', true);
+      return;
+    }
     activeView = 'config';
     renderActiveView();
     openConfigForm('feishu');
-    showNotice(`${message}。请在这里保存飞书配置后再点击登录。`, true);
+    showNotice(`${message}。请确认飞书回调 URL 已配置并保存 App 信息后重试登录。`, true);
   } finally {
     setBusy(false);
   }
@@ -1547,38 +1796,6 @@ elements.chooseFiles.addEventListener('click', async () => {
   const result = await run(() => api.chooseFiles());
   if (result && !result.canceled) {
     selectedFiles = result.filePaths || [];
-    render();
-  }
-});
-
-elements.upload.addEventListener('click', async () => {
-  if (!state.isFeishuLoggedIn) {
-    showNotice('请先登录飞书账号', true);
-    return;
-  }
-  if (elements.passphrase.value.length < 8) {
-    showNotice('飞书加密口令至少需要 8 个字符', true);
-    return;
-  }
-  const action = vaultUploadMode === 'text'
-    ? () => api.uploadText({
-      name: elements.secretName.value,
-      text: elements.secretText.value,
-      passphrase: elements.passphrase.value,
-      ...currentScopePayload(),
-    })
-    : () => api.uploadFiles({
-      filePaths: selectedFiles,
-      passphrase: elements.passphrase.value,
-      ...currentScopePayload(),
-    });
-  const result = await run(action, '已加密同步到飞书');
-  if (result) {
-    state = result.state;
-    selectedFiles = [];
-    elements.passphrase.value = '';
-    elements.secretName.value = '';
-    elements.secretText.value = '';
     render();
   }
 });

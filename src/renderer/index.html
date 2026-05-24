@@ -58,17 +58,23 @@
               <p>AI retrieval workspace with secure vault</p>
             </div>
           </div>
-          <div class="statusStack">
-            <select id="contextSelect" class="contextSelect" title="工作上下文">
-              <option value="personal">个人</option>
-            </select>
-            <button id="navLibrary" class="navPill active" data-view="library">内容库</button>
-            <button id="navGroups" class="navPill" data-view="groups">用户组</button>
-            <button id="navProjects" class="navPill" data-view="projects">项目</button>
-            <button id="navAdd" class="navPill" data-view="add">添加</button>
-            <button id="navConfig" class="navPill" data-view="config">配置</button>
-            <div id="localBadge" class="badge">本地账号</div>
-            <button id="loginBadge" class="badge warn">未登录飞书</button>
+          <div class="topbarRight">
+            <div class="topbarNav">
+              <select id="contextSelect" class="contextSelect" title="工作上下文">
+                <option value="personal">个人</option>
+              </select>
+              <div class="navCluster" role="navigation" aria-label="主功能">
+                <button id="navLibrary" class="navPill active" data-view="library">内容库</button>
+                <button id="navGroups" class="navPill" data-view="groups">用户组</button>
+                <button id="navProjects" class="navPill" data-view="projects">项目</button>
+                <button id="navAdd" class="navPill" data-view="add">添加</button>
+                <button id="navConfig" class="navPill" data-view="config">配置</button>
+              </div>
+            </div>
+            <div class="topbarMeta">
+              <div id="localBadge" class="badge">本地账号</div>
+              <button id="loginBadge" class="badge warn">未登录飞书</button>
+            </div>
           </div>
         </header>
 
@@ -90,10 +96,11 @@
                   配置类型
                   <select id="configType">
                     <option value="feishu">飞书同步</option>
+                    <option value="feishuWiki">飞书知识库</option>
                     <option value="llm">大模型</option>
                     <option value="knowledge">远程知识库</option>
                     <option value="vector">远程向量库</option>
-                    <option value="obsidian">远程 Obsidian</option>
+                    <option value="obsidian">Obsidian（本地/远程）</option>
                     <option value="recovery">账户恢复</option>
                   </select>
                 </label>
@@ -220,11 +227,17 @@
                 OAuth 回调地址
                 <input id="redirectUri" readonly />
               </label>
+              <label>
+                飞书加密口令（测试用）
+                <input id="feishuTestPassphrase" type="password" placeholder="至少 8 位，与同步时一致" />
+              </label>
               <div class="buttonRow">
                 <button id="saveSettings" class="primary">保存配置</button>
                 <button id="login">登录飞书</button>
                 <button id="logout">退出飞书</button>
               </div>
+              <button id="testFeishuSync" class="full">测试同步文本到飞书</button>
+              <p class="hint">上传加密测试文本并回读校验，用于验证 App 配置、登录与文件夹 Token。</p>
               <div class="hint">建议权限：<span id="scopes"></span></div>
             </section>
             </div>
@@ -262,17 +275,22 @@
           </section>
 
           <section id="addView" class="side viewPane hidden">
-            <section class="panel">
+            <section class="panel addPanel">
               <h2>添加内容</h2>
               <p id="addScopeHint" class="hint">将保存到：个人空间</p>
               <div class="segmented four">
-                <button id="fileMode" class="active">文件</button>
-                <button id="textMode">文本</button>
-                <button id="webMode">网页</button>
-                <button id="videoMode">视频</button>
+                <button id="fileMode" class="active" type="button">文件</button>
+                <button id="textMode" type="button">文本</button>
+                <button id="webMode" type="button">网页</button>
+                <button id="videoMode" type="button">视频</button>
               </div>
 
-              <div id="manualContentBox">
+              <div id="addFileBox">
+                <button id="chooseFiles" type="button">选择本地文件</button>
+                <div id="selectedFiles" class="fileBox">尚未选择文件</div>
+              </div>
+
+              <div id="addFieldsBox" class="hidden">
                 <label>
                   标题
                   <input id="manualTitle" placeholder="内容标题" />
@@ -283,44 +301,44 @@
                 </label>
                 <label id="manualTextWrap">
                   内容
-                  <textarea id="manualText" placeholder="手动输入文本、摘要、密钥或备注"></textarea>
-                </label>
-                <button id="saveManualContent" class="primary full">保存到本地内容库</button>
-              </div>
-
-              <h2 class="subTitle">上传到飞书保险箱</h2>
-              <div class="segmented">
-                <button id="vaultFileMode" class="active">文件</button>
-                <button id="vaultTextMode">文本</button>
-              </div>
-
-              <div id="fileUploadBox">
-                <button id="chooseFiles">选择本地文件</button>
-                <div id="selectedFiles" class="fileBox">尚未选择文件</div>
-              </div>
-
-              <div id="textUploadBox" class="hidden">
-                <label>
-                  文本名称
-                  <input id="secretName" placeholder="例如：服务器 SSH 密钥" />
-                </label>
-                <label>
-                  文本内容
-                  <textarea id="secretText" placeholder="粘贴密码、密钥或任意纯文本"></textarea>
+                  <textarea id="manualText" placeholder="文本、密钥或备注"></textarea>
                 </label>
               </div>
 
-              <label>
-                飞书加密口令
-                <input id="passphrase" type="password" placeholder="同步和取回时使用，至少 8 位" />
-              </label>
-              <button id="upload" class="success">加密并同步到飞书</button>
-              <div class="buttonRow">
-                <button id="pullManifest" class="primary">从飞书拉取清单</button>
-                <button id="syncManifest" class="success">上传清单到飞书</button>
+              <div class="syncOptions">
+                <h3 class="subTitle">同步选项</h3>
+                <label class="checkLine" id="optSaveLocalWrap">
+                  <input id="optSaveLocal" type="checkbox" checked />
+                  保存到本地内容库
+                </label>
+                <label class="checkLine">
+                  <input id="optSyncFeishu" type="checkbox" />
+                  同步到飞书云盘
+                </label>
+                <label class="checkLine syncSub">
+                  <input id="optSyncManifest" type="checkbox" />
+                  同时更新飞书目录清单
+                </label>
+                <div id="feishuPassphraseWrap" class="hidden">
+                  <label>
+                    飞书加密口令
+                    <input id="passphrase" type="password" placeholder="至少 8 位，与取回时一致" />
+                  </label>
+                </div>
+                <div id="addKnowledgeSources" class="knowledgeSyncList muted"></div>
               </div>
-              <button id="fullSync" class="full">完整同步（先拉取再上传）</button>
-              <p id="manifestStatus" class="hint"></p>
+
+              <button id="submitAdd" class="success full" type="button">保存</button>
+
+              <details class="advancedSync">
+                <summary>飞书清单维护（可选）</summary>
+                <p id="manifestStatus" class="hint"></p>
+                <div class="buttonRow">
+                  <button id="pullManifest" type="button" class="primary">从飞书拉取</button>
+                  <button id="syncManifest" type="button" class="success">上传清单</button>
+                </div>
+                <button id="fullSync" type="button" class="full">完整同步</button>
+              </details>
             </section>
           </section>
 
@@ -361,13 +379,13 @@
               <div class="panelHeader">
                 <div>
                   <h2>知识库对话</h2>
-                  <span class="hint">自然语言查询本地内容、知识库、向量库和 Obsidian</span>
+                  <span class="hint">优先检索本地库与飞书 Wiki；可配置 Obsidian（本机 REST 或远程）与其它知识库</span>
                 </div>
               </div>
               <div id="queryResult" class="queryResult chatResult">检索和回答会显示在这里。</div>
               <div class="chatComposer">
-                <textarea id="questionInput" placeholder="问一个问题，例如：帮我找一下生产环境数据库密码轮换流程，以及相关负责人是谁？"></textarea>
-                <button id="runKnowledgeQuery" class="success">发送</button>
+                <textarea id="questionInput" rows="2" placeholder="输入问题，例如：SSH 密钥在哪？"></textarea>
+                <button id="runKnowledgeQuery" class="success chatSend">发送</button>
               </div>
             </section>
           </section>

@@ -5,7 +5,7 @@
   "description": "VaultMind - private knowledge center with secure vault and AI retrieval",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "env -u ELECTRON_RUN_AS_NODE electron .",
     "test": "node scripts/test-core.js"
   },
   "devDependencies": {

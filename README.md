@@ -106,6 +106,7 @@ npm test
    - `drive:drive`
    - `drive:drive:readonly`
    - `auth:user.id:read`
+   - `wiki:wiki:readonly`（飞书知识库 Wiki 检索）
 
 4. 在 VaultMind「配置 → 飞书同步」中填写 **App ID**、**App Secret**，保存后登录飞书。
 

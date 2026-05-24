@@ -47,13 +47,57 @@ select {
   display: none !important;
 }
 
-.contextSelect {
-  min-width: 140px;
-  padding: 8px 12px;
+.topbarRight {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.topbarNav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.navCluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.topbarMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.topbar .contextSelect {
+  width: auto;
+  min-width: 108px;
+  max-width: 168px;
+  height: 34px;
+  line-height: 34px;
+  padding: 0 34px 0 12px;
+  margin: 0;
+  flex: 0 0 auto;
   border-radius: 999px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  background:
+    linear-gradient(45deg, transparent 50%, rgba(223, 252, 255, 0.92) 50%) calc(100% - 22px) 14px / 6px 6px no-repeat,
+    linear-gradient(135deg, rgba(223, 252, 255, 0.92) 50%, transparent 50%) calc(100% - 16px) 14px / 6px 6px no-repeat,
+    rgba(255, 255, 255, 0.06);
+  box-shadow: none;
 }
 
 .scopeBadge {
@@ -128,11 +172,11 @@ select {
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(18px);
   border-radius: 18px;
-  padding: 18px 20px;
+  padding: 12px 18px;
 }
 
 .brandBlock,
-.statusStack,
+.topbarRight,
 .topbar > * {
   position: relative;
   z-index: 1;
@@ -208,15 +252,6 @@ p,
 
 .errorText {
   color: #fecdd3;
-}
-
-.statusStack {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .navPill {
@@ -664,23 +699,46 @@ button.full {
   min-height: 96px;
 }
 
-.libraryShell,
+.libraryShell {
+  display: grid;
+  grid-template-columns: 420px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  min-height: calc(100vh - 142px);
+  height: auto;
+  overflow: visible;
+}
+
 .projectsShell {
   display: grid;
   grid-template-columns: 420px minmax(0, 1fr);
   gap: 16px;
   align-items: stretch;
-  min-height: calc(100vh - 142px);
+  height: calc(100vh - 142px);
+  max-height: calc(100vh - 142px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .librarySidebar,
 .chatWorkspace {
-  min-height: calc(100vh - 142px);
+  height: auto;
+  max-height: none;
+  min-height: calc(100vh - 182px);
 }
 
 .projectSide,
 .projectMain {
-  min-height: calc(100vh - 142px);
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.projectsShell .projectMain {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .projectForm {
@@ -737,12 +795,23 @@ button.full {
 .librarySidebar {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  min-height: 0;
+  max-height: calc(100vh - 182px);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
-.chatWorkspace {
+.chatWorkspace.panel {
   display: flex;
   flex-direction: column;
+  min-height: calc(100vh - 182px);
+  height: auto;
+  overflow: visible;
+  padding-bottom: 14px;
+}
+
+.chatWorkspace .panelHeader {
+  flex-shrink: 0;
 }
 
 .queryResult {
@@ -752,27 +821,44 @@ button.full {
   color: rgba(226, 232, 240, 0.72);
 }
 
-.chatResult {
-  flex: 1;
-  overflow: auto;
+.chatWorkspace .queryResult.chatResult {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+  min-height: 120px;
+  max-height: none;
   margin-top: 0;
+  overflow: visible;
 }
 
 .chatComposer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 108px;
+  display: flex;
+  align-items: flex-end;
   gap: 10px;
-  align-items: end;
-  margin-top: 12px;
+  flex-shrink: 0;
+  margin-top: 0;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, transparent, rgba(11, 15, 22, 0.92) 24%);
 }
 
 .chatComposer textarea {
-  min-height: 76px;
-  max-height: 160px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 56px;
+  max-height: 120px;
+  margin-top: 0;
+  resize: none;
 }
 
-.chatComposer button {
-  height: 76px;
+.chatComposer .chatSend {
+  width: auto;
+  min-width: 88px;
+  height: 56px;
+  min-height: 56px;
+  flex: 0 0 auto;
+  padding: 0 18px;
+  align-self: flex-end;
 }
 
 .queryResult pre {
@@ -804,6 +890,18 @@ button.full {
 .evidenceItem p {
   margin-top: 5px;
   line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: visible;
+}
+
+.evidenceItem.setupHint {
+  border-color: rgba(255, 196, 120, 0.35);
+  background: rgba(255, 196, 120, 0.08);
+}
+
+.evidenceItem.setupHint span {
+  color: #ffd9a0;
 }
 
 .table {
@@ -912,6 +1010,47 @@ button.full {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.addPanel .syncOptions {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(4, 9, 16, 0.35);
+}
+
+.addPanel .syncOptions .subTitle {
+  margin-bottom: 10px;
+}
+
+.addPanel .syncSub {
+  margin-left: 18px;
+  opacity: 0.92;
+}
+
+.addPanel .knowledgeSyncList {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.addPanel .advancedSync {
+  margin-top: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(4, 9, 16, 0.28);
+}
+
+.addPanel .advancedSync summary {
+  cursor: pointer;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 12px;
+}
+
+.addPanel .advancedSync .buttonRow {
+  margin-top: 10px;
 }
 
 .syncBlock h2 {
