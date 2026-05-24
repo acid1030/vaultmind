@@ -367,12 +367,42 @@ function hasFeishuOAuthConfig() {
   return Boolean(state?.settings?.appId && state?.settings?.appSecret);
 }
 
+async function ensureFeishuSettingsSaved() {
+  const appId = (elements.appId?.value || state?.settings?.appId || '').trim();
+  const appSecret = elements.appSecret?.value || '';
+  if (!appId) return;
+  const next = await api.saveSettings({
+    appId,
+    appSecret: appSecret && appSecret !== '********' ? appSecret : undefined,
+    folderToken: elements.folderToken?.value || state?.settings?.folderToken || 'root',
+    redirectPort: 37891,
+  });
+  if (next) state = next;
+}
+
+async function startFeishuLogin() {
+  await ensureFeishuSettingsSaved();
+  if (!hasFeishuOAuthConfig()) {
+    activeView = 'config';
+    renderActiveView();
+    openConfigForm('feishu');
+    showNotice('请先填写并保存飞书 App ID / App Secret，再配置重定向 URL', true);
+    return;
+  }
+  const redirectUri = state?.redirectUri || 'http://127.0.0.1:37891/feishu/oauth/callback';
+  showNotice(`即将在系统浏览器打开飞书授权。若出现 20029，请先在配置页把 ${redirectUri} 添加到飞书「重定向 URL」。`);
+  const next = await api.login();
+  state = next;
+  showNotice('飞书账号已登录');
+  render();
+}
+
 async function openFeishuOAuthSetup() {
   activeView = 'config';
   renderActiveView();
   openConfigForm('feishu');
   await api.openExternal(FEISHU_APP_CREDENTIALS_URL);
-  showNotice('已打开飞书开放平台应用管理页。请选择或创建企业自建应用，在“凭证与基础信息”里复制 App ID / App Secret；同时把本页 OAuth 回调地址填到应用安全设置里。保存后再点“未登录飞书”即可自动获取登录信息。', true);
+  showNotice('已打开飞书开放平台。请创建企业自建应用，复制 App ID/Secret，并在「安全设置 → 重定向 URL」粘贴本页回调地址。', true);
 }
 
 function renderAuthMode() {
@@ -733,10 +763,16 @@ function renderDynamicConfigFields() {
           <button type="button" class="small" data-action="copy-redirect-uri">复制</button>
         </div>
       </label>
+      <ol class="feishuSteps muted">
+        <li>点击「打开安全设置」→ 左侧 <strong>开发配置 → 安全设置</strong></li>
+        <li>在 <strong>重定向 URL</strong> 中粘贴上方回调地址 → 保存</li>
+        <li>回到本应用，先点「保存配置」，再点顶栏「未登录飞书」登录</li>
+      </ol>
       <div class="buttonRow">
-        <button type="button" class="small" data-action="open-feishu-safe">打开飞书「安全设置」</button>
+        <button type="button" class="small" data-action="open-feishu-safe">① 打开安全设置</button>
+        <button type="button" class="small" data-action="copy-redirect-uri">复制回调地址</button>
       </div>
-      <p class="muted">报错 <strong>20029</strong>：把上方地址原样粘贴到 <strong>开发配置 → 安全设置 → 重定向 URL</strong>（必须 <code>127.0.0.1</code>，不能用 <code>localhost</code>，不要末尾 <code>/</code>）。保存后等 1～2 分钟再登录；App ID 须与出错页地址栏里的 <code>app_id</code> 一致。</p>
+      <p class="muted">报错 <strong>20029</strong>：说明重定向 URL 未登记或与 App ID 不匹配。飞书错误页上的「前往」只会打开后台首页，<strong>不会自动帮你填 URL</strong>，请按上面 3 步手动添加。</p>
       <p class="muted">云盘同步与知识库 Wiki 检索共用飞书登录；Wiki 需在开放平台开通 <code>wiki:wiki:readonly</code> 后重新授权。</p>
       <label>飞书加密口令（测试用）<input data-field="passphrase" type="password" placeholder="与「添加」页同步口令一致，至少 8 位" /></label>
       <button type="button" class="full" data-action="test-feishu-sync">测试同步文本到飞书</button>
@@ -1346,12 +1382,14 @@ elements.dynamicConfigFields.addEventListener('click', async (event) => {
   }
   const safeBtn = event.target.closest('button[data-action="open-feishu-safe"]');
   if (safeBtn) {
-    const appId = (readConfigForm().appId || state?.settings?.appId || '').trim();
-    const url = appId
-      ? `https://open.feishu.cn/app/${encodeURIComponent(appId)}/safe`
-      : FEISHU_APP_CREDENTIALS_URL;
-    await api.openExternal(url);
-    showNotice('请在「安全设置 → 重定向 URL」中粘贴已复制的回调地址');
+    await ensureFeishuSettingsSaved();
+    try {
+      const info = await api.openFeishuRedirectSettings();
+      showNotice(`已打开应用 ${info.appId} 的安全设置。请把回调地址粘贴到「重定向 URL」：${info.redirectUri}`);
+    } catch {
+      await api.openExternal(FEISHU_APP_CREDENTIALS_URL);
+      showNotice('请先保存 App ID，再在安全设置 → 重定向 URL 中粘贴回调地址', true);
+    }
     return;
   }
   const button = event.target.closest('button[data-action="test-feishu-sync"]');
@@ -1729,14 +1767,15 @@ elements.runKnowledgeQuery.addEventListener('click', async () => {
 });
 
 elements.login.addEventListener('click', async () => {
-  if (!hasFeishuOAuthConfig()) {
-    await run(() => openFeishuOAuthSetup());
-    return;
-  }
-  const next = await run(() => api.login(), '飞书账号已登录');
-  if (next) {
-    state = next;
-    render();
+  setBusy(true);
+  clearNotice();
+  try {
+    await startFeishuLogin();
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    showNotice(message, true);
+  } finally {
+    setBusy(false);
   }
 });
 
@@ -1752,14 +1791,7 @@ elements.loginBadge.addEventListener('click', async () => {
   setBusy(true);
   clearNotice();
   try {
-    if (!hasFeishuOAuthConfig()) {
-      await openFeishuOAuthSetup();
-      return;
-    }
-    const next = await api.login();
-    state = next;
-    showNotice('飞书账号已登录');
-    render();
+    await startFeishuLogin();
   } catch (error) {
     const message = error && error.message ? error.message : String(error);
     if (message.includes('已关闭') || message.includes('已取消')) {
@@ -1771,8 +1803,10 @@ elements.loginBadge.addEventListener('click', async () => {
       return;
     }
     if (message.includes('20029') || message.includes('redirect_uri') || message.includes('重定向')) {
+      activeView = 'config';
+      renderActiveView();
       openConfigForm('feishu');
-      showNotice('飞书 20029：请在配置页复制回调地址，粘贴到飞书开放平台「安全设置 → 重定向 URL」后重试。', true);
+      showNotice('飞书 20029：请按配置页 3 步操作——打开安全设置 → 粘贴回调地址 → 保存后再登录。错误页的「前往」不会自动配置。', true);
       return;
     }
     activeView = 'config';

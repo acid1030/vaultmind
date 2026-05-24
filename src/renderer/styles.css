@@ -1053,6 +1053,17 @@ button.full {
   margin-top: 10px;
 }
 
+.feishuSteps {
+  margin: 10px 0 12px 18px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.feishuSteps li {
+  margin-bottom: 6px;
+}
+
 .syncBlock h2 {
   margin-bottom: 10px;
 }

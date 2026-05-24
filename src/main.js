@@ -692,7 +692,9 @@ function sanitizeSettings(input, previousSecret = '') {
   const redirectPort = Number(input.redirectPort || DEFAULT_SETTINGS.redirectPort);
   return {
     appId: String(input.appId || '').trim(),
-    appSecret: input.appSecret === '********' ? previousSecret : String(input.appSecret || '').trim(),
+    appSecret: input.appSecret === undefined || input.appSecret === '********'
+      ? previousSecret
+      : String(input.appSecret || '').trim(),
     folderToken: String(input.folderToken || 'root').trim() || 'root',
     redirectPort: Number.isFinite(redirectPort) && redirectPort > 0 ? Math.floor(redirectPort) : DEFAULT_SETTINGS.redirectPort,
   };
@@ -905,7 +907,7 @@ function buildMultipart(fields, file) {
 }
 
 async function exchangeCodeForToken(settings, code) {
-  const redirectUri = `http://127.0.0.1:${settings.redirectPort}/feishu/oauth/callback`;
+  const redirectUri = feishuRedirectUri(settings);
   const tokenResponse = await requestJson('POST', `${FEISHU_API}/open-apis/authen/v2/oauth/token`, {
     body: {
       grant_type: 'authorization_code',
@@ -1939,26 +1941,24 @@ function cancelPendingFeishuLogin(reason = '飞书登录已取消') {
   cancelPendingFeishuLoginAsync(reason).catch(() => {});
 }
 
-function openFeishuAuthWindow(authUrl) {
-  if (feishuAuthWindow && !feishuAuthWindow.isDestroyed()) {
-    feishuAuthWindow.close();
-  }
-  feishuAuthWindow = new BrowserWindow({
-    width: 960,
-    height: 760,
-    title: '登录飞书',
-    parent: mainWindow || undefined,
-    modal: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  feishuAuthWindow.on('closed', () => {
-    feishuAuthWindow = null;
-    cancelPendingFeishuLogin('飞书登录窗口已关闭');
-  });
-  feishuAuthWindow.loadURL(authUrl);
+function feishuRedirectUri(settings) {
+  return `http://127.0.0.1:${settings.redirectPort}/feishu/oauth/callback`;
+}
+
+function feishuSafeSettingsUrl(appId) {
+  return `https://open.feishu.cn/app/${encodeURIComponent(appId)}/safe`;
+}
+
+function openFeishuAuthInBrowser(authUrl) {
+  shell.openExternal(authUrl);
+}
+
+function oauthSuccessHtml() {
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><title>飞书登录成功</title></head>
+<body style="font-family:system-ui,sans-serif;padding:32px;line-height:1.6">
+<h2>飞书登录成功</h2>
+<p>可以<strong>关闭此浏览器标签页</strong>，回到 VaultMind。顶栏应显示飞书用户名。</p>
+</body></html>`;
 }
 
 function registerHandlers() {
@@ -2073,6 +2073,15 @@ function registerHandlers() {
     return testFeishuSync(input || {});
   });
 
+  ipcMain.handle('vault:openFeishuRedirectSettings', async () => {
+    await ensureDatabase();
+    const settings = getSettings();
+    if (!settings.appId) throw new Error('请先填写并保存飞书 App ID');
+    const redirectUri = feishuRedirectUri(settings);
+    await shell.openExternal(feishuSafeSettingsUrl(settings.appId));
+    return { redirectUri, appId: settings.appId, settingsUrl: feishuSafeSettingsUrl(settings.appId) };
+  });
+
   ipcMain.handle('vault:login', async () => {
     await ensureDatabase();
     requireUser();
@@ -2083,8 +2092,13 @@ function registerHandlers() {
     await cancelPendingFeishuLoginAsync('准备新的飞书登录');
 
     const stateValue = crypto.randomBytes(18).toString('hex');
-    const redirectUri = `http://127.0.0.1:${settings.redirectPort}/feishu/oauth/callback`;
+    const redirectUri = feishuRedirectUri(settings);
     await new Promise((resolve, reject) => {
+      let loginTimeout = null;
+      const finish = (fn) => {
+        if (loginTimeout) clearTimeout(loginTimeout);
+        fn();
+      };
       const server = http.createServer(async (req, res) => {
         try {
           const url = new URL(req.url || '/', redirectUri);
@@ -2095,33 +2109,32 @@ function registerHandlers() {
           if (!code || returnedState !== stateValue) throw new Error('飞书回调参数无效');
           setFeishuToken(await exchangeCodeForToken(settings, code));
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end('<h2>飞书登录成功，可以回到 VaultMind。</h2>');
+          res.end(oauthSuccessHtml());
           server.close();
-          if (feishuAuthWindow && !feishuAuthWindow.isDestroyed()) {
-            feishuAuthWindow.close();
-          }
           pendingLogin = null;
-          resolve();
+          finish(resolve);
         } catch (err) {
           res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
           res.end(`<h2>飞书登录失败</h2><pre>${String(err)}</pre>`);
           server.close();
-          if (feishuAuthWindow && !feishuAuthWindow.isDestroyed()) {
-            feishuAuthWindow.close();
-          }
           pendingLogin = null;
-          reject(err);
+          finish(() => reject(err));
         }
       });
       server.listen(settings.redirectPort, '127.0.0.1', () => {
         pendingLogin = { server, reject };
+        loginTimeout = setTimeout(() => {
+          server.close();
+          pendingLogin = null;
+          reject(new Error('飞书登录超时（10 分钟）。若浏览器报 20029，请先在开放平台配置重定向 URL。'));
+        }, 10 * 60 * 1000);
         const authUrl = new URL(FEISHU_AUTH);
         authUrl.searchParams.set('client_id', settings.appId);
         authUrl.searchParams.set('response_type', 'code');
         authUrl.searchParams.set('redirect_uri', redirectUri);
         authUrl.searchParams.set('scope', REQUIRED_SCOPES);
         authUrl.searchParams.set('state', stateValue);
-        openFeishuAuthWindow(authUrl.toString());
+        openFeishuAuthInBrowser(authUrl.toString());
       });
       server.on('error', (err) => {
         pendingLogin = null;
