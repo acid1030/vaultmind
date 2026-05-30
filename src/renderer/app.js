@@ -26,6 +26,7 @@ function createUnavailableApi() {
     loginLocal: fail,
     logoutLocal: fail,
     updateRecovery: fail,
+    changeLocalPassword: fail,
     resetPassword: fail,
     saveSettings: fail,
     testFeishuSync: fail,
@@ -274,7 +275,6 @@ const elements = {
   feishuPassphraseWrap: document.querySelector('#feishuPassphraseWrap'),
   addKnowledgeSources: document.querySelector('#addKnowledgeSources'),
   submitAdd: document.querySelector('#submitAdd'),
-  unlockPassword: document.querySelector('#unlockPassword'),
 };
 
 let state = null;
@@ -289,19 +289,46 @@ let vectorSourcesDraft = [];
 let obsidianSourcesDraft = [];
 let pendingVerifyCode = '';
 let refreshedModels = [];
+let chatUserId = '';
+let chatMessages = [];
+let chatOldestCreatedAt = null;
+let chatHasMore = false;
+let chatLoading = false;
+let chatInitializing = null;
+let noticeTimer = null;
 
-function showNotice(message, isError = false) {
+const CHAT_DB_NAME = 'vaultmind-chat';
+const CHAT_DB_VERSION = 1;
+const CHAT_STORE = 'knowledge_messages';
+const CHAT_PAGE_SIZE = 100;
+
+function showNotice(message, isError = false, timeoutMs = 5000) {
+  if (noticeTimer) clearTimeout(noticeTimer);
   elements.noticeText.textContent = message;
   elements.notice.className = isError ? 'notice error' : 'notice';
+  if (timeoutMs > 0) {
+    noticeTimer = setTimeout(() => {
+      dismissNotice();
+      noticeTimer = null;
+    }, timeoutMs);
+  }
 }
 
 function clearNotice() {
+  if (noticeTimer) {
+    clearTimeout(noticeTimer);
+    noticeTimer = null;
+  }
   elements.notice.className = 'notice hidden';
   elements.noticeText.textContent = '';
   elements.loginHint.textContent = '';
 }
 
 function dismissNotice() {
+  if (noticeTimer) {
+    clearTimeout(noticeTimer);
+    noticeTimer = null;
+  }
   elements.notice.className = 'notice hidden';
   elements.noticeText.textContent = '';
 }
@@ -334,6 +361,139 @@ function escapeHtml(value) {
 function cryptoRandomId() {
   if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function openChatDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CHAT_DB_NAME, CHAT_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      const store = db.objectStoreNames.contains(CHAT_STORE)
+        ? request.transaction.objectStore(CHAT_STORE)
+        : db.createObjectStore(CHAT_STORE, { keyPath: 'id' });
+      if (!store.indexNames.contains('by_user_created')) {
+        store.createIndex('by_user_created', ['userId', 'createdAtMs']);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function chatTx(mode = 'readonly') {
+  return openChatDb().then((db) => {
+    const tx = db.transaction(CHAT_STORE, mode);
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => db.close();
+    tx.onabort = () => db.close();
+    return tx.objectStore(CHAT_STORE);
+  });
+}
+
+function normalizeChatLog(log, userId = state?.auth?.user?.id || '') {
+  const createdAt = log.createdAt || new Date().toISOString();
+  const createdAtMs = Number.isFinite(Date.parse(createdAt)) ? Date.parse(createdAt) : Date.now();
+  return {
+    id: String(log.id || cryptoRandomId()),
+    userId,
+    question: String(log.question || ''),
+    answer: String(log.answer || ''),
+    evidence: Array.isArray(log.evidence) ? log.evidence.filter((item) => !item.isHint) : [],
+    createdAt,
+    createdAtMs,
+  };
+}
+
+function setupHintMessage(result) {
+  const hints = [
+    ...(Array.isArray(result?.setupHints) ? result.setupHints : []),
+    ...(Array.isArray(result?.evidence) ? result.evidence.filter((item) => item.isHint) : []),
+  ];
+  const unique = [];
+  const seen = new Set();
+  for (const hint of hints) {
+    const message = [hint.source, hint.title, hint.content].filter(Boolean).join(' · ');
+    if (message && !seen.has(message)) {
+      seen.add(message);
+      unique.push(message);
+    }
+  }
+  return unique.join('\n\n');
+}
+
+async function saveChatMessage(log) {
+  const userId = state?.auth?.user?.id;
+  if (!userId || !log?.question) return null;
+  const message = normalizeChatLog(log, userId);
+  const store = await chatTx('readwrite');
+  await new Promise((resolve, reject) => {
+    const request = store.put(message);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+  return message;
+}
+
+async function importServerQueryLogs() {
+  const logs = state?.knowledgeCenter?.queryLogs || [];
+  if (!state?.auth?.user?.id || !logs.length) return;
+  await Promise.all(logs.map((log) => saveChatMessage(log)));
+}
+
+async function loadChatPage({ beforeCreatedAt = null, prepend = false } = {}) {
+  const userId = state?.auth?.user?.id;
+  if (!userId || chatLoading) return [];
+  chatLoading = true;
+  try {
+    const store = await chatTx('readonly');
+    const index = store.index('by_user_created');
+    const lower = [userId, 0];
+    const upper = [userId, beforeCreatedAt === null ? Number.MAX_SAFE_INTEGER : beforeCreatedAt - 1];
+    const range = IDBKeyRange.bound(lower, upper);
+    const rows = await new Promise((resolve, reject) => {
+      const found = [];
+      const request = index.openCursor(range, 'prev');
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor || found.length >= CHAT_PAGE_SIZE) {
+          resolve(found.reverse());
+          return;
+        }
+        found.push(cursor.value);
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error);
+    });
+    chatHasMore = rows.length === CHAT_PAGE_SIZE;
+    if (prepend) {
+      const seen = new Set(chatMessages.map((item) => item.id));
+      chatMessages = [...rows.filter((item) => !seen.has(item.id)), ...chatMessages];
+    } else {
+      chatMessages = rows;
+    }
+    chatOldestCreatedAt = chatMessages.length ? chatMessages[0].createdAtMs : null;
+    return rows;
+  } finally {
+    chatLoading = false;
+  }
+}
+
+async function initializeChatMessages() {
+  if (!state?.auth?.isLoggedIn || !state.auth.user) {
+    chatUserId = '';
+    chatMessages = [];
+    chatOldestCreatedAt = null;
+    chatHasMore = false;
+    return;
+  }
+  const nextUserId = state.auth.user.id;
+  if (chatUserId === nextUserId && chatMessages.length) return;
+  chatUserId = nextUserId;
+  chatMessages = [];
+  chatOldestCreatedAt = null;
+  chatHasMore = false;
+  await importServerQueryLogs();
+  await loadChatPage();
 }
 
 function setBusy(isBusy) {
@@ -390,7 +550,7 @@ async function startFeishuLogin() {
     return;
   }
   const redirectUri = state?.redirectUri || 'http://127.0.0.1:37891/feishu/oauth/callback';
-  showNotice(`即将在系统浏览器打开飞书授权。若出现 20029，请先在配置页把 ${redirectUri} 添加到飞书「重定向 URL」。`);
+  showNotice(`即将打开飞书授权窗口。若出现 20029，说明飞书开放平台还没有登记当前回调地址：${redirectUri}。请在配置页复制回调地址，粘贴到飞书应用「安全设置 → 重定向 URL」并保存后再登录。`);
   const next = await api.login();
   state = next;
   showNotice('飞书账号已登录');
@@ -573,6 +733,9 @@ function render() {
   }
 
   elements.localBadge.textContent = `本地：${state.auth.user.username} <${state.auth.user.email}>`;
+  elements.localBadge.title = '本地账号';
+  elements.localBadge.removeAttribute('role');
+  elements.localBadge.removeAttribute('tabindex');
   elements.profilePhone.value = state.auth.user.phone || '';
   elements.profileRecoveryEmail.value = state.auth.user.recoveryEmail || '';
   const aiProfile = state.knowledgeCenter?.aiProfile || {};
@@ -607,7 +770,7 @@ function render() {
   renderSources();
   renderConfigCenter();
   renderProjects();
-  renderLastQuery();
+  renderKnowledgeChat();
 }
 
 function renderProjects() {
@@ -820,6 +983,9 @@ function renderDynamicConfigFields() {
     recovery: `
       <label>绑定手机<input data-field="phone" value="${escapeHtml(state?.auth?.user?.phone || '')}" placeholder="用于找回身份" /></label>
       <label>恢复邮箱<input data-field="recoveryEmail" value="${escapeHtml(state?.auth?.user?.recoveryEmail || '')}" placeholder="you@example.com" /></label>
+      <hr class="divider" />
+      <label>当前本地密码<input data-field="currentPassword" type="password" placeholder="修改密码时填写" /></label>
+      <label>新本地密码<input data-field="newPassword" type="password" placeholder="至少 8 位；留空则不修改" /></label>
     `,
   };
   elements.dynamicConfigFields.innerHTML = templates[type] || '';
@@ -862,21 +1028,74 @@ function renderSources() {
     : '<div class="muted">尚未添加 Obsidian</div>';
 }
 
-function renderLastQuery() {
-  const latest = state.knowledgeCenter?.queryLogs?.[0];
-  if (!latest) return;
-  elements.queryResult.innerHTML = `
-    <strong>${escapeHtml(latest.question)}</strong>
-    <pre>${escapeHtml(latest.answer)}</pre>
-    <div class="evidenceList">
-      ${(latest.evidence || []).slice(0, 5).map((item) => `
-        <div class="evidenceItem${item.isHint ? ' setupHint' : ''}">
-          <span>${escapeHtml(item.source)} · ${escapeHtml(item.title)}</span>
-          <p>${escapeHtml(item.content || '').slice(0, 260)}</p>
+function knowledgeMessageHtml(log) {
+  const evidence = (log.evidence || []).filter((item) => !item.isHint).slice(0, 5);
+  return `
+    <div class="chatMessage userMessage">
+      <div class="chatAvatar userAvatar">我</div>
+      <div class="chatStack">
+        <div class="chatRole">我</div>
+        <div class="chatBubble">
+          <p>${escapeHtml(log.question)}</p>
         </div>
-      `).join('')}
+      </div>
+    </div>
+    <div class="chatMessage assistantMessage">
+      <div class="chatAvatar assistantAvatar">VM</div>
+      <div class="chatStack">
+        <div class="chatRole">VaultMind</div>
+        <div class="chatBubble">
+          <pre>${escapeHtml(log.answer)}</pre>
+          ${evidence.length ? `
+            <div class="evidenceList">
+              ${evidence.map((item) => `
+                <div class="evidenceItem">
+                  <span>${escapeHtml(item.source)} · ${escapeHtml(item.title)}</span>
+                  <p>${escapeHtml(item.content || '').slice(0, 260)}</p>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      </div>
     </div>
   `;
+}
+
+function scrollChatToBottom() {
+  requestAnimationFrame(() => {
+    elements.queryResult.scrollTop = elements.queryResult.scrollHeight;
+  });
+}
+
+function renderKnowledgeChat(extraHtml = '') {
+  if (state?.auth?.isLoggedIn && chatUserId !== state.auth.user?.id && !chatInitializing) {
+    chatInitializing = initializeChatMessages()
+      .then(() => renderKnowledgeChat())
+      .catch((error) => showNotice(`读取本地聊天记录失败：${error.message || error}`, true))
+      .finally(() => { chatInitializing = null; });
+  }
+  const logs = chatMessages;
+  if (!logs.length && !extraHtml) {
+    elements.queryResult.innerHTML = '<div class="emptyChat">检索和回答会显示在这里。</div>';
+    return;
+  }
+  const loader = chatHasMore
+    ? '<div class="chatLoader">向上滚动加载更早对话</div>'
+    : (logs.length > CHAT_PAGE_SIZE - 1 ? '<div class="chatLoader">已显示全部本地对话</div>' : '');
+  elements.queryResult.innerHTML = `${loader}${logs.map(knowledgeMessageHtml).join('')}${extraHtml}`;
+  if (extraHtml || elements.queryResult.scrollTop < 4) scrollChatToBottom();
+}
+
+async function loadOlderChatMessages() {
+  if (!chatHasMore || chatLoading || chatOldestCreatedAt === null) return;
+  const previousHeight = elements.queryResult.scrollHeight;
+  const previousTop = elements.queryResult.scrollTop;
+  await loadChatPage({ beforeCreatedAt: chatOldestCreatedAt, prepend: true });
+  renderKnowledgeChat();
+  requestAnimationFrame(() => {
+    elements.queryResult.scrollTop = elements.queryResult.scrollHeight - previousHeight + previousTop;
+  });
 }
 
 function renderRecords() {
@@ -970,6 +1189,7 @@ function renderItems() {
 
 async function refresh() {
   state = await api.getState();
+  await initializeChatMessages();
   render();
 }
 
@@ -1001,6 +1221,7 @@ elements.localSubmit.addEventListener('click', async () => {
   if (next) {
     state = next.state || next;
     elements.localPassword.value = '';
+    await initializeChatMessages();
     const accepted = next.acceptedInvites;
     if (next.recoveryCode) {
       setLoginHint(`注册成功。请保存恢复码：${next.recoveryCode}`);
@@ -1023,6 +1244,11 @@ elements.sendVerifyCode.addEventListener('click', () => {
 });
 
 elements.noticeClose.addEventListener('click', dismissNotice);
+elements.queryResult.addEventListener('scroll', () => {
+  if (elements.queryResult.scrollTop <= 12) {
+    loadOlderChatMessages().catch((error) => showNotice(`加载历史对话失败：${error.message || error}`, true));
+  }
+});
 
 for (const button of [elements.navLibrary, elements.navGroups, elements.navProjects, elements.navAdd, elements.navConfig]) {
   button.addEventListener('click', () => {
@@ -1430,7 +1656,16 @@ elements.saveConfigDynamic.addEventListener('click', async () => {
   } else if (type === 'obsidian') {
     next = await run(() => api.saveObsidianSources([{ id: cryptoRandomId(), enabled: true, ...data }, ...obsidianSourcesDraft]), 'Obsidian 配置已保存');
   } else if (type === 'recovery') {
-    next = await run(() => api.updateRecovery(data), '恢复资料已保存');
+    next = await run(() => api.updateRecovery({
+      phone: data.phone,
+      recoveryEmail: data.recoveryEmail,
+    }), '恢复资料已保存');
+    if (next && data.newPassword) {
+      next = await run(() => api.changeLocalPassword({
+        currentPassword: data.currentPassword,
+        newPassword: data.newPassword,
+      }), '本地密码已修改');
+    }
   }
   if (next) {
     state = next;
@@ -1742,27 +1977,45 @@ elements.runKnowledgeQuery.addEventListener('click', async () => {
     showNotice('请输入检索问题', true);
     return;
   }
-  elements.queryResult.textContent = '正在检索本地库、飞书知识库与其它来源...';
+  const pendingHtml = `
+    <div class="chatMessage userMessage">
+      <div class="chatAvatar userAvatar">我</div>
+      <div class="chatStack">
+        <div class="chatRole">我</div>
+        <div class="chatBubble">
+          <p>${escapeHtml(question)}</p>
+        </div>
+      </div>
+    </div>
+    <div class="chatMessage assistantMessage">
+      <div class="chatAvatar assistantAvatar">VM</div>
+      <div class="chatStack">
+        <div class="chatRole">VaultMind</div>
+        <div class="chatBubble pendingBubble">
+          <p>正在检索本地库、飞书知识库与其它来源...</p>
+        </div>
+      </div>
+    </div>
+  `;
+  renderKnowledgeChat(pendingHtml);
+  elements.questionInput.value = '';
   const result = await run(() => api.queryKnowledgeCenter({ question, context: state.context }), '检索完成');
   if (result) {
     state = result.state;
-    elements.queryResult.innerHTML = `
-      <strong>${escapeHtml(question)}</strong>
-      <pre>${escapeHtml(result.answer)}</pre>
-      <div class="evidenceList">
-        ${(result.evidence || []).map((item) => {
-          const body = item.content || '';
-          const preview = item.isHint ? body : body.slice(0, 420);
-          return `
-          <div class="evidenceItem${item.isHint ? ' setupHint' : ''}">
-            <span>${escapeHtml(item.source)} · ${escapeHtml(item.title)}</span>
-            <p>${escapeHtml(preview)}</p>
-          </div>
-        `;
-        }).join('')}
-      </div>
-    `;
+    const hint = setupHintMessage(result);
+    if (hint) showNotice(hint, false, 5000);
+    const saved = await saveChatMessage(result);
+    if (saved && chatUserId === saved.userId) {
+      chatMessages = [...chatMessages.filter((item) => item.id !== saved.id), saved]
+        .sort((a, b) => a.createdAtMs - b.createdAtMs)
+        .slice(-CHAT_PAGE_SIZE);
+      chatOldestCreatedAt = chatMessages.length ? chatMessages[0].createdAtMs : null;
+      chatHasMore = chatHasMore || chatMessages.length === CHAT_PAGE_SIZE;
+    }
     render();
+  } else {
+    elements.questionInput.value = question;
+    renderKnowledgeChat();
   }
 });
 
@@ -1781,11 +2034,7 @@ elements.login.addEventListener('click', async () => {
 
 elements.loginBadge.addEventListener('click', async () => {
   if (state.isFeishuLoggedIn) {
-    const next = await run(() => api.logout(), '已退出飞书登录');
-    if (next) {
-      state = next;
-      render();
-    }
+    showNotice('飞书已登录。如需退出，请到「配置 → 飞书同步」点击「退出飞书」。');
     return;
   }
   setBusy(true);
@@ -1876,12 +2125,6 @@ elements.items.addEventListener('click', async (event) => {
     if (button.dataset.url) await api.openExternal(button.dataset.url);
     return;
   }
-  const localPassword = elements.unlockPassword.value;
-  if ((button.dataset.itemAction === 'unlock' || button.dataset.itemAction === 'save') && localPassword.length < 8) {
-    showNotice('请输入本地密码', true);
-    return;
-  }
-
   if (button.dataset.itemAction === 'forget') {
     const next = await run(() => api.forgetItem(itemId), '本地内容已移除');
     if (next) {
@@ -1903,7 +2146,7 @@ elements.items.addEventListener('click', async (event) => {
   }
 
   if (button.dataset.itemAction === 'unlock') {
-    const result = await run(() => api.unlockItem({ itemId, localPassword }), '文本已解锁');
+    const result = await run(() => api.unlockItem({ itemId }), '文本已解锁');
     if (result) {
       const target = document.querySelector(`#itemText-${CSS.escape(itemId)}`);
       if (target) {
@@ -1915,7 +2158,7 @@ elements.items.addEventListener('click', async (event) => {
   }
 
   if (button.dataset.itemAction === 'save') {
-    const next = await run(() => api.saveItemFile({ itemId, localPassword }), '文件已保存到本地');
+    const next = await run(() => api.saveItemFile({ itemId }), '文件已保存到本地');
     if (next) {
       state = next;
       render();

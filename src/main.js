@@ -1516,8 +1516,9 @@ function createLibraryItem(input) {
   return publicState();
 }
 
-function unlockLibraryItem(itemId, localPassword) {
+function unlockLibraryItem(itemId) {
   const user = requireUser();
+  const localPassword = requireSessionPassword();
   const lib = queryOne('SELECT * FROM library_items WHERE id = ?', [itemId]);
   if (lib) {
     if (lib.scope === 'group') {
@@ -1538,6 +1539,104 @@ function unlockLibraryItem(itemId, localPassword) {
   const bytes = decryptContent(row, user, localPassword);
   if (row.kind !== 'text') throw new Error('这个条目是文件，请使用保存到本地');
   return { id: row.id, name: row.name, title: row.name, kind: 'text', content: bytes.toString('utf8') };
+}
+
+function changeLocalPassword(input) {
+  const user = requireUser();
+  const currentPassword = String(input.currentPassword || '');
+  const newPassword = String(input.newPassword || '');
+  if (newPassword.length < 8) throw new Error('新密码至少需要 8 个字符');
+  if (!activePassword) throw new Error('请重新登录本地账号后再修改密码');
+  if (currentPassword !== activePassword || hashPassword(currentPassword, user.password_salt) !== user.password_hash) {
+    throw new Error('当前本地密码不正确');
+  }
+
+  const nextSalt = crypto.randomBytes(16).toString('base64');
+  const nextUser = { ...user, password_salt: nextSalt };
+  const personalLibraries = queryAll(
+    `SELECT * FROM library_items WHERE user_id = ? AND (scope IS NULL OR scope = 'personal')`,
+    [user.id],
+  ).map((row) => ({
+    id: row.id,
+    encrypted: encryptForLocalUser(decryptForLocalUser(row, currentPassword, user), newPassword, nextUser),
+  }));
+  const personalFiles = queryAll(
+    `SELECT * FROM decrypted_items WHERE user_id = ? AND (scope IS NULL OR scope = 'personal')`,
+    [user.id],
+  ).map((row) => ({
+    id: row.id,
+    encrypted: encryptForLocalUser(decryptForLocalUser(row, currentPassword, user), newPassword, nextUser),
+  }));
+  const personalAccounts = queryAll(
+    `SELECT * FROM project_accounts WHERE user_id = ? AND (scope IS NULL OR scope = 'personal')`,
+    [user.id],
+  ).map((row) => {
+    const secretRow = {
+      content_ciphertext: row.secret_ciphertext,
+      content_iv: row.secret_iv,
+      content_tag: row.secret_tag,
+    };
+    return {
+      id: row.id,
+      encrypted: encryptForLocalUser(decryptForLocalUser(secretRow, currentPassword, user), newPassword, nextUser),
+    };
+  });
+  const wrappedGroupKeys = queryAll('SELECT * FROM group_member_keys WHERE user_id = ?', [user.id])
+    .map((row) => {
+      const groupKey = groupCrypto.unwrapGroupKey({
+        ciphertext: row.wrapped_key_ciphertext,
+        iv: row.wrapped_key_iv,
+        tag: row.wrapped_key_tag,
+      }, user, currentPassword);
+      return {
+        groupId: row.group_id,
+        keyVersion: row.key_version,
+        wrapped: groupCrypto.wrapGroupKey(groupKey, nextUser, newPassword),
+      };
+    });
+
+  db.run('BEGIN');
+  try {
+    db.run(
+      'UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?',
+      [nextSalt, hashPassword(newPassword, nextSalt), user.id],
+    );
+    for (const row of personalLibraries) {
+      db.run(
+        'UPDATE library_items SET content_ciphertext = ?, content_iv = ?, content_tag = ? WHERE id = ?',
+        [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, row.id],
+      );
+    }
+    for (const row of personalFiles) {
+      db.run(
+        'UPDATE decrypted_items SET content_ciphertext = ?, content_iv = ?, content_tag = ? WHERE id = ?',
+        [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, row.id],
+      );
+    }
+    for (const row of personalAccounts) {
+      db.run(
+        'UPDATE project_accounts SET secret_ciphertext = ?, secret_iv = ?, secret_tag = ? WHERE id = ?',
+        [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, row.id],
+      );
+    }
+    for (const row of wrappedGroupKeys) {
+      db.run(
+        `UPDATE group_member_keys
+         SET wrapped_key_ciphertext = ?, wrapped_key_iv = ?, wrapped_key_tag = ?
+         WHERE group_id = ? AND user_id = ? AND key_version = ?`,
+        [row.wrapped.ciphertext, row.wrapped.iv, row.wrapped.tag, row.groupId, user.id, row.keyVersion],
+      );
+    }
+    db.run('COMMIT');
+  } catch (error) {
+    db.run('ROLLBACK');
+    throw error;
+  }
+  saveDatabase();
+  activeUser = queryOne('SELECT * FROM users WHERE id = ?', [user.id]);
+  activePassword = newPassword;
+  createLocalSession(user.id);
+  return publicState();
 }
 
 function runCommand(command, args, options = {}) {
@@ -2043,6 +2142,11 @@ function registerHandlers() {
     return publicState();
   });
 
+  ipcMain.handle('vault:changeLocalPassword', async (_event, input) => {
+    await ensureDatabase();
+    return changeLocalPassword(input || {});
+  });
+
   ipcMain.handle('vault:resetPassword', async (_event, input) => {
     await ensureDatabase();
     const email = String(input.email || '').trim().toLowerCase();
@@ -2052,6 +2156,17 @@ function registerHandlers() {
     const user = queryOne('SELECT * FROM users WHERE email = ? OR recovery_email = ?', [email, email]);
     if (!user || !user.recovery_code_hash || hashPassword(recoveryCode, user.recovery_code_salt) !== user.recovery_code_hash) {
       throw new Error('恢复信息不正确');
+    }
+    const encryptedData = queryOne(
+      `SELECT
+        (SELECT COUNT(*) FROM library_items WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM decrypted_items WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM project_accounts WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM group_member_keys WHERE user_id = ?) AS total`,
+      [user.id, user.id, user.id, user.id],
+    );
+    if (Number(encryptedData?.total || 0) > 0) {
+      throw new Error('该账号已有加密内容，无法在不知道旧密码的情况下安全重置。请用旧密码登录后在「配置 → 账户恢复」中修改本地密码。');
     }
     const salt = crypto.randomBytes(16).toString('base64');
     db.run('UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?', [salt, hashPassword(newPassword, salt), user.id]);
@@ -2202,7 +2317,7 @@ function registerHandlers() {
 
   ipcMain.handle('vault:unlockItem', async (_event, payload) => {
     await ensureDatabase();
-    const item = unlockLibraryItem(String(payload.itemId || ''), String(payload.localPassword || ''));
+    const item = unlockLibraryItem(String(payload.itemId || ''));
     return { id: item.id, name: item.name || item.title, text: item.content || item.url || '' };
   });
 
@@ -2222,7 +2337,7 @@ function registerHandlers() {
       defaultPath: row.name,
     });
     if (result.canceled || !result.filePath) return publicState();
-    const bytes = decryptContent(row, user, String(payload.localPassword || ''));
+    const bytes = decryptContent(row, user, requireSessionPassword());
     fs.writeFileSync(result.filePath, bytes);
     db.run('UPDATE decrypted_items SET saved_path = ? WHERE id = ?', [result.filePath, row.id]);
     saveDatabase();
@@ -2249,9 +2364,19 @@ function registerHandlers() {
   ipcMain.handle('vault:forgetItem', async (_event, itemId) => {
     await ensureDatabase();
     const user = requireUser();
-    db.run('DELETE FROM decrypted_items WHERE id = ?', [itemId]);
-    db.run('DELETE FROM library_items WHERE id = ?', [itemId]);
-    searchService.removeAssetIndex(db, itemId);
+    const id = String(itemId || '');
+    const lib = queryOne('SELECT * FROM library_items WHERE id = ?', [id]);
+    const decrypted = queryOne('SELECT * FROM decrypted_items WHERE id = ?', [id]);
+    const row = lib || decrypted;
+    if (!row) throw new Error('找不到这条本地内容');
+    if (row.scope === 'group') {
+      groupService.requireGroupAccess(db, queryOne, row.group_id, user.id, ['owner', 'admin', 'member']);
+    } else if (row.user_id !== user.id) {
+      throw new Error('找不到这条本地内容');
+    }
+    db.run('DELETE FROM decrypted_items WHERE id = ?', [id]);
+    db.run('DELETE FROM library_items WHERE id = ?', [id]);
+    searchService.removeAssetIndex(db, id);
     saveDatabase();
     return publicState();
   });
@@ -2274,7 +2399,15 @@ function registerHandlers() {
   ipcMain.handle('vault:deleteProjectRepository', async (_event, repoId) => {
     await ensureDatabase();
     const user = requireUser();
-    db.run('DELETE FROM project_repositories WHERE id = ? AND user_id = ?', [repoId, user.id]);
+    const id = String(repoId || '');
+    const repo = queryOne('SELECT * FROM project_repositories WHERE id = ?', [id]);
+    if (!repo) throw new Error('找不到项目配置');
+    if (repo.scope === 'group') {
+      groupService.requireGroupAccess(db, queryOne, repo.group_id, user.id, ['owner', 'admin', 'member']);
+    } else if (repo.user_id !== user.id) {
+      throw new Error('找不到项目配置');
+    }
+    db.run('DELETE FROM project_repositories WHERE id = ?', [id]);
     saveDatabase();
     return publicState();
   });

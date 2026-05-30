@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('vaultApi', {
   loginLocal: (payload) => ipcRenderer.invoke('vault:loginLocal', payload),
   logoutLocal: () => ipcRenderer.invoke('vault:logoutLocal'),
   updateRecovery: (payload) => ipcRenderer.invoke('vault:updateRecovery', payload),
+  changeLocalPassword: (payload) => ipcRenderer.invoke('vault:changeLocalPassword', payload),
   resetPassword: (payload) => ipcRenderer.invoke('vault:resetPassword', payload),
   saveSettings: (settings) => ipcRenderer.invoke('vault:saveSettings', settings),
   testFeishuSync: (payload) => ipcRenderer.invoke('vault:testFeishuSync', payload),

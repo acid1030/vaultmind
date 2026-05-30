@@ -283,11 +283,16 @@ p,
 }
 
 .notice {
+  position: fixed;
+  top: 84px;
+  right: 24px;
+  z-index: 30;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 14px;
+  width: min(560px, calc(100vw - 48px));
+  margin-top: 0;
   border-radius: 12px;
   padding: 11px 13px;
   border: 1px solid rgba(57, 217, 138, 0.34);
@@ -299,6 +304,7 @@ p,
 .notice span {
   min-width: 0;
   line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .notice.error {
@@ -822,13 +828,116 @@ button.full {
 }
 
 .chatWorkspace .queryResult.chatResult {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   width: 100%;
-  height: auto;
-  min-height: 120px;
-  max-height: none;
+  min-height: 280px;
+  max-height: calc(100vh - 330px);
   margin-top: 0;
-  overflow: visible;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scroll-behavior: smooth;
+}
+
+.emptyChat {
+  margin: auto;
+  color: rgba(226, 232, 240, 0.48);
+}
+
+.chatLoader {
+  align-self: center;
+  color: rgba(226, 232, 240, 0.46);
+  font-size: 12px;
+  padding: 2px 0 6px;
+}
+
+.chatMessage {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.userMessage {
+  justify-content: flex-end;
+  flex-direction: row-reverse;
+}
+
+.assistantMessage {
+  justify-content: flex-start;
+}
+
+.chatAvatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  margin-top: 18px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #e9fffb;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 10px 22px rgba(0, 0, 0, 0.2);
+}
+
+.userAvatar {
+  background: linear-gradient(145deg, #2ecf93, #1c7f74);
+  border: 1px solid rgba(96, 255, 189, 0.42);
+}
+
+.assistantAvatar {
+  background: linear-gradient(145deg, #25b9d7, #3155b7);
+  border: 1px solid rgba(125, 220, 255, 0.46);
+}
+
+.chatStack {
+  display: flex;
+  flex-direction: column;
+  max-width: min(78%, 760px);
+  min-width: 120px;
+}
+
+.userMessage .chatStack {
+  align-items: flex-end;
+}
+
+.assistantMessage .chatStack {
+  align-items: flex-start;
+}
+
+.chatBubble {
+  min-width: 96px;
+  max-width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 11px 13px;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.userMessage .chatBubble {
+  background: rgba(68, 196, 161, 0.18);
+  border-color: rgba(68, 196, 161, 0.28);
+}
+
+.pendingBubble {
+  color: rgba(226, 232, 240, 0.66);
+}
+
+.chatRole {
+  margin: 0 4px 5px;
+  font-size: 12px;
+  color: rgba(226, 232, 240, 0.58);
+}
+
+.chatBubble p {
+  margin: 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .chatComposer {
@@ -865,7 +974,7 @@ button.full {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: inherit;
-  margin: 10px 0;
+  margin: 0;
   line-height: 1.65;
 }
 
