@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -18,6 +18,7 @@ const knowledgeHints = require('./core/knowledge-hints');
 const DEFAULT_SETTINGS = {
   appId: '',
   appSecret: '',
+  feishuPassphrase: '',
   folderToken: 'root',
   redirectPort: 37891,
 };
@@ -25,7 +26,20 @@ const DEFAULT_SETTINGS = {
 const VAULT_VERSION = 2;
 const KEY_ITERATIONS = 210000;
 const LOCAL_KEY_ITERATIONS = 180000;
-const MAX_FILE_BYTES = 18 * 1024 * 1024;
+const LOCAL_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const FEISHU_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_FEISHU_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_WECHAT_SCAN_FILES = 200;
+const MAX_WECHAT_SCAN_DEPTH = 8;
+const WECHAT_ATTACHMENT_EXTENSIONS = new Set([
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.md',
+  '.html', '.htm', '.drawio', '.csv', '.json', '.xml',
+  '.zip', '.rar', '.7z', '.tar', '.gz', '.dmg', '.exe', '.msi', '.apk',
+  '.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic',
+  '.mp4', '.mov', '.m4v', '.avi', '.mkv',
+  '.mp3', '.m4a', '.wav', '.aac',
+]);
 const FEISHU_API = 'https://open.feishu.cn';
 const FEISHU_AUTH = 'https://accounts.feishu.cn/open-apis/authen/v1/authorize';
 const REQUIRED_SCOPES = [
@@ -306,19 +320,40 @@ function sessionTokenPath() {
   return path.join(app.getPath('userData'), 'local-session-token');
 }
 
+function sessionPasswordPath() {
+  return path.join(app.getPath('userData'), 'local-session-password');
+}
+
 function hashSessionToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-function createLocalSession(userId) {
+function persistSessionPassword(password) {
+  if (!safeStorage.isEncryptionAvailable()) return;
+  const encrypted = safeStorage.encryptString(String(password || ''));
+  fs.writeFileSync(sessionPasswordPath(), encrypted, { mode: 0o600 });
+}
+
+function restoreSessionPassword() {
+  if (!safeStorage.isEncryptionAvailable()) return '';
+  try {
+    const encrypted = fs.readFileSync(sessionPasswordPath());
+    return safeStorage.decryptString(encrypted);
+  } catch {
+    return '';
+  }
+}
+
+function createLocalSession(userId, password = '') {
   const token = crypto.randomBytes(32).toString('base64url');
-  const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const expiresAt = Date.now() + LOCAL_SESSION_TTL_MS;
   db.run('DELETE FROM local_sessions WHERE user_id = ?', [userId]);
   db.run(
     'INSERT INTO local_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)',
     [hashSessionToken(token), userId, expiresAt, new Date().toISOString()],
   );
   fs.writeFileSync(sessionTokenPath(), token, { mode: 0o600 });
+  if (password) persistSessionPassword(password);
   saveDatabase();
 }
 
@@ -331,6 +366,11 @@ function clearLocalSession() {
   }
   try {
     fs.rmSync(sessionTokenPath(), { force: true });
+  } catch {
+    // ignore
+  }
+  try {
+    fs.rmSync(sessionPasswordPath(), { force: true });
   } catch {
     // ignore
   }
@@ -348,7 +388,9 @@ function restoreLocalSession() {
       return;
     }
     activeUser = queryOne('SELECT * FROM users WHERE id = ?', [row.user_id]);
-    activePassword = '';
+    activePassword = restoreSessionPassword();
+    db.run('UPDATE local_sessions SET expires_at = ? WHERE token_hash = ?', [Date.now() + LOCAL_SESSION_TTL_MS, hashSessionToken(token)]);
+    saveDatabase();
   } catch {
     // ignore missing/invalid session
   }
@@ -409,6 +451,13 @@ function setFeishuToken(token) {
   setStateValue('feishuToken', token);
 }
 
+function hasUsableFeishuToken(token) {
+  if (!token) return false;
+  if (token.accessToken && Number(token.expiresAt || 0) > Date.now()) return true;
+  if (token.refreshToken && (!token.refreshExpiresAt || Number(token.refreshExpiresAt) > Date.now())) return true;
+  return false;
+}
+
 function itemsForContext(userId, context) {
   const libs = context.scope === 'group' && context.groupId
     ? queryAll(
@@ -466,7 +515,11 @@ function projectsForContext(userId, context) {
 
 function publicState() {
   const settings = getSettings();
-  const token = getFeishuToken();
+  let token = getFeishuToken();
+  if (token && !hasUsableFeishuToken(token)) {
+    setFeishuToken(null);
+    token = null;
+  }
   const context = activeUser ? getContext() : { scope: 'personal', groupId: '', groupName: '' };
   activeContext = context;
   const user = activeUser ? {
@@ -515,8 +568,10 @@ function publicState() {
     settings: {
       ...settings,
       appSecret: settings.appSecret ? '********' : '',
+      feishuPassphrase: settings.feishuPassphrase ? '********' : '',
+      hasFeishuPassphrase: Boolean(settings.feishuPassphrase),
     },
-    isFeishuLoggedIn: Boolean(token && token.accessToken),
+    isFeishuLoggedIn: hasUsableFeishuToken(token),
     feishuUser: token && token.user,
     context,
     groups,
@@ -688,16 +743,26 @@ function maskItem(row) {
   };
 }
 
-function sanitizeSettings(input, previousSecret = '') {
+function sanitizeSettings(input, previousSecret = '', previousFeishuPassphrase = '') {
   const redirectPort = Number(input.redirectPort || DEFAULT_SETTINGS.redirectPort);
   return {
     appId: String(input.appId || '').trim(),
     appSecret: input.appSecret === undefined || input.appSecret === '********'
       ? previousSecret
       : String(input.appSecret || '').trim(),
+    feishuPassphrase: input.feishuPassphrase === undefined || input.feishuPassphrase === '********'
+      ? previousFeishuPassphrase
+      : String(input.feishuPassphrase || ''),
     folderToken: String(input.folderToken || 'root').trim() || 'root',
     redirectPort: Number.isFinite(redirectPort) && redirectPort > 0 ? Math.floor(redirectPort) : DEFAULT_SETTINGS.redirectPort,
   };
+}
+
+function configuredFeishuPassphrase(inputPassphrase = '') {
+  const input = String(inputPassphrase || '');
+  const passphrase = input && input !== '********' ? input : String(getSettings().feishuPassphrase || '');
+  if (passphrase.length < 8) throw new Error('请先在「配置 → 飞书同步」设置至少 8 位的飞书加密口令');
+  return passphrase;
 }
 
 function requestJson(method, urlText, options = {}) {
@@ -816,10 +881,25 @@ function requestBuffer(method, urlText, options = {}) {
 
 function ensureFeishuPayload(response, fallback) {
   if (response.code && response.code !== 0) {
+    if (String(response.msg || '').toLowerCase().includes('parent node not exist')) {
+      throw new Error('飞书文件夹 Token 不存在或当前应用无权访问。请在「配置 → 飞书同步」把文件夹 Token 改为 root，或填入有效的 fldcn... 文件夹 Token 后重新保存。');
+    }
+    if (response.code === 1061002 && String(response.msg || '').toLowerCase().includes('params')) {
+      throw new Error('飞书上传参数错误：请确认文件未超过 20MB，且飞书文件夹 Token 有访问权限。');
+    }
     throw new Error(response.msg || `${fallback}: Feishu code ${response.code}`);
   }
   if (response.data && typeof response.data === 'object') return response.data;
   return response;
+}
+
+function isFeishuFolderTokenError(error) {
+  const message = String(error && error.message ? error.message : error).toLowerCase();
+  return message.includes('文件夹 token 不存在')
+    || message.includes('parent node not exist')
+    || message.includes('parent node')
+    || message.includes('no permission')
+    || message.includes('permission');
 }
 
 function deriveVaultKey(passphrase, salt) {
@@ -869,7 +949,7 @@ function decryptVaultPayload(buffer, passphrase) {
 function payloadFromFile(filePath) {
   const input = fs.readFileSync(filePath);
   if (input.length > MAX_FILE_BYTES) {
-    throw new Error('当前版本单个文件限制约 18MB，避免超过飞书直传限制');
+    throw new Error('当前版本单个文件限制约 12MB，避免加密后超过飞书直传限制');
   }
   return {
     kind: 'file',
@@ -877,6 +957,115 @@ function payloadFromFile(filePath) {
     sourcePath: filePath,
     size: input.length,
     contentBase64: input.toString('base64'),
+  };
+}
+
+function scanWechatAttachments(rootDir) {
+  const root = path.resolve(String(rootDir || ''));
+  if (!root || !fs.existsSync(root)) throw new Error('微信附件目录不存在');
+  const files = [];
+  const stack = [{ dir: root, depth: 0 }];
+  while (stack.length) {
+    const { dir, depth } = stack.pop();
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (depth < MAX_WECHAT_SCAN_DEPTH && !entry.name.startsWith('.')) {
+          stack.push({ dir: fullPath, depth: depth + 1 });
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!WECHAT_ATTACHMENT_EXTENSIONS.has(ext)) continue;
+      let stat = null;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (!stat.size || stat.size > MAX_FILE_BYTES) continue;
+      files.push({
+        path: fullPath,
+        name: entry.name,
+        size: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+        relativePath: path.relative(root, fullPath),
+      });
+    }
+  }
+  return files
+    .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+    .slice(0, MAX_WECHAT_SCAN_FILES);
+}
+
+function findWechatAttachmentRoots() {
+  const home = app.getPath('home');
+  const baseCandidates = [
+    path.join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Library', 'Application Support', 'com.tencent.xinWeChat'),
+    path.join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Documents', 'xwechat_files'),
+    path.join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Documents', 'app_data', 'ilink', 'wechat'),
+    path.join(home, 'Library', 'Application Support', 'com.tencent.xinWeChat'),
+    path.join(home, 'Documents', 'WeChat Files'),
+  ];
+  const roots = [];
+  const seen = new Set();
+  const addRoot = (dir) => {
+    const resolved = path.resolve(dir);
+    if (!seen.has(resolved) && fs.existsSync(resolved)) {
+      seen.add(resolved);
+      roots.push(resolved);
+    }
+  };
+  const maybeAttachmentDir = (dir, name) => ['FileStorage', 'MsgAttach', 'MessageTemp', 'FileTemp'].includes(name)
+    || (name === 'file' && path.basename(path.dirname(dir)) === 'msg');
+  for (const base of baseCandidates) {
+    if (!fs.existsSync(base)) continue;
+    const stack = [{ dir: base, depth: 0 }];
+    while (stack.length) {
+      const { dir, depth } = stack.pop();
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        const fullPath = path.join(dir, entry.name);
+        if (maybeAttachmentDir(fullPath, entry.name)) {
+          addRoot(fullPath);
+          continue;
+        }
+        if (depth < 5) stack.push({ dir: fullPath, depth: depth + 1 });
+      }
+    }
+  }
+  return roots;
+}
+
+function scanDefaultWechatAttachments() {
+  const roots = findWechatAttachmentRoots();
+  const seen = new Set();
+  const files = [];
+  for (const root of roots) {
+    for (const file of scanWechatAttachments(root)) {
+      if (seen.has(file.path)) continue;
+      seen.add(file.path);
+      files.push({ ...file, scanRoot: root });
+    }
+  }
+  return {
+    roots,
+    files: files
+      .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+      .slice(0, MAX_WECHAT_SCAN_FILES),
   };
 }
 
@@ -935,36 +1124,80 @@ async function exchangeCodeForToken(settings, code) {
     accessToken: tokenData.access_token,
     refreshToken: tokenData.refresh_token,
     expiresAt: Date.now() + Math.max(60, Number(tokenData.expires_in || 7200) - 60) * 1000,
+    refreshExpiresAt: Date.now() + FEISHU_REFRESH_TTL_MS,
     scope: tokenData.scope,
     user,
   };
 }
 
-async function refreshFeishuTokenIfNeeded() {
+async function refreshFeishuTokenIfNeeded(options = {}) {
   const settings = getSettings();
   const token = getFeishuToken();
   if (!token || !token.accessToken) throw new Error('请先登录飞书账号');
-  if (Date.now() < token.expiresAt || !token.refreshToken) return token;
+  if (!options.force && Date.now() < Number(token.expiresAt || 0)) return token;
+  if (!token.refreshToken) {
+    setFeishuToken(null);
+    throw new Error('飞书登录已过期，请重新登录飞书账号。');
+  }
+  if (token.refreshExpiresAt && Date.now() > token.refreshExpiresAt) {
+    setFeishuToken(null);
+    throw new Error('飞书登录已超过 30 天，请重新登录飞书账号。');
+  }
 
-  const refreshed = await requestJson('POST', `${FEISHU_API}/open-apis/authen/v2/oauth/token`, {
-    body: {
-      grant_type: 'refresh_token',
-      client_id: settings.appId,
-      client_secret: settings.appSecret,
-      refresh_token: token.refreshToken,
-    },
-  });
-  const data = ensureFeishuPayload(refreshed, '刷新飞书登录失败');
+  let data;
+  try {
+    const refreshed = await requestJson('POST', `${FEISHU_API}/open-apis/authen/v2/oauth/token`, {
+      body: {
+        grant_type: 'refresh_token',
+        client_id: settings.appId,
+        client_secret: settings.appSecret,
+        refresh_token: token.refreshToken,
+      },
+    });
+    data = ensureFeishuPayload(refreshed, '刷新飞书登录失败');
+  } catch (error) {
+    setFeishuToken(null);
+    throw new Error(`飞书登录已失效，请在顶栏重新登录飞书账号。${error.message || error}`);
+  }
   if (!data.access_token) throw new Error('飞书没有返回新的 access_token');
   const next = {
     ...token,
     accessToken: data.access_token,
     refreshToken: data.refresh_token || token.refreshToken,
     expiresAt: Date.now() + Math.max(60, Number(data.expires_in || 7200) - 60) * 1000,
+    refreshExpiresAt: data.refresh_token ? Date.now() + FEISHU_REFRESH_TTL_MS : (token.refreshExpiresAt || Date.now() + FEISHU_REFRESH_TTL_MS),
     scope: data.scope || token.scope,
   };
   setFeishuToken(next);
   return next;
+}
+
+function isFeishuTokenExpiredError(error) {
+  const message = String(error && error.message ? error.message : error).toLowerCase();
+  return message.includes('authentication token expired')
+    || message.includes('access token expired')
+    || message.includes('token expired');
+}
+
+async function uploadAllToFeishu(fields, file, fallback) {
+  const multipart = buildMultipart(fields, file);
+  async function attempt(token) {
+    const response = await requestBuffer('POST', `${FEISHU_API}/open-apis/drive/v1/files/upload_all`, {
+      headers: {
+        Authorization: `Bearer ${token.accessToken}`,
+        'Content-Type': `multipart/form-data; boundary=${multipart.boundary}`,
+      },
+      body: multipart.body,
+    });
+    return ensureFeishuPayload(JSON.parse(response.body.toString('utf8')), fallback);
+  }
+
+  try {
+    return await attempt(await refreshFeishuTokenIfNeeded());
+  } catch (error) {
+    if (!isFeishuTokenExpiredError(error)) throw error;
+    return attempt(await refreshFeishuTokenIfNeeded({ force: true }));
+  }
 }
 
 function manifestStateKey(scope, groupId, userId) {
@@ -1021,6 +1254,64 @@ async function listFeishuFolderFiles(folderToken) {
   return feishuDrive.parseListFilesResponse(ensureFeishuPayload(response, '列出飞书文件失败'));
 }
 
+async function getFeishuRootFolderToken() {
+  const token = await refreshFeishuTokenIfNeeded();
+  const response = await requestJson(
+    'GET',
+    `${FEISHU_API}/open-apis/drive/explorer/v2/root_folder/meta`,
+    { headers: { Authorization: `Bearer ${token.accessToken}` } },
+  );
+  const data = ensureFeishuPayload(response, '获取飞书根目录失败');
+  if (!data.token) throw new Error('飞书没有返回根目录 token');
+  return data.token;
+}
+
+async function resolveWritableFeishuFolder(preferredToken) {
+  const folderToken = String(preferredToken || 'root').trim() || 'root';
+  const rootToken = await getFeishuRootFolderToken();
+  if (folderToken === 'root') return rootToken;
+  try {
+    await listFeishuFolderFiles(folderToken);
+    return folderToken;
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    if (message.includes('文件夹 Token 不存在') || message.toLowerCase().includes('parent node not exist')) {
+      return rootToken;
+    }
+    throw error;
+  }
+}
+
+function saveSyncRecord(user, input) {
+  const now = input.uploadedAt || new Date().toISOString();
+  const record = {
+    id: input.id || crypto.randomUUID(),
+    userId: user.id,
+    localPath: input.localPath || '',
+    fileName: input.fileName,
+    size: Number(input.size || 0),
+    token: input.token,
+    url: input.url || '',
+    uploadedAt: now,
+    algorithm: input.algorithm || 'AES-256-GCM/PBKDF2-SHA256',
+    kind: input.kind || 'text',
+    scope: input.scope || 'personal',
+    groupId: input.scope === 'group' ? (input.groupId || null) : null,
+    assetId: input.assetId || null,
+  };
+  db.run(
+    `INSERT OR REPLACE INTO records
+      (id, user_id, local_path, file_name, size, token, url, uploaded_at, algorithm, kind, scope, group_id, created_by, asset_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      record.id, record.userId, record.localPath, record.fileName, record.size, record.token, record.url,
+      record.uploadedAt, record.algorithm, record.kind, record.scope, record.groupId, user.id, record.assetId,
+    ],
+  );
+  saveDatabase();
+  return record;
+}
+
 async function downloadFeishuFileBuffer(fileToken) {
   const token = await refreshFeishuTokenIfNeeded();
   const response = await requestBuffer(
@@ -1050,9 +1341,10 @@ async function testFeishuSync(input = {}) {
   const settings = sanitizeSettings({
     appId: input.appId || previous.appId,
     appSecret: input.appSecret || previous.appSecret,
+    feishuPassphrase: input.feishuPassphrase || input.passphrase || previous.feishuPassphrase,
     folderToken: input.folderToken || previous.folderToken,
     redirectPort: previous.redirectPort,
-  }, previous.appSecret);
+  }, previous.appSecret, previous.feishuPassphrase);
   if (!settings.appId || !settings.appSecret) {
     throw new Error('请先填写飞书 App ID 和 App Secret');
   }
@@ -1060,15 +1352,15 @@ async function testFeishuSync(input = {}) {
   if (!feishuToken || !feishuToken.accessToken) {
     throw new Error('请先登录飞书后再测试同步');
   }
-  const passphrase = String(input.passphrase || '');
-  if (passphrase.length < 8) throw new Error('飞书加密口令至少需要 8 个字符');
+  const passphrase = configuredFeishuPassphrase(settings.feishuPassphrase || input.passphrase);
 
   const scopeMeta = resolveScopeFromInput(input);
-  const parentNode = scopeMeta.scope === 'group'
+  const preferredParentNode = scopeMeta.scope === 'group'
     ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [scopeMeta.groupId])?.feishu_folder_token
       || settings.folderToken
       || 'root')
     : (settings.folderToken || 'root');
+  const parentNode = await resolveWritableFeishuFolder(preferredParentNode);
 
   await listFeishuFolderFiles(parentNode);
 
@@ -1114,9 +1406,10 @@ async function resolveManifestFileToken(scope, groupId, userId, fileName) {
   const meta = getManifestMeta(scope, groupId, userId);
   if (meta && meta.fileToken) return meta.fileToken;
   const settings = getSettings();
-  const parentNode = scope === 'group'
+  const preferredParentNode = scope === 'group'
     ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [groupId])?.feishu_folder_token || settings.folderToken || 'root')
     : (settings.folderToken || 'root');
+  const parentNode = await resolveWritableFeishuFolder(preferredParentNode);
   const files = await listFeishuFolderFiles(parentNode);
   const found = feishuDrive.findManifestFile(files, fileName);
   return found ? found.token : null;
@@ -1124,35 +1417,36 @@ async function resolveManifestFileToken(scope, groupId, userId, fileName) {
 
 async function pushManifestToFeishu(payload) {
   const user = requireUser();
-  const passphrase = String(payload.passphrase || '');
-  if (passphrase.length < 8) throw new Error('同步口令至少需要 8 个字符');
+  const passphrase = configuredFeishuPassphrase(payload.passphrase);
   const { scope, groupId } = resolveScopeFromInput(payload || {});
   const manifest = manifestService.buildManifestEntries(db, queryAll, user.id, scope, groupId);
   const encrypted = manifestService.encryptManifest(manifest, passphrase, encryptVaultPayload);
   const fileName = manifestService.manifestFileName(scope, groupId, user.id);
   const settings = getSettings();
-  const token = await refreshFeishuTokenIfNeeded();
-  const parentNode = scope === 'group'
+  const preferredParentNode = scope === 'group'
     ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [groupId])?.feishu_folder_token || settings.folderToken || 'root')
     : (settings.folderToken || 'root');
-  const multipart = buildMultipart({
+  const parentNode = await resolveWritableFeishuFolder(preferredParentNode);
+  const data = await uploadAllToFeishu({
     file_name: fileName,
     parent_type: 'explorer',
     parent_node: parentNode,
     size: String(encrypted.length),
-  }, { name: fileName, bytes: encrypted });
-  const response = await requestBuffer('POST', `${FEISHU_API}/open-apis/drive/v1/files/upload_all`, {
-    headers: {
-      Authorization: `Bearer ${token.accessToken}`,
-      'Content-Type': `multipart/form-data; boundary=${multipart.boundary}`,
-    },
-    body: multipart.body,
-  });
-  const data = ensureFeishuPayload(JSON.parse(response.body.toString('utf8')), '同步 manifest 失败');
+  }, { name: fileName, bytes: encrypted }, '同步 manifest 失败');
   setStateValue(manifestStateKey(scope, groupId, user.id), {
     fileToken: data.file_token,
     url: data.url || '',
     syncedAt: new Date().toISOString(),
+  });
+  saveSyncRecord(user, {
+    fileName,
+    size: encrypted.length,
+    token: data.file_token,
+    url: data.url || '',
+    kind: 'text',
+    scope,
+    groupId,
+    assetId: manifestStateKey(scope, groupId, user.id),
   });
   saveDatabase();
   return { ok: true, fileToken: data.file_token };
@@ -1161,8 +1455,7 @@ async function pushManifestToFeishu(payload) {
 async function pullManifestFromFeishu(payload) {
   const user = requireUser();
   requireSessionPassword();
-  const passphrase = String(payload.passphrase || '');
-  if (passphrase.length < 8) throw new Error('同步口令至少需要 8 个字符');
+  const passphrase = configuredFeishuPassphrase(payload.passphrase);
   const { scope, groupId } = resolveScopeFromInput(payload || {});
   const fileName = manifestService.manifestFileName(scope, groupId, user.id);
   const fileToken = await resolveManifestFileToken(scope, groupId, user.id, fileName);
@@ -1217,62 +1510,118 @@ async function uploadVaultPayload(payload, passphrase, scopeMeta = {}, options =
   if (scope === 'group') {
     groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
   }
-  const token = await refreshFeishuTokenIfNeeded();
   const encrypted = encryptVaultPayload(payload, passphrase);
+  if (encrypted.length > MAX_FEISHU_UPLOAD_BYTES) {
+    throw new Error(`文件「${payload.name}」加密后超过飞书直传 20MB 限制，请选择更小的文件或拆分后再同步。`);
+  }
   const uploadName = `${payload.name}.axonvault`;
-  const parentNode = options.parentNode || (scope === 'group'
+  const preferredParentNode = options.parentNode || (scope === 'group'
     ? (queryOne('SELECT feishu_folder_token FROM groups WHERE id = ?', [groupId])?.feishu_folder_token || settings.folderToken || 'root')
     : (settings.folderToken || 'root'));
-  const multipart = buildMultipart({
-    file_name: uploadName,
-    parent_type: 'explorer',
-    parent_node: parentNode,
-    size: String(encrypted.length),
-  }, { name: uploadName, bytes: encrypted });
-
-  const response = await requestBuffer('POST', `${FEISHU_API}/open-apis/drive/v1/files/upload_all`, {
-    headers: {
-      Authorization: `Bearer ${token.accessToken}`,
-      'Content-Type': `multipart/form-data; boundary=${multipart.boundary}`,
-    },
-    body: multipart.body,
-  });
-  const data = ensureFeishuPayload(JSON.parse(response.body.toString('utf8')), '上传到飞书失败');
+  const parentNode = await resolveWritableFeishuFolder(preferredParentNode);
+  let finalParentNode = parentNode;
+  let data;
+  try {
+    data = await uploadAllToFeishu({
+      file_name: uploadName,
+      parent_type: 'explorer',
+      parent_node: finalParentNode,
+      size: String(encrypted.length),
+    }, { name: uploadName, bytes: encrypted }, '上传到飞书失败');
+  } catch (error) {
+    if (finalParentNode === 'root' || !isFeishuFolderTokenError(error)) throw error;
+    finalParentNode = await resolveWritableFeishuFolder('root');
+    if (scope !== 'group') {
+      setStateValue('settings', { ...settings, folderToken: 'root' });
+    }
+    data = await uploadAllToFeishu({
+      file_name: uploadName,
+      parent_type: 'explorer',
+      parent_node: finalParentNode,
+      size: String(encrypted.length),
+    }, { name: uploadName, bytes: encrypted }, '上传到飞书失败');
+  }
   if (!data.file_token) throw new Error('飞书没有返回 file_token');
   if (options.skipRecord) {
     return {
       fileToken: data.file_token,
       url: data.url || '',
       fileName: uploadName,
-      parentNode,
+      parentNode: finalParentNode,
     };
   }
-  const record = {
-    id: crypto.randomUUID(),
-    userId: user.id,
+  return saveSyncRecord(user, {
     localPath: payload.sourcePath || '',
     fileName: payload.name,
     size: payload.size,
     token: data.file_token,
     url: data.url || '',
-    uploadedAt: new Date().toISOString(),
-    algorithm: 'AES-256-GCM/PBKDF2-SHA256',
     kind: payload.kind,
     scope,
-    groupId: scope === 'group' ? groupId : null,
+    groupId,
     assetId: payload.assetId || null,
-  };
-  db.run(
-    `INSERT OR REPLACE INTO records
-      (id, user_id, local_path, file_name, size, token, url, uploaded_at, algorithm, kind, scope, group_id, created_by, asset_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      record.id, user.id, record.localPath, record.fileName, record.size, record.token, record.url,
-      record.uploadedAt, record.algorithm, record.kind, scope, record.groupId, user.id, record.assetId,
-    ],
-  );
-  saveDatabase();
-  return record;
+  });
+}
+
+function sendUploadProgress(event, payload) {
+  if (!event || !event.sender || event.sender.isDestroyed()) return;
+  event.sender.send('vault:uploadProgress', payload);
+}
+
+async function openPathOrThrow(targetPath) {
+  const cleanPath = String(targetPath || '').trim();
+  if (!cleanPath || !fs.existsSync(cleanPath)) return false;
+  const error = await shell.openPath(cleanPath);
+  if (error) throw new Error(`打开文件失败：${error}`);
+  return true;
+}
+
+async function openAsset(input = {}) {
+  const user = requireUser();
+  const assetId = String(input.assetId || '').trim();
+  const sourceTable = String(input.sourceTable || '').trim();
+  if (!assetId) throw new Error('缺少要打开的文件标识');
+
+  if (sourceTable === 'records' || !sourceTable) {
+    const record = queryOne('SELECT * FROM records WHERE id = ?', [assetId]);
+    if (record) {
+      if (record.user_id !== user.id && record.scope !== 'group') throw new Error('无权打开该文件');
+      if (await openPathOrThrow(record.local_path)) return { opened: true, target: record.local_path };
+      if (record.url) {
+        await shell.openExternal(record.url);
+        return { opened: true, target: record.url };
+      }
+      if (record.token) {
+        const url = `https://open.feishu.cn/file/${record.token}`;
+        await shell.openExternal(url);
+        return { opened: true, target: url };
+      }
+    }
+  }
+
+  if (sourceTable === 'decrypted_items' || !sourceTable) {
+    const item = queryOne('SELECT * FROM decrypted_items WHERE id = ?', [assetId]);
+    if (item) {
+      if (item.user_id !== user.id && item.scope !== 'group') throw new Error('无权打开该文件');
+      if (await openPathOrThrow(item.source_path)) return { opened: true, target: item.source_path };
+      if (await openPathOrThrow(item.saved_path)) return { opened: true, target: item.saved_path };
+      throw new Error('本地文件路径不存在，请先从飞书取回或重新选择文件');
+    }
+  }
+
+  if (sourceTable === 'library_items' || !sourceTable) {
+    const item = queryOne('SELECT * FROM library_items WHERE id = ?', [assetId]);
+    if (item) {
+      if (item.user_id !== user.id && item.scope !== 'group') throw new Error('无权打开该条目');
+      if (item.url) {
+        await shell.openExternal(item.url);
+        return { opened: true, target: item.url };
+      }
+      throw new Error('该条目没有可打开的本地文件或链接');
+    }
+  }
+
+  throw new Error('未找到可打开的匹配文件');
 }
 
 async function downloadRecordToLocal(recordId, feishuPassphrase) {
@@ -1635,7 +1984,7 @@ function changeLocalPassword(input) {
   saveDatabase();
   activeUser = queryOne('SELECT * FROM users WHERE id = ?', [user.id]);
   activePassword = newPassword;
-  createLocalSession(user.id);
+  createLocalSession(user.id, newPassword);
   return publicState();
 }
 
@@ -1994,10 +2343,10 @@ async function queryKnowledgeCenter(question, options = {}) {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1240,
-    height: 820,
-    minWidth: 1040,
-    minHeight: 680,
+    width: 1500,
+    height: 960,
+    minWidth: 1280,
+    minHeight: 780,
     title: 'VaultMind',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -2102,7 +2451,7 @@ function registerHandlers() {
     saveDatabase();
     activeUser = user;
     activePassword = password;
-    createLocalSession(user.id);
+    createLocalSession(user.id, password);
     const acceptedInvites = afterAuthSuccess(user, password);
     return { ...publicState(), recoveryCode, acceptedInvites };
   });
@@ -2117,7 +2466,7 @@ function registerHandlers() {
     }
     activeUser = user;
     activePassword = password;
-    createLocalSession(user.id);
+    createLocalSession(user.id, password);
     const acceptedInvites = afterAuthSuccess(user, password);
     return { ...publicState(), acceptedInvites };
   });
@@ -2178,7 +2527,7 @@ function registerHandlers() {
     await ensureDatabase();
     requireUser();
     const previous = getSettings();
-    const next = sanitizeSettings(input || {}, previous.appSecret);
+    const next = sanitizeSettings(input || {}, previous.appSecret, previous.feishuPassphrase);
     setStateValue('settings', next);
     return publicState();
   });
@@ -2291,28 +2640,118 @@ function registerHandlers() {
     });
   });
 
-  ipcMain.handle('vault:uploadFiles', async (_event, payload) => {
+  ipcMain.handle('vault:chooseWechatAttachments', async () => {
+    await ensureDatabase();
+    requireUser();
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择微信附件目录（WeChat Files / FileStorage / MsgAttach）',
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    const rootDir = result.filePaths[0];
+    return {
+      canceled: false,
+      rootDir,
+      files: scanWechatAttachments(rootDir),
+    };
+  });
+
+  ipcMain.handle('vault:scanWechatAttachments', async () => {
+    await ensureDatabase();
+    requireUser();
+    const result = scanDefaultWechatAttachments();
+    return {
+      canceled: false,
+      ...result,
+    };
+  });
+
+  ipcMain.handle('vault:uploadFiles', async (event, payload) => {
     await ensureDatabase();
     const filePaths = Array.isArray(payload && payload.filePaths) ? payload.filePaths : [];
     if (filePaths.length === 0) throw new Error('请选择至少一个本地文件');
     const scopeMeta = resolveScopeFromInput(payload || {});
+    const uploadId = String(payload && payload.uploadId ? payload.uploadId : crypto.randomUUID());
+    const total = filePaths.length;
     const records = [];
-    for (const filePath of filePaths) {
-      records.push(await uploadVaultPayload(payloadFromFile(filePath), String(payload.passphrase || ''), scopeMeta));
+    const failures = [];
+    sendUploadProgress(event, {
+      uploadId,
+      phase: 'start',
+      total,
+      completed: 0,
+      processed: 0,
+      failed: 0,
+      current: '',
+    });
+    for (let index = 0; index < filePaths.length; index += 1) {
+      const filePath = filePaths[index];
+      const fileName = path.basename(filePath);
+      sendUploadProgress(event, {
+        uploadId,
+        phase: 'file-start',
+        total,
+        completed: records.length,
+        processed: index,
+        failed: failures.length,
+        current: fileName,
+        index,
+      });
+      try {
+        const record = await uploadVaultPayload(payloadFromFile(filePath), configuredFeishuPassphrase(payload.passphrase), scopeMeta);
+        records.push(record);
+        sendUploadProgress(event, {
+          uploadId,
+          phase: 'file-done',
+          total,
+          completed: records.length,
+          processed: index + 1,
+          failed: failures.length,
+          current: fileName,
+          index,
+        });
+      } catch (error) {
+        const message = error && error.message ? error.message : String(error);
+        failures.push({ path: filePath, fileName, message });
+        sendUploadProgress(event, {
+          uploadId,
+          phase: 'file-error',
+          total,
+          completed: records.length,
+          processed: index + 1,
+          failed: failures.length,
+          current: fileName,
+          index,
+          message,
+        });
+      }
     }
-    return { state: publicState(), records };
+    sendUploadProgress(event, {
+      uploadId,
+      phase: 'complete',
+      total,
+      completed: records.length,
+      processed: total,
+      failed: failures.length,
+      current: '',
+    });
+    return { state: publicState(), records, failures };
   });
 
   ipcMain.handle('vault:uploadText', async (_event, payload) => {
     await ensureDatabase();
     const scopeMeta = resolveScopeFromInput(payload || {});
-    const record = await uploadVaultPayload(payloadFromText(payload.name, payload.text), String(payload.passphrase || ''), scopeMeta);
+    const record = await uploadVaultPayload(payloadFromText(payload.name, payload.text), configuredFeishuPassphrase(payload.passphrase), scopeMeta);
     return { state: publicState(), records: [record] };
   });
 
   ipcMain.handle('vault:downloadRecord', async (_event, payload) => {
     await ensureDatabase();
-    return downloadRecordToLocal(String(payload.recordId || ''), String(payload.passphrase || ''));
+    return downloadRecordToLocal(String(payload.recordId || ''), configuredFeishuPassphrase(payload.passphrase));
+  });
+  ipcMain.handle('vault:openAsset', async (_event, payload) => {
+    await ensureDatabase();
+    return openAsset(payload || {});
   });
 
   ipcMain.handle('vault:unlockItem', async (_event, payload) => {

@@ -34,9 +34,13 @@ function createUnavailableApi() {
     logout: fail,
     chooseFiles: fail,
     chooseDirectory: fail,
+    scanWechatAttachments: fail,
+    chooseWechatAttachments: fail,
     uploadFiles: fail,
+    onUploadProgress: () => () => {},
     uploadText: fail,
     downloadRecord: fail,
+    openAsset: fail,
     unlockItem: fail,
     saveItemFile: fail,
     forgetRecord: fail,
@@ -75,6 +79,102 @@ function createUnavailableApi() {
 
 const api = window.vaultApi || createUnavailableApi();
 const FEISHU_APP_CREDENTIALS_URL = 'https://open.feishu.cn/app';
+const ICONS = {
+  activity: '<path d="M22 12h-4l-3 8-6-16-3 8H2"/>',
+  arrowRight: '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><rect x="2" y="2" width="13" height="13" rx="2"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
+  download: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
+  external: '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  git: '<path d="M15 9a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"/><path d="M15 15a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z"/><path d="M12 12V9"/><path d="M12 15v6"/><path d="M12 3v3"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12 21 2"/><path d="m16 7 3 3"/><path d="m14 9 3 3"/>',
+  library: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  mail: '<path d="M4 4h16v16H4z"/><path d="m22 6-10 7L2 6"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+  settings: '<path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 8a1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 3.3l.06.06A1.65 1.65 0 0 0 8.92 3a1.65 1.65 0 0 0 1-1.51V1a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 8c.14.47.51.84.98.98.2.06.39.09.62.09h.09a2 2 0 1 1 0 4H21a1.65 1.65 0 0 0-1.6 2Z"/>',
+  sync: '<path d="M21 12a9 9 0 0 0-15-6.7L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/><path d="M21 21v-5h-5"/>',
+  trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/>',
+  unlock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
+  upload: '<path d="M12 21V9"/><path d="m17 14-5-5-5 5"/><path d="M5 3h14"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+};
+
+function icon(name) {
+  const body = ICONS[name] || ICONS.activity;
+  return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+}
+
+function iconButton(name, label, attrs = '') {
+  return `<button ${attrs} title="${escapeHtml(label)}">${icon(name)}<span>${escapeHtml(label)}</span></button>`;
+}
+
+function evidenceFileMeta(item) {
+  const groups = [
+    { name: 'word', label: 'Word', exts: ['doc', 'docx', 'wps'] },
+    { name: 'pdf', label: 'PDF', exts: ['pdf'] },
+    { name: 'sheet', label: 'Excel', exts: ['xls', 'xlsx', 'csv'] },
+    { name: 'slide', label: 'PPT', exts: ['ppt', 'pptx'] },
+    { name: 'archive', label: '压缩包', exts: ['zip', 'rar', '7z', 'tar', 'gz'] },
+    { name: 'image', label: '图片', exts: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic'] },
+    { name: 'video', label: '视频', exts: ['mp4', 'mov', 'm4v', 'avi', 'mkv'] },
+    { name: 'audio', label: '音频', exts: ['mp3', 'm4a', 'wav', 'aac'] },
+    { name: 'code', label: '代码', exts: ['js', 'ts', 'json', 'html', 'css', 'xml', 'md'] },
+  ];
+  const knownExts = new Set(groups.flatMap((group) => group.exts));
+  const candidates = [];
+  for (const text of [item?.title || '', item?.content || '']) {
+    const matches = String(text).toLowerCase().matchAll(/\.([a-z0-9]{2,8})(?=$|[\s)，),。·、:：])/g);
+    for (const match of matches) candidates.push(match[1]);
+  }
+  const ext = [...candidates].reverse().find((candidate) => knownExts.has(candidate))
+    || candidates[candidates.length - 1]
+    || (item?.kind === 'text' ? 'txt' : 'file');
+  const group = groups.find((entry) => entry.exts.includes(ext));
+  return {
+    ext: ext.toUpperCase(),
+    type: group ? group.name : 'generic',
+    label: group ? group.label : '文件',
+  };
+}
+
+function evidenceTypeIcon(meta) {
+  const glyphs = {
+    word: 'W',
+    pdf: 'PDF',
+    sheet: 'X',
+    slide: 'P',
+    archive: 'ZIP',
+    image: 'IMG',
+    video: 'VID',
+    audio: 'AUD',
+    code: '</>',
+    generic: meta.ext,
+  };
+  const glyph = glyphs[meta.type] || meta.ext;
+  return `
+    <div class="evidenceType evidenceType-${escapeHtml(meta.type)}" title="${escapeHtml(meta.label)}">
+      <span class="fileTypeGlyph">${escapeHtml(glyph)}</span>
+    </div>
+  `;
+}
+
+function hydrateIcons(root = document) {
+  for (const button of root.querySelectorAll('button[data-icon]')) {
+    if (button.querySelector('.icon')) continue;
+    const label = button.textContent.trim();
+    button.innerHTML = `${icon(button.dataset.icon)}${label ? `<span>${escapeHtml(label)}</span>` : ''}`;
+  }
+}
+
 const LLM_PROVIDERS = {
   deepseek: {
     label: 'DeepSeek',
@@ -152,6 +252,7 @@ const elements = {
   resetSubmit: document.querySelector('#resetSubmit'),
   loginHint: document.querySelector('#loginHint'),
   localBadge: document.querySelector('#localBadge'),
+  logoutLocal: document.querySelector('#logoutLocal'),
   contextSelect: document.querySelector('#contextSelect'),
   navLibrary: document.querySelector('#navLibrary'),
   navGroups: document.querySelector('#navGroups'),
@@ -240,6 +341,7 @@ const elements = {
   appId: document.querySelector('#appId'),
   appSecret: document.querySelector('#appSecret'),
   folderToken: document.querySelector('#folderToken'),
+  feishuPassphrase: document.querySelector('#feishuPassphrase'),
   redirectUri: document.querySelector('#redirectUri'),
   scopes: document.querySelector('#scopes'),
   loginBadge: document.querySelector('#loginBadge'),
@@ -247,15 +349,23 @@ const elements = {
   noticeText: document.querySelector('#noticeText'),
   noticeClose: document.querySelector('#noticeClose'),
   selectedFiles: document.querySelector('#selectedFiles'),
-  passphrase: document.querySelector('#passphrase'),
+  libraryReauthWrap: document.querySelector('#libraryReauthWrap'),
+  libraryLocalPassword: document.querySelector('#libraryLocalPassword'),
   records: document.querySelector('#records'),
   items: document.querySelector('#items'),
   saveSettings: document.querySelector('#saveSettings'),
-  feishuTestPassphrase: document.querySelector('#feishuTestPassphrase'),
   testFeishuSync: document.querySelector('#testFeishuSync'),
   login: document.querySelector('#login'),
   logout: document.querySelector('#logout'),
   chooseFiles: document.querySelector('#chooseFiles'),
+  scanWechatFiles: document.querySelector('#scanWechatFiles'),
+  wechatFiles: document.querySelector('#wechatFiles'),
+  uploadProgress: document.querySelector('#uploadProgress'),
+  uploadProgressTitle: document.querySelector('#uploadProgressTitle'),
+  uploadProgressCount: document.querySelector('#uploadProgressCount'),
+  uploadProgressBar: document.querySelector('.uploadProgressBar'),
+  uploadProgressFill: document.querySelector('#uploadProgressFill'),
+  uploadProgressDetail: document.querySelector('#uploadProgressDetail'),
   showDatabase: document.querySelector('#showDatabase'),
   fileMode: document.querySelector('#fileMode'),
   textMode: document.querySelector('#textMode'),
@@ -272,13 +382,16 @@ const elements = {
   optSaveLocalWrap: document.querySelector('#optSaveLocalWrap'),
   optSyncFeishu: document.querySelector('#optSyncFeishu'),
   optSyncManifest: document.querySelector('#optSyncManifest'),
-  feishuPassphraseWrap: document.querySelector('#feishuPassphraseWrap'),
+  localReauthWrap: document.querySelector('#localReauthWrap'),
+  addLocalPassword: document.querySelector('#addLocalPassword'),
   addKnowledgeSources: document.querySelector('#addKnowledgeSources'),
+  addHistory: document.querySelector('#addHistory'),
   submitAdd: document.querySelector('#submitAdd'),
 };
 
 let state = null;
 let selectedFiles = [];
+let wechatFilesDraft = [];
 let authMode = 'login';
 let uploadMode = 'file';
 let activeView = 'library';
@@ -296,6 +409,8 @@ let chatHasMore = false;
 let chatLoading = false;
 let chatInitializing = null;
 let noticeTimer = null;
+let activeUploadId = '';
+let unsubscribeUploadProgress = null;
 
 const CHAT_DB_NAME = 'vaultmind-chat';
 const CHAT_DB_VERSION = 1;
@@ -503,6 +618,53 @@ function setBusy(isBusy) {
   }
 }
 
+function updateUploadProgress({ total = 0, completed = 0, processed = null, failed = 0, current = '', phase = 'idle' } = {}) {
+  if (!elements.uploadProgress) return;
+  const safeTotal = Math.max(0, Number(total) || 0);
+  const safeCompleted = Math.min(safeTotal, Math.max(0, Number(completed) || 0));
+  const safeProcessed = Math.min(safeTotal, Math.max(0, Number(processed ?? completed) || 0));
+  const safeFailed = Math.max(0, Number(failed) || 0);
+  const percent = safeTotal ? Math.round((safeProcessed / safeTotal) * 100) : 0;
+  elements.uploadProgress.classList.toggle('hidden', phase === 'idle');
+  elements.uploadProgressTitle.textContent = phase === 'complete'
+    ? (safeFailed ? '同步部分完成' : '同步完成')
+    : '正在同步到飞书';
+  elements.uploadProgressCount.textContent = `${safeCompleted}/${safeTotal}${safeFailed ? ` · 失败 ${safeFailed}` : ''}`;
+  elements.uploadProgressFill.style.width = `${percent}%`;
+  elements.uploadProgressBar?.setAttribute('aria-valuenow', String(percent));
+  if (phase === 'complete') {
+    elements.uploadProgressDetail.textContent = safeFailed
+      ? `已同步 ${safeCompleted} 个文件，${safeFailed} 个失败，可直接重试失败项`
+      : `已同步完成 ${safeCompleted} 个文件`;
+  } else if (phase === 'file-error') {
+    elements.uploadProgressDetail.textContent = current ? `已跳过失败文件：${current}` : '已跳过失败文件';
+  } else if (current) {
+    elements.uploadProgressDetail.textContent = `当前文件：${current}`;
+  } else {
+    elements.uploadProgressDetail.textContent = '准备上传';
+  }
+}
+
+function resetUploadProgress() {
+  activeUploadId = '';
+  updateUploadProgress({ phase: 'idle' });
+}
+
+function createUploadId() {
+  if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+    return window.crypto.randomUUID();
+  }
+  return `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function ensureUploadProgressListener() {
+  if (unsubscribeUploadProgress || typeof api.onUploadProgress !== 'function') return;
+  unsubscribeUploadProgress = api.onUploadProgress((progress) => {
+    if (!progress || progress.uploadId !== activeUploadId) return;
+    updateUploadProgress(progress);
+  });
+}
+
 async function run(action, successMessage, loginArea = false) {
   setBusy(true);
   clearNotice();
@@ -593,6 +755,7 @@ function renderUploadMode() {
         elements.optSaveLocal.disabled = true;
       } else {
         elements.optSaveLocal.disabled = false;
+        if (elements.optSyncFeishu) elements.optSyncFeishu.checked = true;
         if (!elements.optSaveLocal.checked && !elements.optSyncFeishu?.checked) {
           elements.optSaveLocal.checked = true;
         }
@@ -603,8 +766,8 @@ function renderUploadMode() {
 }
 
 function renderAddSyncOptions() {
-  if (elements.feishuPassphraseWrap) {
-    elements.feishuPassphraseWrap.classList.toggle('hidden', !elements.optSyncFeishu?.checked);
+  if (elements.localReauthWrap) {
+    elements.localReauthWrap.classList.toggle('hidden', !elements.optSaveLocal?.checked);
   }
   if (elements.optSyncManifest) {
     elements.optSyncManifest.disabled = !elements.optSyncFeishu?.checked;
@@ -630,6 +793,37 @@ function renderAddSyncOptions() {
   elements.addKnowledgeSources.innerHTML = lines.length
     ? `<p>${lines.map((l) => escapeHtml(l)).join('<br />')}</p><p>以上来源在「知识库对话」中检索，无需单独上传；连接请在「配置」中管理。</p>`
     : '<p>连接飞书 Wiki / 远程知识库 / Obsidian 后，可在「知识库对话」统一检索。</p>';
+}
+
+function syncSelectedFilesFromWechatDraft() {
+  selectedFiles = wechatFilesDraft.filter((file) => file.selected).map((file) => file.path);
+}
+
+function renderWechatFiles() {
+  if (!elements.wechatFiles) return;
+  elements.wechatFiles.classList.toggle('hidden', !wechatFilesDraft.length);
+  if (!wechatFilesDraft.length) {
+    elements.wechatFiles.innerHTML = '';
+    return;
+  }
+  const selectedCount = wechatFilesDraft.filter((file) => file.selected).length;
+  elements.wechatFiles.innerHTML = `
+    <div class="wechatFileHeader">
+      <strong>微信附件</strong>
+      <span>${selectedCount}/${wechatFilesDraft.length} 个已选</span>
+    </div>
+    <div class="wechatFileItems">
+      ${wechatFilesDraft.map((file, index) => `
+        <label class="wechatFileItem">
+          <input type="checkbox" data-wechat-file-index="${index}" ${file.selected ? 'checked' : ''} />
+          <span>
+            <strong>${escapeHtml(file.name)}</strong>
+            <small>${escapeHtml(file.relativePath || file.path)} · ${formatBytes(file.size)}</small>
+          </span>
+        </label>
+      `).join('')}
+    </div>
+  `;
 }
 
 function renderActiveView() {
@@ -697,26 +891,31 @@ function renderManifestStatus() {
 
 function renderGroups() {
   const groups = state?.groups || [];
+  const currentGroupId = state?.context?.scope === 'group' ? state.context.groupId : '';
   elements.groupsList.innerHTML = groups.length
     ? groups.map((g) => `
-      <div class="sourceItem">
+      <div class="sourceItem groupCard${g.id === currentGroupId ? ' activeGroup' : ''}">
         <div>
-          <strong>${escapeHtml(g.name)}</strong>
-          <span>${escapeHtml(g.role)} · ${escapeHtml(g.slug || '')}</span>
+          <strong>${escapeHtml(g.name)}${g.id === currentGroupId ? '<span class="scopeBadge">当前</span>' : ''}</strong>
+          <span>${escapeHtml(g.role)} · ${escapeHtml(g.slug || '未设置标识')}</span>
         </div>
         <div class="actions">
-          <button data-group-switch="${g.id}">切换</button>
-          <button data-group-members="${g.id}">成员</button>
-          ${['owner', 'admin'].includes(g.role) ? `<button data-group-rotate="${g.id}">轮换密钥</button>` : ''}
-          <button data-group-leave="${g.id}">离开</button>
+          ${iconButton('arrowRight', '切换', `data-group-switch="${g.id}"`)}
+          ${iconButton('users', '成员', `data-group-members="${g.id}"`)}
+          ${['owner', 'admin'].includes(g.role) ? iconButton('key', '轮换密钥', `data-group-rotate="${g.id}"`) : ''}
+          ${iconButton('logout', '离开', `data-group-leave="${g.id}"`)}
         </div>
       </div>
     `).join('')
     : '<div class="muted">还没有用户组，请先创建。</div>';
+  if (elements.groupMembers && !elements.groupMembers.innerHTML.trim()) {
+    elements.groupMembers.innerHTML = '<div class="empty compactEmpty">选择一个用户组查看成员。</div>';
+  }
 }
 
 function render() {
   if (!state) return;
+  hydrateIcons();
   const loggedIn = Boolean(state.auth && state.auth.isLoggedIn);
   elements.loginView.classList.toggle('hidden', loggedIn);
   elements.mainView.classList.toggle('hidden', !loggedIn);
@@ -748,6 +947,7 @@ function render() {
   obsidianSourcesDraft = state.knowledgeCenter?.obsidianSources ? [...state.knowledgeCenter.obsidianSources] : [];
   elements.appId.value = state.settings.appId || '';
   elements.appSecret.value = state.settings.appSecret || '';
+  if (elements.feishuPassphrase) elements.feishuPassphrase.value = state.settings.feishuPassphrase || '';
   elements.folderToken.value = state.settings.folderToken || 'root';
   elements.redirectUri.value = state.redirectUri || '';
   elements.scopes.textContent = state.requiredScopes || '';
@@ -761,9 +961,11 @@ function render() {
   elements.selectedFiles.innerHTML = selectedFiles.length
     ? selectedFiles.map((file) => `<div>${escapeHtml(fileNameFromPath(file))}</div>`).join('')
     : '尚未选择文件';
+  renderWechatFiles();
 
   renderRecords();
   renderItems();
+  renderAddHistory();
   renderGroups();
   renderPendingInvites();
   renderManifestStatus();
@@ -771,6 +973,7 @@ function render() {
   renderConfigCenter();
   renderProjects();
   renderKnowledgeChat();
+  hydrateIcons();
 }
 
 function renderProjects() {
@@ -796,13 +999,13 @@ function renderProjects() {
           ${repo.migrationDir ? `<p>迁移目录：${escapeHtml(repo.migrationDir)}</p>` : ''}
         </div>
         <div class="actions">
-          <button data-project-action="clone" data-id="${repo.id}">克隆/检出</button>
-          <button data-project-action="status" data-id="${repo.id}">状态</button>
-          <button data-project-action="log" data-id="${repo.id}">版本</button>
-          <button data-project-action="update" data-id="${repo.id}">更新</button>
-          <button data-project-action="commit" data-id="${repo.id}">提交</button>
-          <button data-project-action="push" data-id="${repo.id}">推送</button>
-          <button data-project-action="delete" data-id="${repo.id}">删除</button>
+          ${iconButton('download', '克隆/检出', `data-project-action="clone" data-id="${repo.id}"`)}
+          ${iconButton('activity', '状态', `data-project-action="status" data-id="${repo.id}"`)}
+          ${iconButton('git', '版本', `data-project-action="log" data-id="${repo.id}"`)}
+          ${iconButton('sync', '更新', `data-project-action="update" data-id="${repo.id}"`)}
+          ${iconButton('save', '提交', `data-project-action="commit" data-id="${repo.id}"`)}
+          ${iconButton('upload', '推送', `data-project-action="push" data-id="${repo.id}"`)}
+          ${iconButton('trash', '删除', `data-project-action="delete" data-id="${repo.id}"`)}
         </div>
       </article>
     `).join('')
@@ -860,7 +1063,7 @@ function renderConfigCenter() {
         <strong>${escapeHtml(card.title)}</strong>
         <p>${escapeHtml(card.meta || '')}</p>
       </div>
-      <button class="configStatus" data-config-type="${escapeHtml(card.type)}">${escapeHtml(card.status)}</button>
+      <button class="configStatus" data-config-type="${escapeHtml(card.type)}">${icon('settings')}<span>${escapeHtml(card.status)}</span></button>
     </div>
   `).join('');
   elements.configForm.classList.toggle('hidden', !configFormVisible);
@@ -919,11 +1122,12 @@ function renderDynamicConfigFields() {
     feishu: `
       <label>App ID<input data-field="appId" value="${escapeHtml(state?.settings?.appId || '')}" placeholder="cli_xxx" /></label>
       <label>App Secret<input data-field="appSecret" type="password" value="${escapeHtml(state?.settings?.appSecret || '')}" placeholder="只保存在本机 SQLite" /></label>
+      <label>飞书加密口令<input data-field="feishuPassphrase" type="password" value="${escapeHtml(state?.settings?.feishuPassphrase || '')}" placeholder="统一用于上传、取回和目录清单同步，至少 8 位" /></label>
       <label>飞书文件夹 Token<input data-field="folderToken" value="${escapeHtml(state?.settings?.folderToken || 'root')}" placeholder="root 或 fldcn..." /></label>
       <label>OAuth 回调地址（须与飞书后台完全一致）
         <div class="inlineControl">
           <input id="feishuRedirectUriField" readonly value="${escapeHtml(state?.redirectUri || 'http://127.0.0.1:37891/feishu/oauth/callback')}" />
-          <button type="button" class="small" data-action="copy-redirect-uri">复制</button>
+          <button type="button" class="small" data-action="copy-redirect-uri" data-icon="copy">复制</button>
         </div>
       </label>
       <ol class="feishuSteps muted">
@@ -932,13 +1136,12 @@ function renderDynamicConfigFields() {
         <li>回到本应用，先点「保存配置」，再点顶栏「未登录飞书」登录</li>
       </ol>
       <div class="buttonRow">
-        <button type="button" class="small" data-action="open-feishu-safe">① 打开安全设置</button>
-        <button type="button" class="small" data-action="copy-redirect-uri">复制回调地址</button>
+        <button type="button" class="small" data-action="open-feishu-safe" data-icon="external">打开安全设置</button>
+        <button type="button" class="small" data-action="copy-redirect-uri" data-icon="copy">复制回调地址</button>
       </div>
       <p class="muted">报错 <strong>20029</strong>：说明重定向 URL 未登记或与 App ID 不匹配。飞书错误页上的「前往」只会打开后台首页，<strong>不会自动帮你填 URL</strong>，请按上面 3 步手动添加。</p>
       <p class="muted">云盘同步与知识库 Wiki 检索共用飞书登录；Wiki 需在开放平台开通 <code>wiki:wiki:readonly</code> 后重新授权。</p>
-      <label>飞书加密口令（测试用）<input data-field="passphrase" type="password" placeholder="与「添加」页同步口令一致，至少 8 位" /></label>
-      <button type="button" class="full" data-action="test-feishu-sync">测试同步文本到飞书</button>
+      <button type="button" class="full" data-action="test-feishu-sync" data-icon="activity">测试同步文本到飞书</button>
       <p class="muted">将加密上传一小段测试文本并回读校验；通过后会尝试删除云端测试文件，不会写入本地同步记录。</p>
     `,
     feishuWiki: `
@@ -954,12 +1157,12 @@ function renderDynamicConfigFields() {
         模型
         <div class="inlineControl">
           <select data-field="model" id="llmModelSelect">${llmModelOptions(providerKey, selectedModel)}</select>
-          <button type="button" class="small" data-action="refresh-models">刷新</button>
+          <button type="button" class="small" data-action="refresh-models" data-icon="sync">刷新</button>
         </div>
       </label>
       <label>手动模型名<input data-field="modelOverride" value="" placeholder="列表没有时，在这里输入模型名" /></label>
       <label>Temperature<input data-field="temperature" value="${escapeHtml(ai.temperature ?? 0.2)}" /></label>
-      <button type="button" class="full" data-action="test-model">测试模型连接</button>
+      <button type="button" class="full" data-action="test-model" data-icon="activity">测试模型连接</button>
     `,
     knowledge: `
       <label>名称<input data-field="name" placeholder="公司知识库" /></label>
@@ -1006,7 +1209,7 @@ function renderSources() {
     ? kbSourcesDraft.map((source) => `
       <div class="sourceItem">
         <div><strong>${escapeHtml(source.name)}</strong><span>${escapeHtml(source.endpoint)}</span></div>
-        <button data-source-kind="kb" data-source-id="${source.id}">删除</button>
+        ${iconButton('trash', '删除', `data-source-kind="kb" data-source-id="${source.id}"`)}
       </div>
     `).join('')
     : '<div class="muted">尚未添加知识库</div>';
@@ -1014,7 +1217,7 @@ function renderSources() {
     ? vectorSourcesDraft.map((source) => `
       <div class="sourceItem">
         <div><strong>${escapeHtml(source.name)}</strong><span>${escapeHtml(source.collection || source.endpoint)}</span></div>
-        <button data-source-kind="vector" data-source-id="${source.id}">删除</button>
+        ${iconButton('trash', '删除', `data-source-kind="vector" data-source-id="${source.id}"`)}
       </div>
     `).join('')
     : '<div class="muted">尚未添加向量库</div>';
@@ -1022,7 +1225,7 @@ function renderSources() {
     ? obsidianSourcesDraft.map((source) => `
       <div class="sourceItem">
         <div><strong>${escapeHtml(source.name)}</strong><span>${escapeHtml(source.baseUrl)}</span></div>
-        <button data-source-kind="obsidian" data-source-id="${source.id}">删除</button>
+        ${iconButton('trash', '删除', `data-source-kind="obsidian" data-source-id="${source.id}"`)}
       </div>
     `).join('')
     : '<div class="muted">尚未添加 Obsidian</div>';
@@ -1048,12 +1251,22 @@ function knowledgeMessageHtml(log) {
           <pre>${escapeHtml(log.answer)}</pre>
           ${evidence.length ? `
             <div class="evidenceList">
-              ${evidence.map((item) => `
+              ${evidence.map((item) => {
+                const canOpen = item.type === 'local' && item.assetId;
+                const fileMeta = evidenceFileMeta(item);
+                return `
                 <div class="evidenceItem">
-                  <span>${escapeHtml(item.source)} · ${escapeHtml(item.title)}</span>
+                  ${evidenceTypeIcon(fileMeta)}
+                  <div class="evidenceHeader">
+                    <div class="evidenceTitle">
+                      <span>${escapeHtml(item.source)} · ${escapeHtml(item.title)}</span>
+                      <small>${escapeHtml(fileMeta.label)} · ${escapeHtml(fileMeta.ext)}</small>
+                    </div>
+                    ${canOpen ? iconButton('external', '打开', `class="evidenceOpen" data-evidence-action="open" data-asset-id="${escapeHtml(item.assetId)}" data-source-table="${escapeHtml(item.sourceTable || '')}"`) : ''}
+                  </div>
                   <p>${escapeHtml(item.content || '').slice(0, 260)}</p>
                 </div>
-              `).join('')}
+              `; }).join('')}
             </div>
           ` : ''}
         </div>
@@ -1116,13 +1329,59 @@ function renderRecords() {
       <div class="muted">${record.kind === 'text' ? '文本' : '文件'}</div>
       <div class="muted">${formatBytes(record.size)}</div>
       <div class="actions">
-        <button data-record-action="download" data-id="${record.id}">取回入库</button>
-        <button data-record-action="open" data-id="${record.id}">飞书</button>
-        <button data-record-action="forget" data-id="${record.id}">移除</button>
+        ${iconButton('download', '取回入库', `data-record-action="download" data-id="${record.id}"`)}
+        ${iconButton('external', '飞书', `data-record-action="open" data-id="${record.id}"`)}
+        ${iconButton('trash', '移除', `data-record-action="forget" data-id="${record.id}"`)}
       </div>
     `;
     elements.records.appendChild(row);
   }
+}
+
+function recordHistoryHtml(record) {
+  const fileMeta = record.kind === 'text'
+    ? { ext: 'TXT', type: 'generic', label: '文本' }
+    : evidenceFileMeta({ title: record.fileName, content: record.localPath || '', kind: record.kind });
+  return `
+    <div class="historyItem">
+      ${evidenceTypeIcon(fileMeta)}
+      <div>
+        <strong>${escapeHtml(record.fileName)}</strong>
+        <span>${escapeHtml(fileMeta.label)} · ${escapeHtml(fileMeta.ext)} · ${formatBytes(record.size)}</span>
+        <span>${escapeHtml(record.token || '')}</span>
+      </div>
+    </div>
+  `;
+}
+
+function itemHistoryHtml(item) {
+  const typeLabelText = item.kind === 'file'
+    ? '文件'
+    : (item.kind === 'web' ? '网页' : (item.kind === 'video' ? '视频' : '文本'));
+  return `
+    <div class="historyItem">
+      <div class="historyIcon">${icon(item.kind === 'file' ? 'file' : 'library')}</div>
+      <div>
+        <strong>${escapeHtml(item.name)}</strong>
+        <span>${escapeHtml(typeLabelText)} · ${formatBytes(item.size)}</span>
+        <span>${item.scope === 'group' ? '用户组内容' : '个人内容'}${item.remoteOnly ? ' · 待下载' : ''}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderAddHistory() {
+  if (!elements.addHistory) return;
+  const recentItems = (state.items || []).slice(0, 8);
+  const recentRecords = (state.records || []).slice(0, 8);
+  elements.addHistory.innerHTML = `
+    <div class="historyColumn">
+      ${recentItems.length ? recentItems.map(itemHistoryHtml).join('') : '<div class="empty compactEmpty">还没有本地添加记录。</div>'}
+    </div>
+    <div class="historyColumn">
+      ${recentRecords.length ? recentRecords.map(recordHistoryHtml).join('') : '<div class="empty compactEmpty">还没有飞书同步记录。</div>'}
+    </div>
+  `;
 }
 
 function renderItems() {
@@ -1142,8 +1401,8 @@ function renderItems() {
             <div class="muted">文件 · ${formatBytes(item.size)}</div>
           </div>
           <div class="actions">
-            <button data-item-action="save" data-id="${item.id}">下载回本地</button>
-            <button data-item-action="forget" data-id="${item.id}">移除</button>
+            ${iconButton('download', '下载回本地', `data-item-action="save" data-id="${item.id}"`)}
+            ${iconButton('trash', '移除', `data-item-action="forget" data-id="${item.id}"`)}
           </div>
         </div>
         <div class="pathLine">原路径：${escapeHtml(item.sourcePath || '无')}</div>
@@ -1157,9 +1416,9 @@ function renderItems() {
             <div class="muted">${item.kind === 'video' ? '视频链接' : '网页链接'} · ${formatBytes(item.size)}</div>
           </div>
           <div class="actions">
-            <button data-item-action="open-url" data-url="${escapeHtml(item.url || '')}">打开</button>
-            <button data-item-action="unlock" data-id="${item.id}">解锁</button>
-            <button data-item-action="forget" data-id="${item.id}">移除</button>
+            ${iconButton('external', '打开', `data-item-action="open-url" data-url="${escapeHtml(item.url || '')}"`)}
+            ${iconButton('unlock', '解锁', `data-item-action="unlock" data-id="${item.id}"`)}
+            ${iconButton('trash', '移除', `data-item-action="forget" data-id="${item.id}"`)}
           </div>
         </div>
         <div class="pathLine">${escapeHtml(item.url || '链接已加密，解锁后查看')}</div>
@@ -1175,9 +1434,9 @@ function renderItems() {
             <div class="muted">文本 · ${formatBytes(item.size)}</div>
           </div>
           <div class="actions">
-            <button data-item-action="unlock" data-id="${item.id}">解锁查看</button>
-            ${item.scope === 'personal' && item.localOnly ? `<button data-item-action="copy-group" data-id="${item.id}">复制到组</button>` : ''}
-            <button data-item-action="forget" data-id="${item.id}">移除</button>
+            ${iconButton('unlock', '解锁查看', `data-item-action="unlock" data-id="${item.id}"`)}
+            ${item.scope === 'personal' && item.localOnly ? iconButton('copy', '复制到组', `data-item-action="copy-group" data-id="${item.id}"`) : ''}
+            ${iconButton('trash', '移除', `data-item-action="forget" data-id="${item.id}"`)}
           </div>
         </div>
         <pre id="itemText-${item.id}" class="maskedText">${escapeHtml(item.maskedText)}</pre>
@@ -1191,6 +1450,65 @@ async function refresh() {
   state = await api.getState();
   await initializeChatMessages();
   render();
+}
+
+async function reauthorizeLocalSession(source = 'add') {
+  const email = state?.auth?.user?.email;
+  const wrap = source === 'library' ? elements.libraryReauthWrap : elements.localReauthWrap;
+  const input = source === 'library' ? elements.libraryLocalPassword : elements.addLocalPassword;
+  const password = input?.value || '';
+  if (!email) throw new Error('请先登录本地账号');
+  if (!password) {
+    if (wrap) wrap.classList.remove('hidden');
+    input?.focus();
+    throw new Error(source === 'library'
+      ? '本地会话需要重新授权，请在内容库搜索框下方填写本地密码后再试。'
+      : '本地会话已过期，请在同步选项里填写本地密码后再次保存。');
+  }
+  const next = await api.loginLocal({ email, password });
+  state = next.state || next;
+  input.value = '';
+  if (wrap) wrap.classList.add('hidden');
+  await initializeChatMessages();
+  return state;
+}
+
+async function saveAddContentOnce({ saveLocal, syncFeishu, syncManifest, scope }) {
+  const result = { upload: null };
+  if (saveLocal) {
+    state = await api.createLibraryItem({
+      kind: uploadMode,
+      title: elements.manualTitle.value,
+      url: elements.manualUrl.value,
+      content: elements.manualText.value,
+      ...scope,
+    });
+  }
+  if (syncFeishu) {
+    if (uploadMode === 'file') {
+      activeUploadId = createUploadId();
+      ensureUploadProgressListener();
+      updateUploadProgress({
+        uploadId: activeUploadId,
+        phase: 'start',
+        total: selectedFiles.length,
+        completed: 0,
+      });
+      const uploaded = await api.uploadFiles({ filePaths: selectedFiles, uploadId: activeUploadId, ...scope });
+      result.upload = uploaded;
+      state = uploaded.state;
+    } else {
+      const { name, text } = addFormFeishuText();
+      const uploaded = await api.uploadText({ name, text, ...scope });
+      result.upload = uploaded;
+      state = uploaded.state;
+    }
+  }
+  if (syncManifest) {
+    const synced = await api.syncManifest(scope);
+    state = synced.state || synced;
+  }
+  return result;
 }
 
 elements.showLogin.addEventListener('click', () => {
@@ -1248,6 +1566,15 @@ elements.queryResult.addEventListener('scroll', () => {
   if (elements.queryResult.scrollTop <= 12) {
     loadOlderChatMessages().catch((error) => showNotice(`加载历史对话失败：${error.message || error}`, true));
   }
+});
+elements.queryResult.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-evidence-action="open"]');
+  if (!button) return;
+  const result = await run(() => api.openAsset({
+    assetId: button.dataset.assetId,
+    sourceTable: button.dataset.sourceTable,
+  }), '已打开匹配文件');
+  if (result) button.blur();
 });
 
 for (const button of [elements.navLibrary, elements.navGroups, elements.navProjects, elements.navAdd, elements.navConfig]) {
@@ -1318,8 +1645,8 @@ elements.groupsList.addEventListener('click', async (event) => {
           <div><strong>${escapeHtml(m.username)}</strong><span>${escapeHtml(m.email)} · ${escapeHtml(m.role)}</span></div>
           ${isAdmin && m.role !== 'owner' ? `
             <div class="actions">
-              <button data-member-remove="${membersBtn.dataset.groupMembers}" data-user-id="${m.id}">移除</button>
-              <button data-member-role="${membersBtn.dataset.groupMembers}" data-user-id="${m.id}" data-role="admin">设管理员</button>
+              ${iconButton('trash', '移除', `data-member-remove="${membersBtn.dataset.groupMembers}" data-user-id="${m.id}"`)}
+              ${iconButton('key', '设管理员', `data-member-role="${membersBtn.dataset.groupMembers}" data-user-id="${m.id}" data-role="admin"`)}
             </div>
           ` : ''}
         </div>
@@ -1393,24 +1720,28 @@ elements.globalSearch.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') elements.runGlobalSearch.click();
 });
 
+function hasFeishuPassphrase() {
+  return Boolean(state?.settings?.hasFeishuPassphrase);
+}
+
+function requireConfiguredFeishuPassphrase() {
+  if (hasFeishuPassphrase()) return true;
+  showNotice('请先在「配置 → 飞书同步」设置飞书加密口令', true);
+  return false;
+}
+
 function manifestPayload() {
-  return { ...currentScopePayload(), passphrase: elements.passphrase.value };
+  return currentScopePayload();
 }
 
 elements.syncManifest.addEventListener('click', async () => {
-  if (elements.passphrase.value.length < 8) {
-    showNotice('请填写飞书加密口令以同步目录清单', true);
-    return;
-  }
+  if (!requireConfiguredFeishuPassphrase()) return;
   const next = await run(() => api.syncManifest(manifestPayload()), '目录清单已上传到飞书');
   if (next?.state) { state = next.state; render(); }
 });
 
 elements.pullManifest.addEventListener('click', async () => {
-  if (elements.passphrase.value.length < 8) {
-    showNotice('请填写飞书加密口令', true);
-    return;
-  }
+  if (!requireConfiguredFeishuPassphrase()) return;
   const next = await run(() => api.pullManifest(manifestPayload()), '已从飞书拉取并合并清单');
   if (next?.state) {
     state = next.state;
@@ -1420,10 +1751,7 @@ elements.pullManifest.addEventListener('click', async () => {
 });
 
 elements.fullSync.addEventListener('click', async () => {
-  if (elements.passphrase.value.length < 8) {
-    showNotice('请填写飞书加密口令', true);
-    return;
-  }
+  if (!requireConfiguredFeishuPassphrase()) return;
   const next = await run(() => api.fullSync(manifestPayload()), '完整同步已完成');
   if (next?.state) {
     state = next.state;
@@ -1621,15 +1949,15 @@ elements.dynamicConfigFields.addEventListener('click', async (event) => {
   const button = event.target.closest('button[data-action="test-feishu-sync"]');
   if (!button) return;
   const data = readConfigForm();
-  if (!data.passphrase || data.passphrase.length < 8) {
-    showNotice('请填写至少 8 位的飞书加密口令', true);
+  if (!data.feishuPassphrase || data.feishuPassphrase.length < 8) {
+    showNotice('请先填写至少 8 位的飞书加密口令', true);
     return;
   }
   if (!state.isFeishuLoggedIn) {
     showNotice('请先保存配置并登录飞书', true);
     return;
   }
-  await runFeishuSyncTest(data.passphrase, {
+  await runFeishuSyncTest(data.feishuPassphrase, {
     appId: data.appId,
     appSecret: data.appSecret,
     folderToken: data.folderToken,
@@ -1752,55 +2080,53 @@ elements.submitAdd?.addEventListener('click', async () => {
       showNotice('请先在配置中心登录飞书', true);
       return;
     }
-    if (elements.passphrase.value.length < 8) {
-      showNotice('飞书加密口令至少需要 8 个字符', true);
-      return;
-    }
+    if (!requireConfiguredFeishuPassphrase()) return;
   }
 
   setBusy(true);
   clearNotice();
   const scope = currentScopePayload();
-  const passphrase = elements.passphrase.value;
   try {
-    if (saveLocal) {
-      state = await api.createLibraryItem({
-        kind: uploadMode,
-        title: elements.manualTitle.value,
-        url: elements.manualUrl.value,
-        content: elements.manualText.value,
-        ...scope,
-      });
+    let saveResult = null;
+    try {
+      saveResult = await saveAddContentOnce({ saveLocal, syncFeishu, syncManifest, scope });
+    } catch (error) {
+      const msg = error && error.message ? error.message : String(error);
+      if (!msg.includes('重新登录本地')) throw error;
+      await reauthorizeLocalSession();
+      saveResult = await saveAddContentOnce({ saveLocal, syncFeishu, syncManifest, scope });
     }
-    if (syncFeishu) {
-      if (uploadMode === 'file') {
-        const uploaded = await api.uploadFiles({ filePaths: selectedFiles, passphrase, ...scope });
-        state = uploaded.state;
-      } else {
-        const { name, text } = addFormFeishuText();
-        const uploaded = await api.uploadText({ name, text, passphrase, ...scope });
-        state = uploaded.state;
-      }
-    }
-    if (syncManifest) {
-      const synced = await api.syncManifest({ ...scope, passphrase });
-      state = synced.state || synced;
+    const failures = Array.isArray(saveResult?.upload?.failures) ? saveResult.upload.failures : [];
+    const uploadedCount = Array.isArray(saveResult?.upload?.records) ? saveResult.upload.records.length : 0;
+    if (failures.length) {
+      selectedFiles = failures.map((failure) => failure.path).filter(Boolean);
+      wechatFilesDraft = wechatFilesDraft
+        .filter((file) => selectedFiles.includes(file.path))
+        .map((file) => ({ ...file, selected: true }));
+      showNotice(`已同步 ${uploadedCount} 个文件，${failures.length} 个失败；失败项已保留，可直接重试。`, true, 9000);
+      render();
+      return;
     }
     showNotice('保存完成');
     elements.manualTitle.value = '';
     elements.manualUrl.value = '';
     elements.manualText.value = '';
     selectedFiles = [];
-    elements.passphrase.value = '';
+    wechatFilesDraft = [];
     activeView = 'library';
     render();
+    resetUploadProgress();
   } catch (error) {
     const msg = error && error.message ? error.message : String(error);
-    if (msg.includes('重新登录本地')) {
-      showNotice('本地会话已过期，请退出后重新登录本地账号，再保存。', true);
-    } else {
-      showNotice(msg, true);
+    if (msg.includes('飞书登录')) {
+      try {
+        state = await api.getState();
+        render();
+      } catch {
+        // keep original upload error visible
+      }
     }
+    showNotice(msg, true);
   } finally {
     setBusy(false);
   }
@@ -1810,6 +2136,7 @@ elements.saveSettings.addEventListener('click', async () => {
   const next = await run(() => api.saveSettings({
     appId: elements.appId.value,
     appSecret: elements.appSecret.value,
+    feishuPassphrase: elements.feishuPassphrase?.value || '',
     folderToken: elements.folderToken.value,
     redirectPort: 37891,
   }), '配置已保存');
@@ -1819,9 +2146,10 @@ elements.saveSettings.addEventListener('click', async () => {
   }
 });
 
-async function runFeishuSyncTest(passphrase, settingsOverride = {}) {
-  if (!passphrase || passphrase.length < 8) {
-    showNotice('请填写至少 8 位的飞书加密口令', true);
+async function runFeishuSyncTest(passphrase = '', settingsOverride = {}) {
+  const passphraseForTest = passphrase || (hasFeishuPassphrase() ? '********' : '');
+  if (!passphraseForTest || passphraseForTest.length < 8) {
+    showNotice('请先在「配置 → 飞书同步」设置飞书加密口令', true);
     return;
   }
   if (!state.isFeishuLoggedIn) {
@@ -1832,7 +2160,7 @@ async function runFeishuSyncTest(passphrase, settingsOverride = {}) {
     appId: settingsOverride.appId ?? elements.appId?.value,
     appSecret: settingsOverride.appSecret ?? elements.appSecret?.value,
     folderToken: settingsOverride.folderToken ?? elements.folderToken?.value,
-    passphrase,
+    passphrase: passphraseForTest,
     context: state.context,
   }));
   if (result && result.ok) {
@@ -1841,7 +2169,7 @@ async function runFeishuSyncTest(passphrase, settingsOverride = {}) {
 }
 
 elements.testFeishuSync?.addEventListener('click', async () => {
-  await runFeishuSyncTest(elements.feishuTestPassphrase?.value || elements.passphrase?.value || '');
+  await runFeishuSyncTest(elements.feishuPassphrase?.value || '');
 });
 
 elements.saveRecovery.addEventListener('click', async () => {
@@ -1971,7 +2299,7 @@ elements.obsidianSources.addEventListener('click', async (event) => {
   }
 });
 
-elements.runKnowledgeQuery.addEventListener('click', async () => {
+async function submitKnowledgeQuestion() {
   const question = elements.questionInput.value.trim();
   if (!question) {
     showNotice('请输入检索问题', true);
@@ -2017,6 +2345,15 @@ elements.runKnowledgeQuery.addEventListener('click', async () => {
     elements.questionInput.value = question;
     renderKnowledgeChat();
   }
+}
+
+elements.runKnowledgeQuery.addEventListener('click', submitKnowledgeQuestion);
+
+elements.questionInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  if (event.altKey) return;
+  event.preventDefault();
+  elements.runKnowledgeQuery.click();
 });
 
 elements.login.addEventListener('click', async () => {
@@ -2067,6 +2404,17 @@ elements.loginBadge.addEventListener('click', async () => {
   }
 });
 
+elements.logoutLocal.addEventListener('click', async () => {
+  const next = await run(() => api.logoutLocal(), '已退出本地账号');
+  if (next) {
+    state = next;
+    chatUserId = '';
+    chatMessages = [];
+    activeView = 'library';
+    render();
+  }
+});
+
 elements.logout.addEventListener('click', async () => {
   const next = await run(() => api.logout(), '已退出飞书登录');
   if (next) {
@@ -2079,8 +2427,33 @@ elements.chooseFiles.addEventListener('click', async () => {
   const result = await run(() => api.chooseFiles());
   if (result && !result.canceled) {
     selectedFiles = result.filePaths || [];
+    wechatFilesDraft = [];
     render();
   }
+});
+
+elements.scanWechatFiles?.addEventListener('click', async () => {
+  const result = await run(() => api.scanWechatAttachments());
+  if (result && !result.canceled) {
+    wechatFilesDraft = (result.files || []).map((file) => ({ ...file, selected: true }));
+    syncSelectedFilesFromWechatDraft();
+    if (!wechatFilesDraft.length) {
+      showNotice('未自动扫描到微信附件。请确认微信已下载附件，或微信文件目录不在默认位置。', true);
+    } else {
+      showNotice(`已从 ${result.roots?.length || 0} 个微信目录扫描到 ${wechatFilesDraft.length} 个附件，可取消勾选后保存同步。`);
+    }
+    render();
+  }
+});
+
+elements.wechatFiles?.addEventListener('change', (event) => {
+  const input = event.target.closest('input[data-wechat-file-index]');
+  if (!input) return;
+  const index = Number(input.dataset.wechatFileIndex);
+  if (!Number.isInteger(index) || !wechatFilesDraft[index]) return;
+  wechatFilesDraft[index].selected = input.checked;
+  syncSelectedFilesFromWechatDraft();
+  render();
 });
 
 elements.records.addEventListener('click', async (event) => {
@@ -2103,13 +2476,9 @@ elements.records.addEventListener('click', async (event) => {
     return;
   }
 
-  if (elements.passphrase.value.length < 8) {
-    showNotice('请输入上传时使用的飞书加密口令，再取回入库', true);
-    return;
-  }
+  if (!requireConfiguredFeishuPassphrase()) return;
   const next = await run(() => api.downloadRecord({
     recordId: record.id,
-    passphrase: elements.passphrase.value,
   }), '已从飞书取回、解密并存入本地 SQLite');
   if (next) {
     state = next;
@@ -2146,22 +2515,34 @@ elements.items.addEventListener('click', async (event) => {
   }
 
   if (button.dataset.itemAction === 'unlock') {
-    const result = await run(() => api.unlockItem({ itemId }), '文本已解锁');
+    let result = await run(() => api.unlockItem({ itemId }), '文本已解锁');
+    if (!result && elements.libraryLocalPassword?.value) {
+      const authorized = await run(() => reauthorizeLocalSession('library'), '本地会话已恢复');
+      if (authorized) result = await run(() => api.unlockItem({ itemId }), '文本已解锁');
+    }
     if (result) {
       const target = document.querySelector(`#itemText-${CSS.escape(itemId)}`);
       if (target) {
         target.className = 'plainText';
         target.textContent = result.text;
       }
+    } else {
+      elements.libraryReauthWrap?.classList.remove('hidden');
     }
     return;
   }
 
   if (button.dataset.itemAction === 'save') {
-    const next = await run(() => api.saveItemFile({ itemId }), '文件已保存到本地');
+    let next = await run(() => api.saveItemFile({ itemId }), '文件已保存到本地');
+    if (!next && elements.libraryLocalPassword?.value) {
+      const authorized = await run(() => reauthorizeLocalSession('library'), '本地会话已恢复');
+      if (authorized) next = await run(() => api.saveItemFile({ itemId }), '文件已保存到本地');
+    }
     if (next) {
       state = next;
       render();
+    } else {
+      elements.libraryReauthWrap?.classList.remove('hidden');
     }
   }
 });

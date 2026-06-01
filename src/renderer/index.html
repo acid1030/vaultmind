@@ -11,15 +11,15 @@
       <section id="loginView" class="loginView">
         <div class="loginCard">
           <div class="brandBlock">
-            <div class="brandMark">FS</div>
+            <div class="brandMark" aria-hidden="true">VM</div>
             <div>
               <h1>VaultMind</h1>
               <p>Encrypted workspace for local secrets</p>
             </div>
           </div>
           <div class="segmented">
-            <button id="showLogin" class="active">登录</button>
-            <button id="showRegister">注册</button>
+            <button id="showLogin" class="active" data-icon="login">登录</button>
+            <button id="showRegister" data-icon="plus">注册</button>
           </div>
           <label>
             手机或邮箱
@@ -31,19 +31,19 @@
           </label>
           <div id="verifyWrap" class="verifyLine">
             <input id="recoveryEmail" placeholder="验证码" />
-            <button id="sendVerifyCode">发送验证码</button>
+            <button id="sendVerifyCode" data-icon="mail">发送验证码</button>
           </div>
           <label>
             本地密码
             <input id="localPassword" type="password" placeholder="至少 8 位" />
           </label>
-          <button id="localSubmit" class="primary full">登录</button>
+          <button id="localSubmit" class="primary full" data-icon="login">登录</button>
           <details class="resetBox">
             <summary>忘记密码 / 使用恢复码重置</summary>
             <input id="resetEmail" placeholder="注册邮箱或恢复邮箱" />
             <input id="resetCode" placeholder="恢复码" />
             <input id="resetPassword" type="password" placeholder="新密码，至少 8 位" />
-            <button id="resetSubmit" class="full">重置本地密码</button>
+            <button id="resetSubmit" class="full" data-icon="key">重置本地密码</button>
           </details>
           <div id="loginHint" class="hint"></div>
         </div>
@@ -52,7 +52,7 @@
       <section id="mainView" class="hidden">
         <header class="topbar">
           <div class="brandBlock">
-            <div class="brandMark compact">FS</div>
+            <div class="brandMark compact" aria-hidden="true">VM</div>
             <div>
               <h1>VaultMind</h1>
               <p>AI retrieval workspace with secure vault</p>
@@ -64,23 +64,24 @@
                 <option value="personal">个人</option>
               </select>
               <div class="navCluster" role="navigation" aria-label="主功能">
-                <button id="navLibrary" class="navPill active" data-view="library">内容库</button>
-                <button id="navGroups" class="navPill" data-view="groups">用户组</button>
-                <button id="navProjects" class="navPill" data-view="projects">项目</button>
-                <button id="navAdd" class="navPill" data-view="add">添加</button>
-                <button id="navConfig" class="navPill" data-view="config">配置</button>
+                <button id="navLibrary" class="navPill active" data-view="library" data-icon="library">内容库</button>
+                <button id="navGroups" class="navPill" data-view="groups" data-icon="users">用户组</button>
+                <button id="navProjects" class="navPill" data-view="projects" data-icon="git">项目</button>
+                <button id="navAdd" class="navPill" data-view="add" data-icon="plus">添加</button>
+                <button id="navConfig" class="navPill" data-view="config" data-icon="settings">配置</button>
               </div>
             </div>
             <div class="topbarMeta">
               <div id="localBadge" class="badge">本地账号</div>
-              <button id="loginBadge" class="badge warn">未登录飞书</button>
+              <button id="logoutLocal" class="badge" data-icon="logout">退出本地</button>
+              <button id="loginBadge" class="badge warn" data-icon="activity">未登录飞书</button>
             </div>
           </div>
         </header>
 
         <section id="notice" class="notice hidden">
           <span id="noticeText"></span>
-          <button id="noticeClose" class="iconButton noticeClose" aria-label="关闭提示">x</button>
+          <button id="noticeClose" class="iconButton noticeClose" aria-label="关闭提示" data-icon="x"></button>
         </section>
 
         <div class="grid">
@@ -88,7 +89,7 @@
             <section class="panel configCenter">
               <div class="panelHeader">
                 <h2>配置中心</h2>
-                <button id="showConfigForm" class="primary">新增配置</button>
+                <button id="showConfigForm" class="primary" data-icon="plus">新增配置</button>
               </div>
               <div id="configList" class="configList"></div>
               <div id="configForm" class="configForm hidden">
@@ -106,8 +107,8 @@
                 </label>
                 <div id="dynamicConfigFields"></div>
                 <div class="buttonRow">
-                  <button id="saveConfigDynamic" class="success">保存配置</button>
-                  <button id="cancelConfigForm">取消</button>
+                  <button id="saveConfigDynamic" class="success" data-icon="save">保存配置</button>
+                  <button id="cancelConfigForm" data-icon="x">取消</button>
                 </div>
               </div>
             </section>
@@ -123,7 +124,7 @@
                 恢复邮箱
                 <input id="profileRecoveryEmail" placeholder="you@example.com" />
               </label>
-              <button id="saveRecovery" class="primary full">保存恢复资料</button>
+              <button id="saveRecovery" class="primary full" data-icon="save">保存恢复资料</button>
             </section>
 
             <section class="panel">
@@ -144,7 +145,7 @@
                 Temperature
                 <input id="llmTemperature" placeholder="0.2" />
               </label>
-              <button id="saveAiProfile" class="primary full">保存大模型配置</button>
+              <button id="saveAiProfile" class="primary full" data-icon="save">保存大模型配置</button>
             </section>
 
             <section class="panel">
@@ -161,7 +162,7 @@
                 API Key
                 <input id="kbApiKey" type="password" placeholder="可选" />
               </label>
-              <button id="addKbSource" class="full">添加知识库</button>
+              <button id="addKbSource" class="full" data-icon="plus">添加知识库</button>
               <div id="kbSources" class="sourceList"></div>
             </section>
 
@@ -183,7 +184,7 @@
                 API Key
                 <input id="vectorApiKey" type="password" placeholder="可选" />
               </label>
-              <button id="addVectorSource" class="full">添加向量库</button>
+              <button id="addVectorSource" class="full" data-icon="plus">添加向量库</button>
               <div id="vectorSources" class="sourceList"></div>
             </section>
 
@@ -205,7 +206,7 @@
                 <input id="obsidianInsecureTls" type="checkbox" checked />
                 允许自签名 HTTPS 证书
               </label>
-              <button id="addObsidianSource" class="full">添加 Obsidian</button>
+              <button id="addObsidianSource" class="full" data-icon="plus">添加 Obsidian</button>
               <div id="obsidianSources" class="sourceList"></div>
             </section>
 
@@ -224,19 +225,19 @@
                 <input id="folderToken" placeholder="root 或 fldcn..." />
               </label>
               <label>
+                飞书加密口令
+                <input id="feishuPassphrase" type="password" placeholder="统一用于上传、取回和目录清单同步，至少 8 位" />
+              </label>
+              <label>
                 OAuth 回调地址
                 <input id="redirectUri" readonly />
               </label>
-              <label>
-                飞书加密口令（测试用）
-                <input id="feishuTestPassphrase" type="password" placeholder="至少 8 位，与同步时一致" />
-              </label>
               <div class="buttonRow">
-                <button id="saveSettings" class="primary">保存配置</button>
-                <button id="login">登录飞书</button>
-                <button id="logout">退出飞书</button>
+                <button id="saveSettings" class="primary" data-icon="save">保存配置</button>
+                <button id="login" data-icon="login">登录飞书</button>
+                <button id="logout" data-icon="logout">退出飞书</button>
               </div>
-              <button id="testFeishuSync" class="full">测试同步文本到飞书</button>
+              <button id="testFeishuSync" class="full" data-icon="activity">测试同步文本到飞书</button>
               <p class="hint">上传加密测试文本并回读校验，用于验证 App 配置、登录与文件夹 Token。</p>
               <div class="hint">建议权限：<span id="scopes"></span></div>
             </section>
@@ -244,18 +245,22 @@
 
           </aside>
 
-          <section id="groupsView" class="side viewPane hidden">
-            <section class="panel">
+          <section id="groupsView" class="groupsShell viewPane hidden">
+            <section class="panel groupCreatePanel">
               <div class="panelHeader">
                 <h2>用户组</h2>
               </div>
               <p class="hint">组内内容使用组密钥加密，组员可见；个人库内容不会自动共享。</p>
               <label>新建组名称<input id="newGroupName" placeholder="例如：研发团队" /></label>
               <label>飞书文件夹 Token（可选）<input id="newGroupFolder" placeholder="root 或 fldcn..." /></label>
-              <button id="createGroupBtn" class="primary full">创建用户组</button>
-              <div id="groupsList" class="sourceList"></div>
-              <hr class="divider" />
-              <h3 class="subTitle">邀请成员</h3>
+              <button id="createGroupBtn" class="primary full" data-icon="users">创建用户组</button>
+            </section>
+
+            <section class="panel groupInvitePanel">
+              <div class="panelHeader">
+                <h2>邀请成员</h2>
+                <button id="acceptInvitesBtn" class="small" data-icon="check">接受邀请</button>
+              </div>
               <label>目标组
                 <select id="inviteGroupSelect"></select>
               </label>
@@ -267,27 +272,53 @@
                   <option value="viewer">只读</option>
                 </select>
               </label>
-              <button id="inviteGroupBtn" class="success full">发送邀请</button>
-              <button id="acceptInvitesBtn" class="full">接受待处理邀请</button>
+              <button id="inviteGroupBtn" class="success full" data-icon="mail">发送邀请</button>
               <div id="pendingInvites" class="sourceList"></div>
+            </section>
+
+            <section class="panel groupListPanel">
+              <div class="panelHeader">
+                <h2>我的用户组</h2>
+              </div>
+              <div id="groupsList" class="sourceList groupList"></div>
+            </section>
+
+            <section class="panel groupMembersPanel">
+              <div class="panelHeader">
+                <h2>成员</h2>
+              </div>
               <div id="groupMembers" class="sourceList"></div>
             </section>
           </section>
 
-          <section id="addView" class="side viewPane hidden">
+          <section id="addView" class="addShell viewPane hidden">
             <section class="panel addPanel">
               <h2>添加内容</h2>
               <p id="addScopeHint" class="hint">将保存到：个人空间</p>
               <div class="segmented four">
-                <button id="fileMode" class="active" type="button">文件</button>
-                <button id="textMode" type="button">文本</button>
-                <button id="webMode" type="button">网页</button>
-                <button id="videoMode" type="button">视频</button>
+                <button id="fileMode" class="active" type="button" data-icon="file">文件</button>
+                <button id="textMode" type="button" data-icon="library">文本</button>
+                <button id="webMode" type="button" data-icon="external">网页</button>
+                <button id="videoMode" type="button" data-icon="activity">视频</button>
               </div>
 
               <div id="addFileBox">
-                <button id="chooseFiles" type="button">选择本地文件</button>
+                <div class="buttonRow">
+                  <button id="chooseFiles" type="button" data-icon="folder">选择本地文件</button>
+                  <button id="scanWechatFiles" type="button" data-icon="message">扫描微信附件</button>
+                </div>
                 <div id="selectedFiles" class="fileBox">尚未选择文件</div>
+                <div id="wechatFiles" class="wechatFileList hidden"></div>
+                <div id="uploadProgress" class="uploadProgress hidden" aria-live="polite">
+                  <div class="uploadProgressTop">
+                    <strong id="uploadProgressTitle">同步中</strong>
+                    <span id="uploadProgressCount">0/0</span>
+                  </div>
+                  <div class="uploadProgressBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <span id="uploadProgressFill"></span>
+                  </div>
+                  <div id="uploadProgressDetail" class="uploadProgressDetail">准备上传</div>
+                </div>
               </div>
 
               <div id="addFieldsBox" class="hidden">
@@ -319,26 +350,36 @@
                   <input id="optSyncManifest" type="checkbox" />
                   同时更新飞书目录清单
                 </label>
-                <div id="feishuPassphraseWrap" class="hidden">
+                <div id="localReauthWrap" class="localReauth hidden">
                   <label>
-                    飞书加密口令
-                    <input id="passphrase" type="password" placeholder="至少 8 位，与取回时一致" />
+                    本地密码
+                    <input id="addLocalPassword" type="password" placeholder="会话过期时填写后再次保存" />
                   </label>
                 </div>
                 <div id="addKnowledgeSources" class="knowledgeSyncList muted"></div>
               </div>
 
-              <button id="submitAdd" class="success full" type="button">保存</button>
+              <button id="submitAdd" class="success full" type="button" data-icon="save">保存</button>
 
               <details class="advancedSync">
                 <summary>飞书清单维护（可选）</summary>
                 <p id="manifestStatus" class="hint"></p>
                 <div class="buttonRow">
-                  <button id="pullManifest" type="button" class="primary">从飞书拉取</button>
-                  <button id="syncManifest" type="button" class="success">上传清单</button>
+                  <button id="pullManifest" type="button" class="primary" data-icon="download">从飞书拉取</button>
+                  <button id="syncManifest" type="button" class="success" data-icon="upload">上传清单</button>
                 </div>
-                <button id="fullSync" type="button" class="full">完整同步</button>
+                <button id="fullSync" type="button" class="full" data-icon="sync">完整同步</button>
               </details>
+            </section>
+            <section class="panel addHistoryPanel">
+              <div class="panelHeader">
+                <h2>添加历史</h2>
+              </div>
+              <div class="historyTabs">
+                <span>本地内容</span>
+                <span>飞书同步</span>
+              </div>
+              <div id="addHistory" class="addHistoryList"></div>
             </section>
           </section>
 
@@ -346,15 +387,21 @@
             <aside class="librarySidebar panel">
               <div class="panelHeader">
                 <h2>内容库</h2>
-                <button id="showDatabase" class="small">SQLite</button>
+                <button id="showDatabase" class="small" data-icon="database">SQLite</button>
               </div>
               <label>
                 全局搜索
                 <div class="inlineControl">
                   <input id="globalSearch" placeholder="搜索标题与标签..." />
-                  <button id="runGlobalSearch" class="small">搜索</button>
+                  <button id="runGlobalSearch" class="small" data-icon="search">搜索</button>
                 </div>
               </label>
+              <div id="libraryReauthWrap" class="localReauth hidden">
+                <label>
+                  本地密码
+                  <input id="libraryLocalPassword" type="password" placeholder="用于解锁本地加密内容；填一次后会安全保存" />
+                </label>
+              </div>
               <div id="searchResults" class="searchResults"></div>
               <div id="items" class="itemList"></div>
               <div class="syncBlock">
@@ -381,7 +428,7 @@
               <div id="queryResult" class="queryResult chatResult">检索和回答会显示在这里。</div>
               <div class="chatComposer">
                 <textarea id="questionInput" rows="2" placeholder="输入问题，例如：SSH 密钥在哪？"></textarea>
-                <button id="runKnowledgeQuery" class="success chatSend">发送</button>
+                <button id="runKnowledgeQuery" class="success chatSend" data-icon="send">发送</button>
               </div>
             </section>
           </section>
@@ -390,22 +437,22 @@
             <aside class="panel projectSide">
               <h2>项目账号</h2>
               <div class="segmented four">
-                <button id="projectProviderGithub" class="active" data-provider="github">GitHub</button>
-                <button id="projectProviderGitlab" data-provider="gitlab">GitLab</button>
-                <button id="projectProviderGit" data-provider="git">Git</button>
-                <button id="projectProviderSvn" data-provider="svn">SVN</button>
+                <button id="projectProviderGithub" class="active" data-provider="github" data-icon="git">GitHub</button>
+                <button id="projectProviderGitlab" data-provider="gitlab" data-icon="git">GitLab</button>
+                <button id="projectProviderGit" data-provider="git" data-icon="git">Git</button>
+                <button id="projectProviderSvn" data-provider="svn" data-icon="sync">SVN</button>
               </div>
               <label>账号名称<input id="projectAccountLabel" placeholder="工作 GitHub" /></label>
               <label>用户名<input id="projectAccountUsername" placeholder="Git 用户名 / SVN 用户名" /></label>
               <label>Token / 密码<input id="projectAccountSecret" type="password" placeholder="加密保存到本地 SQLite" /></label>
-              <button id="saveProjectAccount" class="primary full">保存账号</button>
+              <button id="saveProjectAccount" class="primary full" data-icon="save">保存账号</button>
               <div id="projectAccounts" class="sourceList"></div>
             </aside>
 
             <section class="panel projectMain">
               <div class="panelHeader">
                 <h2>代码库管理</h2>
-                <button id="chooseProjectDir" class="small">选择本地目录</button>
+                <button id="chooseProjectDir" class="small" data-icon="folder">选择本地目录</button>
               </div>
               <div class="projectForm">
                 <label>工具
@@ -421,7 +468,7 @@
                 <label>远程地址<input id="projectRemoteUrl" placeholder="https://github.com/org/repo.git / svn://..." /></label>
                 <label>本地目录<input id="projectLocalPath" placeholder="/Users/me/projects/repo" /></label>
                 <label>迁移目录<input id="projectMigrationDir" placeholder="可选：迁移目标目录" /></label>
-                <button id="saveProjectRepo" class="success">保存项目配置</button>
+                <button id="saveProjectRepo" class="success" data-icon="save">保存项目配置</button>
               </div>
               <div id="projectRepos" class="projectRepos"></div>
               <div class="projectConsole">

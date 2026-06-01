@@ -244,6 +244,7 @@ function rowsToEvidence(rows, question) {
     ].filter(Boolean).join(' · '),
     score: 1 - index * 0.04,
     assetId: row.asset_id,
+    sourceTable: row.source_table || 'library_items',
   }));
 }
 

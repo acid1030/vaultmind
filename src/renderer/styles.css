@@ -1,34 +1,59 @@
 :root {
   color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #0b0f16;
+  background: #080c11;
   color: #f7fbff;
   --ink: #f7fbff;
   --muted: rgba(226, 232, 240, 0.62);
   --faint: rgba(226, 232, 240, 0.38);
   --line: rgba(255, 255, 255, 0.12);
-  --panel: rgba(18, 25, 36, 0.78);
-  --panel-strong: rgba(20, 29, 43, 0.92);
-  --cyan: #28d7e9;
-  --green: #39d98a;
-  --gold: #f7c86b;
-  --rose: #fb7185;
+  --panel: rgba(16, 22, 31, 0.82);
+  --panel-strong: rgba(22, 30, 41, 0.94);
+  --cyan: #4cc9f0;
+  --green: #58d68d;
+  --gold: #f5c76b;
+  --rose: #ff6f91;
+  --violet: #a78bfa;
+  --blue: #60a5fa;
 }
 
 * {
   box-sizing: border-box;
 }
 
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.28);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(76, 201, 240, 0.36);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
 body {
   margin: 0;
-  min-width: 1040px;
+  min-width: 1280px;
   min-height: 100vh;
   background:
-    linear-gradient(135deg, rgba(40, 215, 233, 0.12), transparent 26%),
-    linear-gradient(225deg, rgba(247, 200, 107, 0.12), transparent 24%),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 82px),
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 82px),
-    #0b0f16;
+    radial-gradient(circle at 10% 0%, rgba(76, 201, 240, 0.16), transparent 32%),
+    radial-gradient(circle at 86% 12%, rgba(245, 199, 107, 0.12), transparent 28%),
+    linear-gradient(135deg, rgba(88, 214, 141, 0.06), transparent 28%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 78px),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.016) 0 1px, transparent 1px 78px),
+    #080c11;
 }
 
 button,
@@ -50,7 +75,7 @@ select {
 .topbarRight {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: stretch;
   gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
@@ -61,7 +86,7 @@ select {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   width: 100%;
 }
 
@@ -69,7 +94,7 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
@@ -77,7 +102,7 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 
@@ -90,7 +115,7 @@ select {
   padding: 0 34px 0 12px;
   margin: 0;
   flex: 0 0 auto;
-  border-radius: 999px;
+  border-radius: 10px;
   font-size: 13px;
   font-weight: 650;
   background:
@@ -144,8 +169,8 @@ select {
     rgba(13, 20, 31, 0.9);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.46), inset 0 1px 0 rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(22px);
-  border-radius: 18px;
-  padding: 26px;
+  border-radius: 14px;
+  padding: 28px;
 }
 
 .loginCard::before,
@@ -171,8 +196,8 @@ select {
     rgba(13, 20, 31, 0.82);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.24);
   backdrop-filter: blur(18px);
-  border-radius: 18px;
-  padding: 12px 18px;
+  border-radius: 14px;
+  padding: 14px 20px;
 }
 
 .brandBlock,
@@ -194,20 +219,20 @@ select {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid rgba(40, 215, 233, 0.36);
   background:
-    linear-gradient(145deg, rgba(40, 215, 233, 0.28), rgba(57, 217, 138, 0.12)),
+    linear-gradient(145deg, rgba(76, 201, 240, 0.32), rgba(88, 214, 141, 0.13)),
     rgba(255, 255, 255, 0.05);
-  box-shadow: 0 16px 40px rgba(40, 215, 233, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 16px 40px rgba(76, 201, 240, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.2);
   color: #dffcff;
   font-weight: 800;
   letter-spacing: 0;
 }
 
 .brandMark.compact {
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   border-radius: 12px;
 }
 
@@ -256,12 +281,22 @@ p,
 
 .navPill {
   height: 34px;
-  border-radius: 999px;
+  border-radius: 10px;
+  width: 96px;
+  min-width: 96px;
+  padding: 0 10px;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.navPill span,
+.badge span {
+  white-space: nowrap;
 }
 
 .navPill.active {
-  background: linear-gradient(135deg, rgba(40, 215, 233, 0.24), rgba(57, 217, 138, 0.16));
-  border-color: rgba(40, 215, 233, 0.38);
+  background: linear-gradient(135deg, rgba(76, 201, 240, 0.24), rgba(88, 214, 141, 0.16));
+  border-color: rgba(76, 201, 240, 0.38);
   color: #dffcff;
 }
 
@@ -269,7 +304,7 @@ p,
   border: 1px solid rgba(57, 217, 138, 0.38);
   background: rgba(57, 217, 138, 0.12);
   color: #c4f7dc;
-  border-radius: 999px;
+  border-radius: 10px;
   padding: 8px 12px;
   font-size: 12px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
@@ -285,7 +320,8 @@ p,
 .notice {
   position: fixed;
   top: 84px;
-  right: 24px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 30;
   display: flex;
   align-items: flex-start;
@@ -293,7 +329,7 @@ p,
   gap: 12px;
   width: min(560px, calc(100vw - 48px));
   margin-top: 0;
-  border-radius: 12px;
+  border-radius: 10px;
   padding: 11px 13px;
   border: 1px solid rgba(57, 217, 138, 0.34);
   color: #cbf7dd;
@@ -352,8 +388,8 @@ p,
     var(--panel);
   box-shadow: 0 18px 52px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.09);
   backdrop-filter: blur(18px);
-  border-radius: 16px;
-  padding: 17px;
+  border-radius: 12px;
+  padding: 18px;
 }
 
 .panelHeader {
@@ -381,7 +417,7 @@ textarea {
   display: block;
   width: 100%;
   margin-top: 7px;
-  border-radius: 11px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(4, 9, 16, 0.52);
   color: var(--ink);
@@ -393,14 +429,14 @@ textarea {
 
 select {
   width: 100%;
-  min-width: 260px;
+  min-width: 0;
   height: 46px;
   appearance: none;
   padding: 0 48px 0 16px;
   cursor: pointer;
   color: rgba(247, 251, 255, 0.92);
   border-color: rgba(40, 215, 233, 0.28);
-  border-radius: 13px;
+  border-radius: 9px;
   background:
     linear-gradient(45deg, transparent 50%, rgba(223, 252, 255, 0.92) 50%) calc(100% - 25px) 20px / 7px 7px no-repeat,
     linear-gradient(135deg, rgba(223, 252, 255, 0.92) 50%, transparent 50%) calc(100% - 18px) 20px / 7px 7px no-repeat,
@@ -439,7 +475,7 @@ details.resetBox {
   margin-top: 12px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(4, 9, 16, 0.34);
-  border-radius: 13px;
+  border-radius: 10px;
   padding: 10px;
 }
 
@@ -468,8 +504,12 @@ textarea::placeholder {
 }
 
 button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   height: 38px;
-  border-radius: 11px;
+  border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.13);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.095), rgba(255, 255, 255, 0.035)),
@@ -478,6 +518,27 @@ button {
   padding: 0 13px;
   cursor: pointer;
   transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+}
+
+button span {
+  min-width: 0;
+}
+
+.icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.iconButton .icon,
+.noticeClose .icon {
+  width: 16px;
+  height: 16px;
 }
 
 button:hover {
@@ -497,7 +558,7 @@ button:disabled {
 }
 
 button.primary {
-  background: linear-gradient(135deg, #28d7e9, #39d98a);
+  background: linear-gradient(135deg, #4cc9f0, #58d68d);
   color: #041015;
   border-color: transparent;
   font-weight: 760;
@@ -506,7 +567,7 @@ button.primary {
 
 button.success {
   width: 100%;
-  background: linear-gradient(135deg, #39d98a, #f7c86b);
+  background: linear-gradient(135deg, #58d68d, #f5c76b);
   color: #07130c;
   border-color: transparent;
   font-weight: 780;
@@ -546,7 +607,7 @@ button.full {
   gap: 5px;
   border: 1px solid rgba(255, 255, 255, 0.11);
   background: rgba(4, 9, 16, 0.5);
-  border-radius: 13px;
+  border-radius: 10px;
   padding: 5px;
   margin: 15px 0;
 }
@@ -590,7 +651,7 @@ button.full {
 }
 
 .segmented button.active {
-  background: rgba(40, 215, 233, 0.17);
+  background: rgba(76, 201, 240, 0.17);
   color: #dffcff;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
@@ -601,7 +662,7 @@ button.full {
 .queryResult {
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(4, 9, 16, 0.46);
-  border-radius: 12px;
+  border-radius: 10px;
 }
 
 .fileBox {
@@ -614,11 +675,158 @@ button.full {
   color: rgba(226, 232, 240, 0.68);
 }
 
+.wechatFileList {
+  margin-top: 10px;
+  border: 1px solid rgba(79, 209, 197, 0.18);
+  background: rgba(4, 9, 16, 0.36);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.wechatFileHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 11px;
+  color: rgba(226, 232, 240, 0.78);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.wechatFileHeader span {
+  color: rgba(226, 232, 240, 0.56);
+  font-size: 12px;
+}
+
+.wechatFileItems {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.wechatFileItem {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  margin: 0;
+  padding: 9px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.wechatFileItem:last-child {
+  border-bottom: 0;
+}
+
+.wechatFileItem input {
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+}
+
+.wechatFileItem span,
+.wechatFileItem small {
+  min-width: 0;
+}
+
+.wechatFileItem strong,
+.wechatFileItem small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wechatFileItem small {
+  margin-top: 3px;
+  color: rgba(226, 232, 240, 0.5);
+}
+
+.uploadProgress {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid rgba(79, 209, 197, 0.2);
+  background: rgba(4, 9, 16, 0.5);
+  border-radius: 10px;
+}
+
+.uploadProgressTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.uploadProgressTop strong {
+  color: rgba(226, 252, 247, 0.92);
+}
+
+.uploadProgressTop span,
+.uploadProgressDetail {
+  color: rgba(226, 232, 240, 0.62);
+  font-size: 12px;
+}
+
+.uploadProgressBar {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.uploadProgressBar span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #34d399, #38bdf8);
+  transition: width 180ms ease;
+}
+
+.uploadProgressDetail {
+  min-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sourceList {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 12px;
+}
+
+.navCluster .icon,
+.segmented .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.topbarMeta .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.topbarMeta .badge .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.panelHeader .hint {
+  display: block;
+  max-width: 740px;
+  line-height: 1.45;
+}
+
+.configCenter .panelHeader,
+.librarySidebar .panelHeader,
+.projectMain .panelHeader {
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .configList {
@@ -628,13 +836,26 @@ button.full {
 }
 
 .configCard {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: flex-start;
+  gap: 14px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(4, 9, 16, 0.34);
-  border-radius: 14px;
-  padding: 12px;
+  border-radius: 10px;
+  padding: 13px 14px;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.configCard:hover,
+.sourceItem:hover,
+.itemCard:hover,
+.projectRepo:hover {
+  transform: translateY(-1px);
+  border-color: rgba(76, 201, 240, 0.24);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.026)),
+    rgba(6, 14, 24, 0.58);
 }
 
 .configCard strong,
@@ -644,7 +865,7 @@ button.full {
 }
 
 .configCard p {
-  max-width: 360px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -657,6 +878,9 @@ button.full {
 }
 
 .configStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   align-self: flex-start;
   border: 1px solid rgba(57, 217, 138, 0.28);
   background: rgba(57, 217, 138, 0.08);
@@ -669,6 +893,11 @@ button.full {
   cursor: pointer;
 }
 
+.configStatus .icon {
+  width: 13px;
+  height: 13px;
+}
+
 .configForm {
   margin-top: 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
@@ -676,14 +905,15 @@ button.full {
 }
 
 .sourceItem {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 14px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(4, 9, 16, 0.34);
-  border-radius: 12px;
-  padding: 10px;
+  border-radius: 10px;
+  padding: 11px 12px;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
 }
 
 .sourceItem strong,
@@ -691,8 +921,14 @@ button.full {
   display: block;
 }
 
+.sourceItem strong,
+.itemHeader strong,
+.projectRepo strong {
+  color: rgba(247, 251, 255, 0.95);
+}
+
 .sourceItem span {
-  max-width: 260px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -707,8 +943,8 @@ button.full {
 
 .libraryShell {
   display: grid;
-  grid-template-columns: 420px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: 500px minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
   min-height: calc(100vh - 142px);
   height: auto;
@@ -717,13 +953,194 @@ button.full {
 
 .projectsShell {
   display: grid;
-  grid-template-columns: 420px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: 460px minmax(0, 1fr);
+  gap: 18px;
   align-items: stretch;
   height: calc(100vh - 142px);
   max-height: calc(100vh - 142px);
   min-height: 0;
   overflow: hidden;
+}
+
+.groupsShell {
+  display: grid;
+  grid-template-columns: minmax(420px, 0.8fr) minmax(620px, 1.2fr);
+  grid-template-areas:
+    "create invite"
+    "list members";
+  gap: 18px;
+  align-items: start;
+  min-height: calc(100vh - 142px);
+}
+
+.addShell {
+  display: grid;
+  grid-template-columns: minmax(440px, 0.82fr) minmax(620px, 1.18fr);
+  gap: 18px;
+  align-items: start;
+  min-height: calc(100vh - 142px);
+}
+
+.addHistoryPanel {
+  min-height: calc(100vh - 182px);
+}
+
+.historyTabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: rgba(226, 232, 240, 0.56);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.addHistoryList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-height: calc(100vh - 250px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.historyColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.historyItem {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  background:
+    linear-gradient(90deg, rgba(76, 201, 240, 0.12), transparent 3px),
+    rgba(4, 9, 16, 0.34);
+  border-radius: 10px;
+  padding: 11px;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.historyItem:hover {
+  transform: translateY(-1px);
+  border-color: rgba(76, 201, 240, 0.24);
+  background:
+    linear-gradient(90deg, rgba(88, 214, 141, 0.18), transparent 3px),
+    rgba(8, 18, 29, 0.58);
+}
+
+.historyItem strong,
+.historyItem span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyItem strong {
+  color: rgba(247, 251, 255, 0.92);
+  font-size: 13px;
+}
+
+.historyItem span {
+  margin-top: 4px;
+  color: rgba(226, 232, 240, 0.44);
+  font-size: 12px;
+}
+
+.historyIcon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #dffcff;
+  border: 1px solid rgba(76, 201, 240, 0.2);
+  background: rgba(76, 201, 240, 0.09);
+}
+
+.historyIcon .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.historyItem .evidenceType {
+  grid-row: auto;
+}
+
+.groupCreatePanel {
+  grid-area: create;
+}
+
+.groupInvitePanel {
+  grid-area: invite;
+}
+
+.groupListPanel {
+  grid-area: list;
+}
+
+.groupMembersPanel {
+  grid-area: members;
+}
+
+.groupInvitePanel {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.9fr) minmax(240px, 1.2fr) minmax(140px, 0.7fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.groupInvitePanel .panelHeader,
+.groupInvitePanel .sourceList {
+  grid-column: 1 / -1;
+}
+
+.groupInvitePanel label {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.groupInvitePanel button.success {
+  width: auto;
+  min-width: 126px;
+  margin-bottom: 0;
+}
+
+.groupList,
+.groupMembersPanel .sourceList {
+  max-height: calc(100vh - 430px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.groupsShell .sourceItem {
+  align-items: flex-start;
+}
+
+.groupsShell .sourceItem .actions {
+  max-width: 360px;
+}
+
+.groupCard.activeGroup {
+  border-color: rgba(88, 214, 141, 0.34);
+  background:
+    linear-gradient(180deg, rgba(88, 214, 141, 0.1), rgba(76, 201, 240, 0.04)),
+    rgba(6, 14, 24, 0.62);
+}
+
+.groupCard strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compactEmpty {
+  padding: 24px;
 }
 
 .librarySidebar,
@@ -766,11 +1183,12 @@ button.full {
 .projectRepo {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  gap: 16px;
   border: 1px solid rgba(255, 255, 255, 0.105);
   background: rgba(5, 12, 22, 0.48);
-  border-radius: 14px;
-  padding: 12px;
+  border-radius: 10px;
+  padding: 14px;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
 }
 
 .projectRepo p {
@@ -778,6 +1196,10 @@ button.full {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.projectRepo .actions {
+  max-width: 520px;
 }
 
 .projectConsole {
@@ -830,7 +1252,7 @@ button.full {
 .chatWorkspace .queryResult.chatResult {
   flex: 1 1 auto;
   width: 100%;
-  min-height: 280px;
+  min-height: 420px;
   max-height: calc(100vh - 330px);
   margin-top: 0;
   overflow-y: auto;
@@ -838,6 +1260,9 @@ button.full {
   flex-direction: column;
   gap: 12px;
   scroll-behavior: smooth;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.014)),
+    rgba(2, 8, 14, 0.45);
 }
 
 .emptyChat {
@@ -902,6 +1327,12 @@ button.full {
 
 .userMessage .chatStack {
   align-items: flex-end;
+  text-align: right;
+  order: 1;
+}
+
+.userMessage .chatAvatar {
+  order: 2;
 }
 
 .assistantMessage .chatStack {
@@ -912,15 +1343,15 @@ button.full {
   min-width: 96px;
   max-width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
-  padding: 11px 13px;
+  border-radius: 10px;
+  padding: 12px 14px;
   background: rgba(255, 255, 255, 0.045);
   color: rgba(226, 232, 240, 0.9);
 }
 
 .userMessage .chatBubble {
-  background: rgba(68, 196, 161, 0.18);
-  border-color: rgba(68, 196, 161, 0.28);
+  background: linear-gradient(180deg, rgba(88, 214, 141, 0.2), rgba(76, 201, 240, 0.08));
+  border-color: rgba(88, 214, 141, 0.3);
 }
 
 .pendingBubble {
@@ -948,7 +1379,7 @@ button.full {
   margin-top: 0;
   padding-top: 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(180deg, transparent, rgba(11, 15, 22, 0.92) 24%);
+  background: linear-gradient(180deg, transparent, rgba(8, 12, 17, 0.92) 24%);
 }
 
 .chatComposer textarea {
@@ -970,6 +1401,11 @@ button.full {
   align-self: flex-end;
 }
 
+.chatSend .icon {
+  width: 17px;
+  height: 17px;
+}
+
 .queryResult pre {
   white-space: pre-wrap;
   word-break: break-word;
@@ -985,18 +1421,124 @@ button.full {
 }
 
 .evidenceItem {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  column-gap: 10px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   background: rgba(255, 255, 255, 0.035);
   border-radius: 11px;
   padding: 9px;
 }
 
+.evidenceType {
+  grid-row: 1 / span 2;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  color: #dffcff;
+  border: 1px solid rgba(76, 201, 240, 0.2);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03)),
+    rgba(76, 201, 240, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 8px 16px rgba(0, 0, 0, 0.18);
+}
+
+.fileTypeGlyph {
+  color: #fff;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+}
+
+.evidenceType-word {
+  color: #fff;
+  border-color: rgba(96, 165, 250, 0.34);
+  background: linear-gradient(135deg, #1d4ed8, #60a5fa);
+}
+
+.evidenceType-pdf {
+  color: #fff;
+  border-color: rgba(251, 113, 133, 0.34);
+  background: linear-gradient(135deg, #b91c1c, #fb7185);
+}
+
+.evidenceType-sheet {
+  color: #fff;
+  border-color: rgba(74, 222, 128, 0.34);
+  background: linear-gradient(135deg, #047857, #4ade80);
+}
+
+.evidenceType-slide {
+  color: #fff;
+  border-color: rgba(251, 146, 60, 0.34);
+  background: linear-gradient(135deg, #c2410c, #fb923c);
+}
+
+.evidenceType-archive {
+  color: #fff;
+  border-color: rgba(245, 199, 107, 0.34);
+  background: linear-gradient(135deg, #92400e, #f5c76b);
+}
+
+.evidenceType-image,
+.evidenceType-video,
+.evidenceType-audio {
+  color: #fff;
+  border-color: rgba(216, 180, 254, 0.34);
+  background: linear-gradient(135deg, #7e22ce, #d8b4fe);
+}
+
+.evidenceHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.evidenceTitle {
+  min-width: 0;
+}
+
 .evidenceItem span {
   color: #dffcff;
   font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidenceTitle small {
+  display: block;
+  margin-top: 3px;
+  color: rgba(226, 232, 240, 0.5);
+  font-size: 11px;
+}
+
+.evidenceOpen {
+  height: 28px;
+  min-width: 62px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.evidenceOpen span {
+  white-space: nowrap;
+}
+
+.evidenceOpen .icon {
+  width: 13px;
+  height: 13px;
 }
 
 .evidenceItem p {
+  grid-column: 2;
   margin-top: 5px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -1014,39 +1556,50 @@ button.full {
 }
 
 .table {
-  overflow: hidden;
-  border-radius: 13px;
+  overflow: auto;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(4, 9, 16, 0.34);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.014)),
+    rgba(4, 9, 16, 0.34);
 }
 
 .row {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) 72px 86px 230px;
-  gap: 10px;
+  grid-template-columns: minmax(260px, 1fr) 84px 100px 260px;
+  gap: 12px;
   align-items: center;
-  padding: 11px 12px;
+  padding: 12px 14px;
   border-top: 1px solid rgba(255, 255, 255, 0.075);
   font-size: 13px;
 }
 
 .compactTable .row {
-  grid-template-columns: minmax(160px, 1fr) 54px 64px 146px;
+  grid-template-columns: minmax(180px, 1fr) 48px 64px 112px;
+  min-width: 420px;
   font-size: 12px;
-  padding: 9px;
+  padding: 10px 12px;
 }
 
 .compactTable .actions {
-  gap: 4px;
+  gap: 5px;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
 }
 
 .compactTable .actions button {
+  width: 30px;
   height: 28px;
-  padding: 0 7px;
+  min-width: 0;
+  padding: 0;
+}
+
+.compactTable .actions button span {
+  display: none;
 }
 
 .row:hover:not(.head) {
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(76, 201, 240, 0.055);
 }
 
 .row.head {
@@ -1055,6 +1608,7 @@ button.full {
   background: rgba(255, 255, 255, 0.055);
   font-size: 12px;
   text-transform: uppercase;
+  letter-spacing: 0;
 }
 
 .muted {
@@ -1068,14 +1622,15 @@ button.full {
 .actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 7px;
+  flex-wrap: wrap;
 }
 
 .actions button {
   height: 31px;
   font-size: 12px;
   padding: 0 9px;
-  border-radius: 9px;
+  border-radius: 8px;
 }
 
 .inlinePassword {
@@ -1086,7 +1641,7 @@ button.full {
 .itemList {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   overflow: auto;
   padding-right: 2px;
 }
@@ -1094,17 +1649,20 @@ button.full {
 .itemCard {
   border: 1px solid rgba(255, 255, 255, 0.105);
   background:
+    linear-gradient(90deg, rgba(76, 201, 240, 0.12), transparent 3px),
     linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02)),
     rgba(5, 12, 22, 0.52);
-  border-radius: 15px;
-  padding: 13px;
+  border-radius: 10px;
+  padding: 12px 14px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
 }
 
 .itemHeader {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
 }
 
 .itemHeader strong {
@@ -1142,6 +1700,19 @@ button.full {
   margin-top: 10px;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.localReauth {
+  margin-top: 10px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 199, 107, 0.24);
+  background: rgba(245, 199, 107, 0.06);
+}
+
+.localReauth label {
+  margin-bottom: 0;
 }
 
 .addPanel .advancedSync {
@@ -1206,8 +1777,60 @@ button.full {
 .empty {
   border: 1px dashed rgba(255, 255, 255, 0.16);
   color: rgba(226, 232, 240, 0.46);
-  border-radius: 14px;
-  padding: 34px;
+  border-radius: 10px;
+  padding: 38px;
   text-align: center;
   background: rgba(4, 9, 16, 0.28);
+}
+
+.empty::before,
+.emptyChat::before {
+  content: "";
+  display: block;
+  width: 38px;
+  height: 38px;
+  margin: 0 auto 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(76, 201, 240, 0.24);
+  background:
+    linear-gradient(135deg, rgba(76, 201, 240, 0.16), rgba(88, 214, 141, 0.1)),
+    rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+@media (max-width: 1360px) {
+  body {
+    min-width: 1120px;
+  }
+
+  .libraryShell,
+  .projectsShell {
+    grid-template-columns: 420px minmax(0, 1fr);
+  }
+
+  .navPill {
+    min-width: auto;
+  }
+
+  .groupsShell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "create"
+      "invite"
+      "list"
+      "members";
+  }
+
+  .groupInvitePanel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .groupInvitePanel button.success {
+    width: 100%;
+  }
+
+  .addShell,
+  .addHistoryList {
+    grid-template-columns: 1fr;
+  }
 }

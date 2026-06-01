@@ -15,9 +15,18 @@ contextBridge.exposeInMainWorld('vaultApi', {
   logout: () => ipcRenderer.invoke('vault:logout'),
   chooseFiles: () => ipcRenderer.invoke('vault:chooseFiles'),
   chooseDirectory: () => ipcRenderer.invoke('vault:chooseDirectory'),
+  scanWechatAttachments: () => ipcRenderer.invoke('vault:scanWechatAttachments'),
+  chooseWechatAttachments: () => ipcRenderer.invoke('vault:chooseWechatAttachments'),
   uploadFiles: (payload) => ipcRenderer.invoke('vault:uploadFiles', payload),
+  onUploadProgress: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:uploadProgress', listener);
+    return () => ipcRenderer.removeListener('vault:uploadProgress', listener);
+  },
   uploadText: (payload) => ipcRenderer.invoke('vault:uploadText', payload),
   downloadRecord: (payload) => ipcRenderer.invoke('vault:downloadRecord', payload),
+  openAsset: (payload) => ipcRenderer.invoke('vault:openAsset', payload),
   unlockItem: (payload) => ipcRenderer.invoke('vault:unlockItem', payload),
   saveItemFile: (payload) => ipcRenderer.invoke('vault:saveItemFile', payload),
   forgetRecord: (recordId) => ipcRenderer.invoke('vault:forgetRecord', recordId),
