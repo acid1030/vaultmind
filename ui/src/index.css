@@ -1,0 +1,374 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── 基础色板 ── */
+    --background: 218 42% 5%;
+    --foreground: 210 30% 96%;
+
+    --card: 218 38% 7%;
+    --card-foreground: 210 30% 95%;
+
+    --surface: 218 36% 8%;
+    --surface-raised: 218 32% 10%;
+    --surface-overlay: 218 30% 12%;
+
+    --popover: 218 36% 7%;
+    --popover-foreground: 210 30% 96%;
+
+    --border: 218 24% 16%;
+    --input: 218 26% 14%;
+    --ring: 190 90% 60%;
+    --radius: 10px;
+
+    /* ── 主色 cyan ── */
+    --primary: 190 90% 60%;
+    --primary-foreground: 218 42% 5%;
+    --primary-glow: 190 100% 70%;
+
+    --secondary: 218 30% 14%;
+    --secondary-foreground: 210 30% 90%;
+
+    --muted: 218 28% 13%;
+    --muted-foreground: 218 16% 55%;
+
+    --accent: 190 40% 16%;
+    --accent-foreground: 190 90% 78%;
+
+    --destructive: 356 80% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    /* ── 语义色 ── */
+    --cyan: 190 90% 60%;
+    --cyan-dim: 190 60% 30%;
+    --emerald: 152 72% 52%;
+    --emerald-dim: 152 50% 24%;
+    --gold: 43 90% 60%;
+    --gold-dim: 43 60% 26%;
+    --rose: 352 84% 66%;
+    --rose-dim: 352 50% 26%;
+    --violet: 262 80% 72%;
+    --violet-dim: 262 50% 26%;
+
+    /* ── 渐变 ── */
+    --gradient-primary: linear-gradient(135deg, hsl(190 90% 60%), hsl(152 72% 52%));
+    --gradient-success: linear-gradient(135deg, hsl(152 72% 52%), hsl(43 90% 60%));
+    --gradient-warm: linear-gradient(135deg, hsl(262 80% 72%), hsl(352 84% 66%));
+    --gradient-surface: linear-gradient(180deg, hsl(218 36% 9%), hsl(218 42% 5%));
+    --gradient-card: linear-gradient(180deg, hsl(218 32% 9% / 0.9), hsl(218 42% 5% / 0.8));
+
+    /* ── 网格背景 ── */
+    --bg-dot-grid:
+      radial-gradient(circle at 12% 2%, hsl(190 90% 60% / 0.12), transparent 30%),
+      radial-gradient(circle at 88% 8%, hsl(43 90% 60% / 0.08), transparent 26%),
+      radial-gradient(circle at 60% 90%, hsl(262 80% 72% / 0.07), transparent 28%),
+      repeating-linear-gradient(90deg, hsl(218 30% 20% / 0.04) 0 1px, transparent 1px 72px),
+      repeating-linear-gradient(0deg, hsl(218 30% 20% / 0.03) 0 1px, transparent 1px 72px),
+      hsl(218 42% 5%);
+
+    /* ── 阴影 ── */
+    --shadow-glow: 0 0 32px hsl(190 90% 60% / 0.22), 0 0 8px hsl(190 90% 60% / 0.12);
+    --shadow-glow-sm: 0 0 16px hsl(190 90% 60% / 0.18);
+    --shadow-glow-emerald: 0 0 24px hsl(152 72% 52% / 0.2);
+    --shadow-card: 0 4px 24px hsl(218 42% 2% / 0.5), 0 1px 4px hsl(218 42% 2% / 0.3), inset 0 1px 0 hsl(218 30% 24% / 0.5);
+    --shadow-panel: 0 8px 40px hsl(218 42% 2% / 0.6), 0 2px 8px hsl(218 42% 2% / 0.4), inset 0 1px 0 hsl(218 30% 20% / 0.4);
+    --shadow-panel-lg: 0 24px 80px hsl(218 42% 2% / 0.7), 0 8px 20px hsl(218 42% 2% / 0.5), inset 0 1px 0 hsl(218 30% 24% / 0.4);
+
+    /* ── 过渡 ── */
+    --transition-smooth: all 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+    --transition-fast: all 0.14s ease;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    background-image: var(--bg-dot-grid);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(218 24% 22%);
+    border-radius: 99px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(190 60% 40%);
+  }
+}
+
+@layer components {
+  /* 玻璃面板 */
+  .glass-panel {
+    background: hsl(218 36% 8% / 0.82);
+    backdrop-filter: blur(24px);
+    border: 1px solid hsl(218 24% 18% / 0.8);
+    box-shadow: var(--shadow-panel);
+  }
+
+  .glass-card {
+    background: hsl(218 32% 9% / 0.7);
+    backdrop-filter: blur(16px);
+    border: 1px solid hsl(218 24% 16% / 0.7);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* 导航 pill */
+  .nav-pill {
+    @apply relative flex items-center gap-2 px-3.5 h-9 rounded text-sm font-medium;
+    color: hsl(218 16% 55%);
+    transition: var(--transition-smooth);
+  }
+
+  .nav-pill:hover {
+    color: hsl(210 30% 90%);
+    background: hsl(218 30% 14%);
+  }
+
+  .nav-pill.active {
+    color: hsl(190 90% 72%);
+    background: hsl(190 60% 20% / 0.4);
+    border: 1px solid hsl(190 60% 30% / 0.35);
+  }
+
+  /* 输入框 */
+  .vm-input {
+    @apply w-full h-10 px-3 rounded text-sm;
+    background: hsl(218 36% 7%);
+    border: 1px solid hsl(218 24% 16%);
+    color: hsl(210 30% 92%);
+    outline: none;
+    transition: var(--transition-fast);
+  }
+
+  .vm-input::placeholder { color: hsl(218 16% 40%); }
+
+  .vm-input:focus {
+    border-color: hsl(190 60% 44%);
+    background: hsl(218 36% 8%);
+    box-shadow: 0 0 0 3px hsl(190 90% 60% / 0.1);
+  }
+
+  .vm-textarea {
+    @apply vm-input h-auto py-2.5 resize-none;
+    min-height: 96px;
+  }
+
+  /* 徽章 */
+  .vm-badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm text-xs font-medium;
+  }
+
+  .vm-badge-cyan {
+    @apply vm-badge;
+    background: hsl(190 60% 20% / 0.4);
+    color: hsl(190 90% 72%);
+    border: 1px solid hsl(190 60% 30% / 0.3);
+  }
+
+  .vm-badge-emerald {
+    @apply vm-badge;
+    background: hsl(152 50% 20% / 0.4);
+    color: hsl(152 72% 68%);
+    border: 1px solid hsl(152 50% 28% / 0.3);
+  }
+
+  .vm-badge-gold {
+    @apply vm-badge;
+    background: hsl(43 60% 22% / 0.4);
+    color: hsl(43 90% 72%);
+    border: 1px solid hsl(43 60% 32% / 0.3);
+  }
+
+  .vm-badge-rose {
+    @apply vm-badge;
+    background: hsl(352 50% 22% / 0.4);
+    color: hsl(352 84% 78%);
+    border: 1px solid hsl(352 50% 32% / 0.3);
+  }
+
+  .vm-badge-violet {
+    @apply vm-badge;
+    background: hsl(262 50% 22% / 0.4);
+    color: hsl(262 80% 82%);
+    border: 1px solid hsl(262 50% 32% / 0.3);
+  }
+
+  /* 分割线 */
+  .vm-divider {
+    border: none;
+    border-top: 1px solid hsl(218 24% 14%);
+    margin: 16px 0;
+  }
+
+  /* 空状态 */
+  .vm-empty {
+    @apply flex flex-col items-center justify-center gap-3 py-12 text-center;
+    color: hsl(218 16% 42%);
+  }
+}
+
+/* ─── 亮色主题 ─────────────────────────────────────────── */
+html.light {
+  --background: 210 20% 97%;
+  --foreground: 218 40% 12%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 218 40% 10%;
+
+  --surface: 210 18% 94%;
+  --surface-raised: 0 0% 100%;
+  --surface-overlay: 210 16% 92%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 218 40% 10%;
+
+  --border: 218 16% 84%;
+  --input: 210 18% 92%;
+  --ring: 190 80% 42%;
+
+  --primary: 190 80% 42%;
+  --primary-foreground: 0 0% 100%;
+  --primary-glow: 190 80% 52%;
+
+  --secondary: 210 16% 90%;
+  --secondary-foreground: 218 40% 18%;
+
+  --muted: 210 14% 92%;
+  --muted-foreground: 218 16% 45%;
+
+  --accent: 190 40% 88%;
+  --accent-foreground: 190 80% 28%;
+
+  --destructive: 356 76% 52%;
+  --destructive-foreground: 0 0% 100%;
+
+  --cyan: 190 80% 40%;
+  --cyan-dim: 190 60% 88%;
+  --emerald: 152 60% 38%;
+  --emerald-dim: 152 50% 88%;
+  --gold: 43 80% 44%;
+  --gold-dim: 43 60% 88%;
+  --rose: 352 70% 52%;
+  --rose-dim: 352 50% 90%;
+  --violet: 262 70% 58%;
+  --violet-dim: 262 50% 90%;
+
+  --gradient-primary: linear-gradient(135deg, hsl(190 80% 42%), hsl(152 60% 38%));
+  --gradient-success: linear-gradient(135deg, hsl(152 60% 38%), hsl(43 80% 44%));
+  --gradient-surface: linear-gradient(180deg, hsl(210 20% 98%), hsl(210 16% 94%));
+
+  --bg-dot-grid:
+    radial-gradient(circle at 12% 2%, hsl(190 80% 52% / 0.07), transparent 30%),
+    radial-gradient(circle at 88% 8%, hsl(43 80% 52% / 0.05), transparent 26%),
+    radial-gradient(circle at 60% 90%, hsl(262 70% 58% / 0.04), transparent 28%),
+    repeating-linear-gradient(90deg, hsl(218 20% 50% / 0.04) 0 1px, transparent 1px 72px),
+    repeating-linear-gradient(0deg, hsl(218 20% 50% / 0.03) 0 1px, transparent 1px 72px),
+    hsl(210 20% 97%);
+
+  --shadow-glow: 0 0 24px hsl(190 80% 42% / 0.14), 0 0 6px hsl(190 80% 42% / 0.08);
+  --shadow-glow-sm: 0 0 12px hsl(190 80% 42% / 0.1);
+  --shadow-glow-emerald: 0 0 18px hsl(152 60% 38% / 0.12);
+  --shadow-card: 0 2px 16px hsl(218 20% 40% / 0.1), 0 1px 3px hsl(218 20% 40% / 0.06), inset 0 1px 0 hsl(0 0% 100%);
+  --shadow-panel: 0 4px 24px hsl(218 20% 40% / 0.12), 0 2px 6px hsl(218 20% 40% / 0.07), inset 0 1px 0 hsl(0 0% 100% / 0.8);
+  --shadow-panel-lg: 0 12px 48px hsl(218 20% 40% / 0.14), 0 4px 12px hsl(218 20% 40% / 0.08), inset 0 1px 0 hsl(0 0% 100%);
+}
+
+html.light body {
+  background-image: var(--bg-dot-grid);
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: hsl(218 16% 78%);
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: hsl(190 60% 52%);
+}
+
+html.light .glass-panel {
+  background: hsl(0 0% 100% / 0.88);
+  border: 1px solid hsl(218 16% 88% / 0.9);
+  box-shadow: var(--shadow-panel);
+}
+
+html.light .glass-card {
+  background: hsl(0 0% 100% / 0.9);
+  border: 1px solid hsl(218 16% 86% / 0.8);
+  box-shadow: var(--shadow-card);
+}
+
+html.light .nav-pill {
+  color: hsl(218 20% 40%);
+}
+html.light .nav-pill:hover {
+  color: hsl(218 40% 12%);
+  background: hsl(210 16% 92%);
+}
+html.light .nav-pill.active {
+  color: hsl(190 80% 34%);
+  background: hsl(190 60% 88% / 0.6);
+  border-color: hsl(190 60% 72% / 0.4);
+}
+
+html.light .vm-input {
+  background: hsl(210 20% 97%);
+  border-color: hsl(218 16% 82%);
+  color: hsl(218 40% 10%);
+}
+html.light .vm-input::placeholder { color: hsl(218 16% 58%); }
+html.light .vm-input:focus {
+  border-color: hsl(190 80% 48%);
+  background: hsl(0 0% 100%);
+  box-shadow: 0 0 0 3px hsl(190 80% 42% / 0.1);
+}
+
+html.light .vm-badge-cyan {
+  background: hsl(190 60% 88%);
+  color: hsl(190 80% 28%);
+  border-color: hsl(190 60% 72% / 0.5);
+}
+html.light .vm-badge-emerald {
+  background: hsl(152 50% 88%);
+  color: hsl(152 60% 26%);
+  border-color: hsl(152 50% 66% / 0.5);
+}
+html.light .vm-badge-gold {
+  background: hsl(43 60% 88%);
+  color: hsl(43 80% 30%);
+  border-color: hsl(43 60% 66% / 0.5);
+}
+html.light .vm-badge-rose {
+  background: hsl(352 50% 90%);
+  color: hsl(352 70% 38%);
+  border-color: hsl(352 50% 70% / 0.5);
+}
+html.light .vm-badge-violet {
+  background: hsl(262 50% 90%);
+  color: hsl(262 70% 38%);
+  border-color: hsl(262 50% 70% / 0.5);
+}
