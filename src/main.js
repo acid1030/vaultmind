@@ -16,6 +16,7 @@ const feishuDrive = require('./core/feishu-drive');
 const feishuWiki = require('./core/feishu-wiki');
 const knowledgeHints = require('./core/knowledge-hints');
 const vectorSearch = require('./core/vector-search');
+const gitProject = require('./core/git-project');
 
 const DEFAULT_SETTINGS = {
   appId: '',
@@ -2209,14 +2210,39 @@ function decryptProjectSecret(accountId) {
 }
 
 function authRemoteUrl(remoteUrl, repo) {
-  const token = decryptProjectSecret(repo.account_id);
-  if (!token || !/^https?:\/\//i.test(remoteUrl)) return remoteUrl;
-  const account = queryOne('SELECT * FROM project_accounts WHERE id = ?', [repo.account_id]);
-  const url = new URL(remoteUrl);
-  const username = account && account.username ? account.username : 'token';
-  url.username = encodeURIComponent(username);
-  url.password = encodeURIComponent(token);
-  return url.toString();
+  const account = repo.account_id
+    ? queryOne('SELECT * FROM project_accounts WHERE id = ?', [repo.account_id])
+    : null;
+  return gitProject.authRemoteUrl(
+    remoteUrl,
+    account && account.username ? account.username : '',
+    decryptProjectSecret(repo.account_id),
+  );
+}
+
+async function projectRepoPayload(row) {
+  const account = row.account_id
+    ? queryOne('SELECT * FROM project_accounts WHERE id = ?', [row.account_id])
+    : null;
+  return {
+    localPath: row.local_path,
+    local_path: row.local_path,
+    remoteUrl: row.remote_url,
+    remote_url: row.remote_url,
+    accountUsername: account && account.username ? account.username : '',
+    secret: decryptProjectSecret(row.account_id),
+  };
+}
+
+async function enrichProjectRepositories(rows) {
+  const enriched = [];
+  for (const row of rows) {
+    const repo = normalizeProjectRepository(row);
+    const payload = await projectRepoPayload(row);
+    const status = await gitProject.inspectRepo(payload.localPath, repo.tool);
+    enriched.push({ ...repo, status });
+  }
+  return enriched;
 }
 
 async function runProjectAction(input) {
@@ -2228,43 +2254,19 @@ async function runProjectAction(input) {
   } else if (repo.user_id !== user.id) {
     throw new Error('找不到项目配置');
   }
-  const localPath = repo.local_path;
   const action = String(input.action || 'status');
-  const isSvn = repo.tool === 'svn';
-  if (action === 'clone') {
-    fs.mkdirSync(path.dirname(localPath), { recursive: true });
-    const targetExists = fs.existsSync(localPath);
-    if (isSvn) {
-      const secret = decryptProjectSecret(repo.account_id);
-      const account = repo.account_id ? queryOne('SELECT * FROM project_accounts WHERE id = ?', [repo.account_id]) : null;
-      const args = ['checkout', repo.remote_url, localPath];
-      if (account && account.username) args.push('--username', account.username);
-      if (secret) args.push('--password', secret, '--non-interactive', '--trust-server-cert');
-      return { output: targetExists ? '本地目录已存在，未执行 checkout。' : await runCommand('svn', args), state: publicState() };
-    }
-    return { output: targetExists ? '本地目录已存在，未执行 clone。' : await runCommand('git', ['clone', authRemoteUrl(repo.remote_url, repo), localPath]), state: publicState() };
+  const payload = await projectRepoPayload(repo);
+
+  if (action === 'open') {
+    const error = await shell.openPath(payload.localPath);
+    if (error) throw new Error(`打开目录失败：${error}`);
+    return { output: `已打开：${payload.localPath}`, state: publicState() };
   }
-  if (!fs.existsSync(localPath)) throw new Error('本地目录不存在，请先克隆/检出');
-  if (isSvn) {
-    const svnMap = {
-      status: ['status'],
-      update: ['update'],
-      log: ['log', '-l', '20'],
-      commit: ['commit', '-m', String(input.message || 'Update from VaultMind')],
-    };
-    return { output: await runCommand('svn', svnMap[action] || svnMap.status, { cwd: localPath }), state: publicState() };
-  }
-  if (action === 'commit') {
-    await runCommand('git', ['add', '-A'], { cwd: localPath });
-  return { output: await runCommand('git', ['commit', '-m', String(input.message || 'Update from VaultMind')], { cwd: localPath }), state: publicState() };
-  }
-  const gitMap = {
-    status: ['status', '--short', '--branch'],
-    update: ['pull', '--ff-only'],
-    log: ['log', '--oneline', '--decorate', '-20'],
-    push: ['push'],
-  };
-  return { output: await runCommand('git', gitMap[action] || gitMap.status, { cwd: localPath }), state: publicState() };
+
+  const output = repo.tool === 'svn'
+    ? await gitProject.runSvnAction(payload, action, input)
+    : await gitProject.runGitAction(payload, action, input);
+  return { output, state: publicState() };
 }
 
 function extractEvidence(payload, sourceName, type) {
@@ -3024,6 +3026,23 @@ function registerHandlers() {
   ipcMain.handle('vault:saveProjectRepository', async (_event, payload) => {
     await ensureDatabase();
     return saveProjectRepository(payload || {});
+  });
+
+  ipcMain.handle('vault:getProjectsDetail', async () => {
+    await ensureDatabase();
+    const user = requireUser();
+    const context = getContext();
+    const data = projectsForContext(user.id, context);
+    const accounts = data.accounts;
+    const repositories = await enrichProjectRepositories(
+      context.scope === 'group'
+        ? queryAll('SELECT * FROM project_repositories WHERE scope = ? AND group_id = ? ORDER BY created_at DESC', ['group', context.groupId])
+        : queryAll(
+          `SELECT * FROM project_repositories WHERE user_id = ? AND (scope IS NULL OR scope = 'personal') ORDER BY created_at DESC`,
+          [user.id],
+        ),
+    );
+    return { accounts, repositories, state: publicState() };
   });
 
   ipcMain.handle('vault:deleteProjectRepository', async (_event, repoId) => {

@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('vaultApi', {
   queryKnowledgeCenter: (payload) => ipcRenderer.invoke('vault:queryKnowledgeCenter', payload),
   saveProjectAccount: (payload) => ipcRenderer.invoke('vault:saveProjectAccount', payload),
   saveProjectRepository: (payload) => ipcRenderer.invoke('vault:saveProjectRepository', payload),
+  getProjectsDetail: () => ipcRenderer.invoke('vault:getProjectsDetail'),
   deleteProjectRepository: (repoId) => ipcRenderer.invoke('vault:deleteProjectRepository', repoId),
   runProjectAction: (payload) => ipcRenderer.invoke('vault:runProjectAction', payload),
   setContext: (payload) => ipcRenderer.invoke('vault:setContext', payload),

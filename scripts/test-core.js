@@ -209,6 +209,13 @@ async function main() {
   assert.equal(files[0].token, 'tok1');
   assert.ok(feishuDrive.findManifestFile(files, 'vaultmind-user-x.axonvault'));
 
+  const gitProject = require('../src/core/git-project');
+  const authed = gitProject.authRemoteUrl('https://github.com/org/repo.git', 'wally', 'ghp_test');
+  assert.ok(authed.includes('wally'));
+  assert.ok(authed.includes('ghp_test'));
+  assert.equal(gitProject.authRemoteUrl('git@github.com:org/repo.git', 'wally', 'ghp_test'), 'git@github.com:org/repo.git');
+  assert.equal(gitProject.isGitRepository('/tmp/not-a-repo'), false);
+
   const wikiHits = feishuWiki.parseSearchResponse({
     data: { items: [{ title: '部署手册', url: 'https://feishu.cn/wiki/x', node_id: 'n1' }] },
   });

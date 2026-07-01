@@ -8,3 +8,5 @@ build/
 *.sqlite-shm
 *.sqlite-wal
 *.tsbuildinfo
+tmp/
+generated-keyframes/
