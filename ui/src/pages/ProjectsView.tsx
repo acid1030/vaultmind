@@ -108,6 +108,8 @@ export default function ProjectsView() {
   }
 
   const handleDeleteRepo = async (repoId: string) => {
+    const repo = repos.find(r => r.id === repoId)
+    if (!window.confirm(`确定要删除项目「${repo?.name || '未命名'}」吗？\n删除后不可恢复。`)) return
     const { error } = await deleteProjectRepository(repoId)
     if (error) {
       toast(`删除失败: ${error}`, 'error')

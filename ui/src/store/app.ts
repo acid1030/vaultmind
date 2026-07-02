@@ -23,12 +23,14 @@ interface AppState {
   setContext: (scope: 'personal' | 'group', groupId?: string) => Promise<void>
   createLibraryItem: (payload: any) => Promise<{ error?: string }>
   unlockItem: (itemId: string) => Promise<{ id?: string; name?: string; text?: string; error?: string }>
+  openItem: (itemId: string) => Promise<{ id?: string; name?: string; kind?: string; content?: string; url?: string; opened?: boolean; path?: string; viewable?: boolean; error?: string }>
   forgetItem: (itemId: string) => Promise<void>
   forgetRecord: (recordId: string) => Promise<void>
   saveItemFile: (itemId: string) => Promise<{ error?: string }>
   openAsset: (payload: any) => Promise<any>
   queryKnowledge: (question: string, options?: any) => Promise<{ answer?: string; evidence?: Evidence[]; error?: string }>
   saveSettings: (settings: any) => Promise<{ error?: string }>
+  saveLocalVectorSettings: (input: { localVectorSearch?: boolean; localVectorModel?: string }) => Promise<{ error?: string }>
   loginFeishu: () => Promise<{ error?: string }>
   logoutFeishu: () => Promise<void>
   saveAiProfile: (profile: any) => Promise<{ error?: string }>
@@ -178,6 +180,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  openItem: async (itemId) => {
+    try {
+      const result = await vaultApi.openItem({ itemId })
+      return result
+    } catch (err: any) {
+      return { error: err.message }
+    }
+  },
+
   forgetItem: async (itemId) => {
     try {
       const state = await vaultApi.forgetItem(itemId)
@@ -228,6 +239,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveSettings: async (settings) => {
     try {
       const state = await vaultApi.saveSettings(settings)
+      set({ state })
+      return {}
+    } catch (err: any) {
+      return { error: err.message }
+    }
+  },
+
+  saveLocalVectorSettings: async (input) => {
+    try {
+      const state = await vaultApi.saveLocalVectorSettings(input)
       set({ state })
       return {}
     } catch (err: any) {

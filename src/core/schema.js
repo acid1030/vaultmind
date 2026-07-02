@@ -78,12 +78,42 @@ function migrateSchema(db) {
         source_table UNINDEXED,
         title,
         tags,
+        content,
         tokenize='unicode61'
       );
     `);
   } catch {
-    // fts5 may already exist
+    // fts5 may not be available in this sql.js build
   }
+
+  // 备用：普通表索引，兼容没有 FTS5 的 sql.js 版本
+  db.run(`
+    CREATE TABLE IF NOT EXISTS asset_search_fallback (
+      asset_id TEXT PRIMARY KEY,
+      owner_user_id TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'personal',
+      group_id TEXT NOT NULL DEFAULT '',
+      kind TEXT,
+      source_table TEXT,
+      title TEXT,
+      tags TEXT,
+      content TEXT
+    );
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_asset_search_owner ON asset_search_fallback(owner_user_id)');
+
+  // 本地向量索引表
+  db.run(`
+    CREATE TABLE IF NOT EXISTS vector_embeddings (
+      asset_id TEXT PRIMARY KEY,
+      owner_user_id TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'personal',
+      group_id TEXT NOT NULL DEFAULT '',
+      vector_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_vector_owner ON vector_embeddings(owner_user_id)');
 }
 
 module.exports = { migrateSchema, ensureColumn };

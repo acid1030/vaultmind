@@ -27,12 +27,24 @@ const LLM_PROVIDERS = [
   { id: 'qwen', label: '千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   { id: 'kimi', label: 'Kimi', url: 'https://api.moonshot.cn/v1' },
   { id: 'zhipu', label: '智谱 AI', url: 'https://open.bigmodel.cn/api/paas/v4' },
+  { id: 'zhipu-coding', label: '智谱 Coding', url: 'https://open.bigmodel.cn/api/coding/paas/v4' },
   { id: 'claude', label: 'Claude', url: 'https://api.anthropic.com/v1' },
   { id: 'custom', label: '自定义', url: '' },
 ]
 
+const MODEL_PRESETS: Record<string, string[]> = {
+  deepseek: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-coder'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  qwen: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwen-coder-plus'],
+  kimi: ['kimi-latest', 'kimi-k2', 'kimi-k1.5', 'moonshot-v1-8k'],
+  zhipu: ['glm-4.5', 'glm-4.5-air', 'glm-4.6', 'glm-4.7', 'glm-5', 'glm-5-turbo', 'glm-5.2'],
+  'zhipu-coding': ['glm-4.5', 'glm-4.5-air', 'glm-4.6', 'glm-4.7', 'glm-5', 'glm-5-turbo', 'glm-5.2'],
+  claude: ['claude-3-5-sonnet-latest', 'claude-3-opus-latest', 'claude-3-haiku-latest'],
+  custom: [],
+}
+
 export default function ConfigView() {
-  const { state, saveSettings, saveAiProfile, loginFeishu, logoutFeishu } = useAppStore()
+  const { state, saveSettings, saveAiProfile, loginFeishu, logoutFeishu, saveLocalVectorSettings } = useAppStore()
   const toast = useToast()
 
   const [active, setActive] = useState<ConfigSection>('llm')
@@ -47,6 +59,7 @@ export default function ConfigView() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'ok' | 'fail' | null>(null)
   const [models, setModels] = useState<string[]>([])
+  const [customModels, setCustomModels] = useState<Record<string, string[]>>({})
 
   // Feishu form
   const settings = state?.settings
@@ -54,7 +67,13 @@ export default function ConfigView() {
   const [appSecret, setAppSecret] = useState('')
   const [folderToken, setFolderToken] = useState('root')
   const [passphrase, setPassphrase] = useState('')
+  const [autoSync, setAutoSync] = useState(false)
   const [showMoreProviders, setShowMoreProviders] = useState(false)
+
+  // Local vector search
+  const [localVectorSearch, setLocalVectorSearch] = useState(false)
+  const [localVectorModel, setLocalVectorModel] = useState('Xenova/all-MiniLM-L6-v2')
+  const [vectorModelLoading, setVectorModelLoading] = useState(false)
 
   // Wiki
   const [wikiEnabled, setWikiEnabled] = useState(true)
@@ -80,6 +99,9 @@ export default function ConfigView() {
       setAppSecret(settings.appSecret || '')
       setFolderToken(settings.folderToken || 'root')
       setPassphrase(settings.feishuPassphrase || '')
+      setAutoSync(Boolean(settings.feishuAutoSync))
+      setLocalVectorSearch(Boolean(settings.localVectorSearch))
+      setLocalVectorModel(settings.localVectorModel || 'Xenova/all-MiniLM-L6-v2')
     }
   }, [settings])
 
@@ -97,6 +119,40 @@ export default function ConfigView() {
       setWikiSpaceId(wikiSettings.spaceId)
     }
   }, [wikiSettings])
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('vaultmind_custom_models')
+      if (raw) setCustomModels(JSON.parse(raw))
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => {
+    setModels([])
+    if (!llmModel && llmProvider) {
+      const presets = MODEL_PRESETS[llmProvider]
+      if (presets && presets[0]) setLlmModel(presets[0])
+    }
+  }, [llmProvider])
+
+  const saveCustomModels = (next: Record<string, string[]>) => {
+    setCustomModels(next)
+    try { localStorage.setItem('vaultmind_custom_models', JSON.stringify(next)) } catch { /* ignore */ }
+  }
+
+  const addCustomModel = (modelId: string) => {
+    const id = modelId.trim()
+    if (!id || !llmProvider) return
+    const list = customModels[llmProvider] || []
+    if (list.includes(id)) return
+    saveCustomModels({ ...customModels, [llmProvider]: [...list, id] })
+  }
+
+  const removeCustomModel = (id: string) => {
+    if (!llmProvider) return
+    const list = (customModels[llmProvider] || []).filter(m => m !== id)
+    saveCustomModels({ ...customModels, [llmProvider]: list })
+  }
 
   const handleSaveLlm = async () => {
     if (!llmUrl || !llmModel) {
@@ -158,6 +214,7 @@ export default function ConfigView() {
       appSecret: appSecret === '********' ? undefined : appSecret,
       folderToken,
       feishuPassphrase: passphrase === '********' ? undefined : passphrase,
+      feishuAutoSync: autoSync,
     })
     if (result.error) {
       toast(result.error, 'error')
@@ -181,6 +238,25 @@ export default function ConfigView() {
       toast('飞书 Wiki 配置已保存', 'success')
     } catch (err: any) {
       toast(err.message || '保存失败', 'error')
+    }
+  }
+
+  const handleSaveLocalVector = async () => {
+    setVectorModelLoading(true)
+    try {
+      const result = await saveLocalVectorSettings({
+        localVectorSearch,
+        localVectorModel: localVectorModel.trim() || 'Xenova/all-MiniLM-L6-v2',
+      })
+      if (result.error) {
+        toast(result.error, 'error')
+      } else {
+        toast('本地向量搜索配置已保存', 'success')
+      }
+    } catch (err: any) {
+      toast(err.message || '保存失败', 'error')
+    } finally {
+      setVectorModelLoading(false)
     }
   }
 
@@ -279,17 +355,15 @@ export default function ConfigView() {
                       <Globe className="w-3.5 h-3.5" />
                     </Button>
                   </div>
-                  {models.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {models.slice(0, 6).map(m => (
-                        <button key={m} onClick={() => setLlmModel(m)}
-                          className="text-[10px] px-2 py-0.5 rounded-sm transition-colors"
-                          style={{ background: 'hsl(218 28% 14%)', color: 'hsl(218 16% 52%)' }}>
-                          {m}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <ModelChips
+                    models={models}
+                    provider={llmProvider}
+                    selected={llmModel}
+                    customModels={customModels}
+                    onSelect={setLlmModel}
+                    onAdd={addCustomModel}
+                    onRemove={removeCustomModel}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs mb-1.5 text-muted-foreground" >Base URL</label>
@@ -384,6 +458,20 @@ export default function ConfigView() {
                 </div>
               </div>
 
+              <label className="flex items-center gap-2.5 p-3 rounded-lg cursor-pointer"
+                style={{ background: 'hsl(218 36% 8%)', border: '1px solid hsl(218 24% 16%)' }}>
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-muted-foreground text-primary"
+                  checked={autoSync}
+                  onChange={e => setAutoSync(e.target.checked)}
+                />
+                <div>
+                  <p className="text-xs font-medium text-foreground" >创建内容后自动同步到飞书</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">开启后，新建文本/链接条目会尝试自动上传到飞书云盘</p>
+                </div>
+              </label>
+
               <div className="flex gap-2.5 flex-wrap">
                 <Button variant="primary" onClick={handleSaveFeishu}>
                   <Save className="w-4 h-4" />
@@ -421,7 +509,54 @@ export default function ConfigView() {
             </div>
           )}
 
-          {(active === 'knowledge' || active === 'vector' || active === 'obsidian') && (
+          {active === 'vector' && (
+            <div className="space-y-4 max-w-2xl">
+              <div className="p-4 rounded-lg"
+                style={{ background: 'hsl(190 60% 12% / 0.3)', border: '1px solid hsl(190 60% 22% / 0.3)' }}>
+                <p className="text-xs leading-relaxed" style={{ color: 'hsl(190 60% 60%)' }}>
+                  开启后，本地内容会自动生成向量索引。语义搜索时优先按意思匹配，不再只靠关键词。
+                  首次使用需要下载 embedding 模型（约 80MB）。
+                </p>
+              </div>
+
+              <label className="flex items-center gap-2.5 p-3 rounded-lg cursor-pointer"
+                style={{ background: 'hsl(218 36% 8%)', border: '1px solid hsl(218 24% 16%)' }}>
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 rounded border-muted-foreground text-primary"
+                  checked={localVectorSearch}
+                  onChange={e => setLocalVectorSearch(e.target.checked)}
+                />
+                <div>
+                  <p className="text-xs font-medium text-foreground" >启用本地向量搜索</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">新建/上传内容时自动生成向量索引</p>
+                </div>
+              </label>
+
+              <div>
+                <label className="block text-xs mb-1.5 text-muted-foreground" >Embedding 模型</label>
+                <input className="vm-input" placeholder="Xenova/all-MiniLM-L6-v2"
+                  value={localVectorModel}
+                  onChange={e => setLocalVectorModel(e.target.value)}
+                  disabled={!localVectorSearch} />
+                <p className="text-[10px] text-muted-foreground mt-1">推荐：Xenova/all-MiniLM-L6-v2（80MB，中英文通用）</p>
+              </div>
+
+              <div className="flex gap-2.5 flex-wrap">
+                <Button variant="primary" onClick={handleSaveLocalVector} disabled={vectorModelLoading}>
+                  {vectorModelLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  保存配置
+                </Button>
+              </div>
+
+              <div className="pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+                <p className="text-xs font-medium text-foreground mb-3" >外部向量数据库（可选）</p>
+                <KnowledgeSourceConfig type="vector" />
+              </div>
+            </div>
+          )}
+
+          {(active === 'knowledge' || active === 'obsidian') && (
             <KnowledgeSourceConfig type={active} />
           )}
 
@@ -454,6 +589,83 @@ export default function ConfigView() {
 }
 
 // ── Knowledge Source Config Component ─────────────────────
+
+function ModelChips({
+  models,
+  provider,
+  selected,
+  customModels,
+  onSelect,
+  onAdd,
+  onRemove,
+}: {
+  models: string[]
+  provider: string
+  selected: string
+  customModels: Record<string, string[]>
+  onSelect: (m: string) => void
+  onAdd: (m: string) => void
+  onRemove: (m: string) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const presets = MODEL_PRESETS[provider] || []
+  const suggestions = models.length > 0
+    ? Array.from(new Set([...models, ...presets, ...(customModels[provider] || [])]))
+    : Array.from(new Set([...presets, ...(customModels[provider] || [])]))
+
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      <div className="flex flex-wrap gap-1">
+        {suggestions.slice(0, 12).map(m => {
+          const isCustom = (customModels[provider] || []).includes(m)
+          return (
+            <button key={m} onClick={() => onSelect(m)}
+              className={cn(
+                "group flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-sm transition-colors",
+                selected === m
+                  ? "text-[hsl(190_90%_72%)]"
+                  : "text-[hsl(218_16%_52%)] hover:text-[hsl(218_16%_72%)]"
+              )}
+              style={{ background: selected === m ? 'hsl(190 60% 18%)' : 'hsl(218 28% 14%)' }}>
+              {m}
+              {isCustom && (
+                <span
+                  onClick={e => { e.stopPropagation(); onRemove(m) }}
+                  className="ml-0.5 opacity-60 group-hover:opacity-100 hover:text-[hsl(352_84%_60%)]"
+                  title="删除自定义模型">
+                  ×
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <div className="flex gap-1">
+        <input
+          className="vm-input text-[11px] py-1"
+          style={{ minHeight: 0 }}
+          placeholder="输入自定义模型 ID，例如 glm-5.2-flash"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onAdd(draft)
+              setDraft('')
+            }
+          }}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => { onAdd(draft); setDraft('') }}
+          disabled={!draft.trim() || !provider}>
+          <Plus className="w-3 h-3" />
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 function KnowledgeSourceConfig({ type }: { type: 'knowledge' | 'vector' | 'obsidian' }) {
   const { state } = useAppStore()
@@ -507,6 +719,8 @@ function KnowledgeSourceConfig({ type }: { type: 'knowledge' | 'vector' | 'obsid
   }
 
   const handleDelete = async (id: string) => {
+    const src = (sources || []).find((s: any) => s.id === id)
+    if (!window.confirm(`确定要删除${isVector ? '向量库' : isObsidian ? 'Obsidian' : '知识库'}「${src?.name || '未命名'}」吗？`)) return
     try {
       const remaining = (sources || []).filter(s => s.id !== id)
       if (isObsidian) {

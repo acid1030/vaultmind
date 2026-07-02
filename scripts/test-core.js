@@ -180,8 +180,9 @@ async function main() {
     title: '生产密钥',
     tags: 'prod api',
   });
-  const hits = searchService.searchLocalAssets(db, queryAll, userA.id, '生产', { scope: 'personal', groupId: '' });
+  const hits = await searchService.searchLocalAssets(db, queryAll, userA.id, '生产', { scope: 'personal', groupId: '' });
   assert.ok(hits.length >= 1, 'fts should find item');
+  assert.ok(hits[0].content.includes('生产密钥') || hits[0].title.includes('生产密钥'), 'evidence should include content');
 
   const localManifest = manifestService.buildManifestEntries(db, queryAll, userA.id, 'personal', '');
   const remoteManifest = {

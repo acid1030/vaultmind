@@ -159,7 +159,7 @@ function applyManifestToDatabase(db, queryOne, queryAll, saveDatabase, user, sco
         user.id,
         item.tags || '',
         item.updatedAt || now,
-        item.remoteOnly ? 1 : 1,
+        item.remoteOnly ? 1 : 0,
       ],
     );
     addedItems += 1;

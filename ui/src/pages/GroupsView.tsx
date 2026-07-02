@@ -139,6 +139,8 @@ export default function GroupsView() {
   }
 
   const handleRemoveMember = async (memberId: string) => {
+    const member = members.find(m => m.id === memberId)
+    if (!window.confirm(`确定要将成员「${member?.name || member?.username || '未命名'}」移出用户组吗？`)) return
     setActionLoading(true)
     const { error } = await removeGroupMember(selectedGroupId, memberId)
     setActionLoading(false)

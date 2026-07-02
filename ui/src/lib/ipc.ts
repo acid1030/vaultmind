@@ -22,6 +22,9 @@ export interface VaultSettings {
   hasFeishuPassphrase: boolean
   folderToken: string
   redirectPort: number
+  feishuAutoSync?: boolean
+  localVectorSearch?: boolean
+  localVectorModel?: string
 }
 
 export interface VaultContext {
@@ -224,6 +227,7 @@ export interface VaultApi {
   changeLocalPassword: (payload: { currentPassword: string; newPassword: string }) => Promise<VaultState>
   resetPassword: (payload: { email: string; recoveryCode: string; newPassword: string }) => Promise<{ ok: boolean }>
   saveSettings: (settings: Partial<VaultSettings>) => Promise<VaultState>
+  saveLocalVectorSettings: (input: { localVectorSearch?: boolean; localVectorModel?: string }) => Promise<VaultState>
   testFeishuSync: (payload: any) => Promise<any>
   login: () => Promise<VaultState>
   loginFeishu: () => Promise<VaultState>
@@ -239,6 +243,7 @@ export interface VaultApi {
   downloadRecord: (payload: any) => Promise<VaultState>
   openAsset: (payload: any) => Promise<any>
   unlockItem: (payload: { itemId: string }) => Promise<{ id: string; name: string; text: string }>
+  openItem: (payload: { itemId: string }) => Promise<{ id: string; name: string; kind: string; content?: string; url?: string; opened?: boolean; path?: string; viewable?: boolean }>
   saveItemFile: (payload: { itemId: string }) => Promise<VaultState>
   forgetRecord: (recordId: string) => Promise<VaultState>
   forgetItem: (itemId: string) => Promise<VaultState>
@@ -310,6 +315,7 @@ const mockVaultApi: VaultApi = {
   changeLocalPassword: async () => { throw new Error('Electron 不可用') },
   resetPassword: async () => { throw new Error('Electron 不可用') },
   saveSettings: async () => { throw new Error('Electron 不可用') },
+  saveLocalVectorSettings: async () => { throw new Error('Electron 不可用') },
   testFeishuSync: async () => { throw new Error('Electron 不可用') },
   login: async () => { throw new Error('Electron 不可用') },
   loginFeishu: async () => { throw new Error('Electron 不可用') },
@@ -325,6 +331,7 @@ const mockVaultApi: VaultApi = {
   downloadRecord: async () => { throw new Error('Electron 不可用') },
   openAsset: async () => { throw new Error('Electron 不可用') },
   unlockItem: async () => { throw new Error('Electron 不可用') },
+  openItem: async () => { throw new Error('Electron 不可用') },
   saveItemFile: async () => { throw new Error('Electron 不可用') },
   forgetRecord: async () => { throw new Error('Electron 不可用') },
   forgetItem: async () => { throw new Error('Electron 不可用') },

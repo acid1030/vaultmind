@@ -7,6 +7,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
+import { vaultApi } from '@/lib/ipc'
 import type { LibraryItem, SyncRecord } from '@/lib/ipc'
 
 interface LibraryViewProps {
@@ -83,6 +84,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
   const {
     state,
     unlockItem,
+    openItem,
     saveItemFile,
     forgetItem,
     forgetRecord,
@@ -99,6 +101,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE])
   const [isQuerying, setIsQuerying] = useState(false)
   const [filter, setFilter] = useState<string>('all')
+  const [preview, setPreview] = useState<{ open: boolean; item?: LibraryItem; content?: string; url?: string; kind?: string; loading: boolean }>({ open: false, loading: false })
 
   const filteredItems = items.filter((item: LibraryItem) => {
     const f = FILTERS.find(fi => fi.id === filter)
@@ -120,6 +123,22 @@ export default function LibraryView({ context }: LibraryViewProps) {
     }
   }
 
+  const handleOpen = async (item: LibraryItem) => {
+    setPreview({ open: true, item, loading: true })
+    const result = await openItem(item.id)
+    if (result.error) {
+      setPreview({ open: false, loading: false })
+      toast(result.error, 'error')
+      return
+    }
+    if (result.opened) {
+      setPreview({ open: false, loading: false })
+      toast('已用系统应用打开文件', 'success')
+      return
+    }
+    setPreview({ open: true, item, content: result.content, url: result.url, kind: result.kind, loading: false })
+  }
+
   const handleSaveFile = async (item: LibraryItem) => {
     const result = await saveItemFile(item.id)
     if (result.error) {
@@ -130,6 +149,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
   }
 
   const handleDeleteItem = async (item: LibraryItem) => {
+    if (!window.confirm(`确定要删除内容条目「${item.title || '未命名'}」吗？\n删除后不可恢复。`)) return
     await forgetItem(item.id)
     toast('已删除内容条目', 'info')
   }
@@ -145,6 +165,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
   }
 
   const handleDeleteRecord = async (record: SyncRecord) => {
+    if (!window.confirm(`确定要删除同步记录「${record.fileName || '未命名'}」吗？\n这会移除本地索引，已上传到飞书的文件仍保留在云端。`)) return
     await forgetRecord(record.id)
     toast('已删除同步记录', 'info')
   }
@@ -217,6 +238,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
               const Icon = kc.icon
               return (
                 <div key={item.id}
+                  onDoubleClick={() => handleOpen(item)}
                   className="px-4 py-3 flex items-center gap-3 group transition-colors cursor-pointer hover:bg-muted border-b border-border last:border-b-0">
                   {/* 图标 */}
                   <div className={cn(
@@ -386,6 +408,32 @@ export default function LibraryView({ context }: LibraryViewProps) {
           </p>
         </div>
       </div>
+
+      {/* 内容预览弹窗 */}
+      {preview.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setPreview({ open: false, loading: false })}>
+          <div className="glass-card rounded-lg w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <h3 className="text-sm font-semibold truncate pr-4">{preview.item?.title}</h3>
+              <button onClick={() => setPreview({ open: false, loading: false })} className="text-muted-foreground hover:text-foreground text-lg">×</button>
+            </div>
+            <div className="p-4 overflow-auto flex-1">
+              {preview.loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-5 h-5 animate-spin text-cyan" />
+                </div>
+              ) : preview.url ? (
+                <a href={preview.url} target="_blank" rel="noreferrer" className="text-sm text-cyan hover:underline break-all" onClick={(e) => { e.preventDefault(); vaultApi.openExternal?.(preview.url || '') }}>{preview.url}</a>
+              ) : (
+                <pre className="text-xs whitespace-pre-wrap font-mono" style={{ color: 'hsl(218 16% 72%)' }}>{preview.content}</pre>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
+              <Button variant="outline" size="sm" onClick={() => setPreview({ open: false, loading: false })}>关闭</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

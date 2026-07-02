@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import PasswordGen from '@/components/shared/PasswordGen'
+import type { LibraryItem } from '@/lib/ipc'
 
 type Category = 'all' | 'secret' | 'api' | 'ssh' | 'git'
 
@@ -74,6 +75,12 @@ export default function PasswordVaultView() {
     setCopiedId(id)
     setTimeout(() => setCopiedId(null), 2000)
     toast('已复制到剪贴板', 'success', 2000)
+  }
+
+  const handleDeleteItem = async (item: LibraryItem) => {
+    if (!window.confirm(`确定要删除密码条目「${item.title || '未命名'}」吗？\n删除后不可恢复。`)) return
+    await forgetItem(item.id)
+    toast('已删除密码条目', 'info')
   }
 
   const handleUnlock = async (itemId: string) => {
@@ -238,7 +245,7 @@ export default function PasswordVaultView() {
                       <Unlock className="w-3 h-3" />
                     </Button>
                     <Button variant="ghost" size="icon-sm" style={{ color: 'hsl(352 84% 60%)' }}
-                      onClick={() => forgetItem(item.id)} title="删除">
+                      onClick={() => handleDeleteItem(item)} title="删除">
                       <Trash2 className="w-3 h-3" />
                     </Button>
                   </div>

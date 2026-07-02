@@ -9,11 +9,13 @@ const initSqlJs = require('sql.js');
 const { migrateSchema } = require('./core/schema');
 const groupService = require('./core/groups');
 const searchService = require('./core/search');
+const extractContent = require('./core/extract-content');
 const manifestService = require('./core/manifest-sync');
 const groupCrypto = require('./core/group-crypto');
 const feishuDrive = require('./core/feishu-drive');
 const feishuWiki = require('./core/feishu-wiki');
 const knowledgeHints = require('./core/knowledge-hints');
+const vectorSearch = require('./core/vector-search');
 
 const DEFAULT_SETTINGS = {
   appId: '',
@@ -21,6 +23,9 @@ const DEFAULT_SETTINGS = {
   feishuPassphrase: '',
   folderToken: 'root',
   redirectPort: 37891,
+  feishuAutoSync: false,
+  localVectorSearch: false,
+  localVectorModel: 'Xenova/all-MiniLM-L6-v2',
 };
 
 const VAULT_VERSION = 2;
@@ -387,8 +392,14 @@ function restoreLocalSession() {
       clearLocalSession();
       return;
     }
+    const restoredPassword = restoreSessionPassword();
+    if (!restoredPassword) {
+      // 密码缓存丢失，强制重新登录，避免进入「已登录但无法解密」的异常状态
+      clearLocalSession();
+      return;
+    }
     activeUser = queryOne('SELECT * FROM users WHERE id = ?', [row.user_id]);
-    activePassword = restoreSessionPassword();
+    activePassword = restoredPassword;
     db.run('UPDATE local_sessions SET expires_at = ? WHERE token_hash = ?', [Date.now() + LOCAL_SESSION_TTL_MS, hashSessionToken(token)]);
     saveDatabase();
   } catch {
@@ -534,7 +545,7 @@ function publicState() {
   const groups = activeUser
     ? groupService.getUserGroups(db, queryAll, activeUser.id).map(groupService.normalizeGroup)
     : [];
-  const aiProfile = activeUser ? normalizeAiProfile(queryOne('SELECT * FROM ai_profiles WHERE user_id = ?', [activeUser.id])) : null;
+  const aiProfile = activeUser ? normalizeAiProfile(getAiProfileRow(activeUser.id)) : null;
   const knowledgeSources = activeUser
     ? queryAll('SELECT * FROM knowledge_sources WHERE user_id = ? ORDER BY created_at DESC', [activeUser.id]).map(normalizeSource)
     : [];
@@ -656,6 +667,13 @@ function normalizeAiProfile(row) {
   };
 }
 
+function getAiProfileRow(userId) {
+  const own = queryOne('SELECT * FROM ai_profiles WHERE user_id = ?', [userId]);
+  if (own) return own;
+  // 当前用户未配置时，回退到数据库中任意一份可用配置（全局共享）
+  return queryOne('SELECT * FROM ai_profiles WHERE base_url IS NOT NULL AND base_url <> \'\' AND model IS NOT NULL AND model <> \'\' ORDER BY rowid DESC LIMIT 1');
+}
+
 function normalizeSource(row) {
   return {
     id: row.id,
@@ -755,6 +773,9 @@ function sanitizeSettings(input, previousSecret = '', previousFeishuPassphrase =
       : String(input.feishuPassphrase || ''),
     folderToken: String(input.folderToken || 'root').trim() || 'root',
     redirectPort: Number.isFinite(redirectPort) && redirectPort > 0 ? Math.floor(redirectPort) : DEFAULT_SETTINGS.redirectPort,
+    feishuAutoSync: Boolean(input.feishuAutoSync),
+    localVectorSearch: Boolean(input.localVectorSearch),
+    localVectorModel: String(input.localVectorModel || DEFAULT_SETTINGS.localVectorModel).trim() || DEFAULT_SETTINGS.localVectorModel,
   };
 }
 
@@ -763,6 +784,29 @@ function configuredFeishuPassphrase(inputPassphrase = '') {
   const passphrase = input && input !== '********' ? input : String(getSettings().feishuPassphrase || '');
   if (passphrase.length < 8) throw new Error('请先在「配置 → 飞书同步」设置至少 8 位的飞书加密口令');
   return passphrase;
+}
+
+function isLocalVectorSearchEnabled() {
+  const settings = getSettings();
+  return Boolean(settings.localVectorSearch);
+}
+
+function currentVectorModel() {
+  const settings = getSettings();
+  return String(settings.localVectorModel || DEFAULT_SETTINGS.localVectorModel).trim() || DEFAULT_SETTINGS.localVectorModel;
+}
+
+async function maybeIndexVector(payload) {
+  if (!isLocalVectorSearchEnabled()) return { skipped: true };
+  try {
+    return await vectorSearch.indexVector(db, {
+      ...payload,
+      modelName: currentVectorModel(),
+    });
+  } catch (error) {
+    console.error('向量索引失败:', error.message || error);
+    return { error: String(error.message || error) };
+  }
 }
 
 function requestJson(method, urlText, options = {}) {
@@ -1282,7 +1326,7 @@ async function resolveWritableFeishuFolder(preferredToken) {
   }
 }
 
-function saveSyncRecord(user, input) {
+async function saveSyncRecord(user, input) {
   const now = input.uploadedAt || new Date().toISOString();
   const record = {
     id: input.id || crypto.randomUUID(),
@@ -1308,6 +1352,34 @@ function saveSyncRecord(user, input) {
       record.uploadedAt, record.algorithm, record.kind, record.scope, record.groupId, user.id, record.assetId,
     ],
   );
+  let content = '';
+  if (input.contentBase64) {
+    try {
+      content = await extractContent.extractTextFromBuffer(Buffer.from(input.contentBase64, 'base64'), record.fileName);
+    } catch {
+      // ignore extraction failures
+    }
+  } else if (record.localPath && record.kind === 'file') {
+    content = await extractContent.extractTextFromFile(record.localPath);
+  }
+  searchService.indexAsset(db, {
+    assetId: record.id,
+    ownerUserId: record.userId,
+    scope: record.scope,
+    groupId: record.groupId || '',
+    kind: record.kind,
+    sourceTable: 'records',
+    title: record.fileName,
+    tags: record.localPath || '',
+    content,
+  });
+  await maybeIndexVector({
+    assetId: record.id,
+    ownerUserId: record.userId,
+    scope: record.scope,
+    groupId: record.groupId || '',
+    text: `${record.fileName}\n${content}`,
+  });
   saveDatabase();
   return record;
 }
@@ -1438,7 +1510,7 @@ async function pushManifestToFeishu(payload) {
     url: data.url || '',
     syncedAt: new Date().toISOString(),
   });
-  saveSyncRecord(user, {
+  await saveSyncRecord(user, {
     fileName,
     size: encrypted.length,
     token: data.file_token,
@@ -1560,6 +1632,7 @@ async function uploadVaultPayload(payload, passphrase, scopeMeta = {}, options =
     scope,
     groupId,
     assetId: payload.assetId || null,
+    contentBase64: payload.contentBase64 || '',
   });
 }
 
@@ -1673,6 +1746,14 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
       user.id,
     ],
   );
+  let fileContent = '';
+  if (payload.kind === 'file') {
+    try {
+      fileContent = await extractContent.extractTextFromBuffer(plainBytes, payload.name || record.fileName);
+    } catch {
+      // ignore extraction failures
+    }
+  }
   searchService.indexAsset(db, {
     assetId: itemId,
     ownerUserId: user.id,
@@ -1682,6 +1763,14 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
     sourceTable: 'decrypted_items',
     title: payload.name || record.fileName,
     tags: '',
+    content: fileContent,
+  });
+  await maybeIndexVector({
+    assetId: itemId,
+    ownerUserId: user.id,
+    scope,
+    groupId: groupId || '',
+    text: `${payload.name || record.fileName}\n${fileContent}`,
   });
   saveDatabase();
   return publicState();
@@ -1824,7 +1913,7 @@ function saveObsidianSources(sources) {
   return publicState();
 }
 
-function createLibraryItem(input) {
+async function createLibraryItem(input) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
   const { scope, groupId } = resolveScopeFromInput(input);
@@ -1860,6 +1949,14 @@ function createLibraryItem(input) {
     sourceTable: 'library_items',
     title,
     tags,
+    content: text,
+  });
+  await maybeIndexVector({
+    assetId: id,
+    ownerUserId: user.id,
+    scope,
+    groupId: scope === 'group' ? groupId : '',
+    text: `${title}\n${text}`,
   });
   saveDatabase();
   return publicState();
@@ -1888,6 +1985,43 @@ function unlockLibraryItem(itemId) {
   const bytes = decryptContent(row, user, localPassword);
   if (row.kind !== 'text') throw new Error('这个条目是文件，请使用保存到本地');
   return { id: row.id, name: row.name, title: row.name, kind: 'text', content: bytes.toString('utf8') };
+}
+
+function openLibraryItem(itemId) {
+  const user = requireUser();
+  const localPassword = requireSessionPassword();
+  const lib = queryOne('SELECT * FROM library_items WHERE id = ?', [itemId]);
+  if (lib) {
+    if (lib.scope === 'group') {
+      groupService.requireGroupAccess(db, queryOne, lib.group_id, user.id);
+    } else if (lib.user_id !== user.id) {
+      throw new Error('找不到这条本地内容');
+    }
+    const bytes = decryptContent(lib, user, localPassword);
+    const parsed = JSON.parse(bytes.toString('utf8'));
+    return { id: lib.id, name: lib.title, kind: lib.kind, ...parsed, viewable: true };
+  }
+  const row = queryOne('SELECT * FROM decrypted_items WHERE id = ?', [itemId]);
+  if (!row) throw new Error('找不到这条本地内容');
+  if (row.scope === 'group') {
+    groupService.requireGroupAccess(db, queryOne, row.group_id, user.id);
+  } else if (row.user_id !== user.id) {
+    throw new Error('找不到这条本地内容');
+  }
+  const bytes = decryptContent(row, user, localPassword);
+  if (row.kind === 'file') {
+    const tempDir = path.join(app.getPath('temp'), 'vaultmind-previews');
+    fs.mkdirSync(tempDir, { recursive: true });
+    const ext = path.extname(row.name || '') || '';
+    const tempPath = path.join(tempDir, `${crypto.randomUUID()}${ext}`);
+    fs.writeFileSync(tempPath, bytes);
+    const error = shell.openPath(tempPath);
+    if (error && error !== '') {
+      throw new Error(`无法打开文件：${error}`);
+    }
+    return { id: row.id, name: row.name, kind: row.kind, opened: true, path: tempPath };
+  }
+  return { id: row.id, name: row.name, kind: row.kind || 'text', title: row.name, content: bytes.toString('utf8'), viewable: true };
 }
 
 function changeLocalPassword(input) {
@@ -2253,10 +2387,16 @@ async function queryKnowledgeCenter(question, options = {}) {
   const obsidianSources = includePersonal
     ? queryAll('SELECT * FROM obsidian_sources WHERE user_id = ? AND enabled = 1', [user.id])
     : [];
-  const aiProfile = queryOne('SELECT * FROM ai_profiles WHERE user_id = ?', [user.id]);
-  searchService.ensureSearchIndex(db, queryAll, user.id);
+  const aiProfile = getAiProfileRow(user.id);
+  searchService.ensureSearchIndex(db, queryAll, user.id, {
+    decryptLibraryItem: (row) => decryptContent(row, user, requireSessionPassword()),
+  });
   saveDatabase();
-  const evidence = [...searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext)];
+  const vectorOptions = {
+    enabled: isLocalVectorSearchEnabled(),
+    modelName: currentVectorModel(),
+  };
+  const evidence = [...await searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext, vectorOptions)];
   const setupHints = [];
 
   const feishuToken = getFeishuToken();
@@ -2616,6 +2756,18 @@ function registerHandlers() {
     return publicState();
   });
 
+  ipcMain.handle('vault:saveLocalVectorSettings', async (_event, input) => {
+    await ensureDatabase();
+    requireUser();
+    const previous = getSettings();
+    setStateValue('settings', {
+      ...previous,
+      localVectorSearch: Boolean(input?.localVectorSearch),
+      localVectorModel: String(input?.localVectorModel || DEFAULT_SETTINGS.localVectorModel).trim() || DEFAULT_SETTINGS.localVectorModel,
+    });
+    return publicState();
+  });
+
   ipcMain.handle('vault:testFeishuSync', async (_event, input) => {
     await ensureDatabase();
     return testFeishuSync(input || {});
@@ -2777,6 +2929,11 @@ function registerHandlers() {
     return { id: item.id, name: item.name || item.title, text: item.content || item.url || '' };
   });
 
+  ipcMain.handle('vault:openItem', async (_event, payload) => {
+    await ensureDatabase();
+    return openLibraryItem(String(payload.itemId || ''));
+  });
+
   ipcMain.handle('vault:saveItemFile', async (_event, payload) => {
     await ensureDatabase();
     const user = requireUser();
@@ -2813,6 +2970,7 @@ function registerHandlers() {
     }
     db.run('DELETE FROM records WHERE id = ?', [recordId]);
     db.run('DELETE FROM decrypted_items WHERE record_id = ?', [recordId]);
+    vectorSearch.removeVector(db, recordId);
     saveDatabase();
     return publicState();
   });
@@ -2833,13 +2991,29 @@ function registerHandlers() {
     db.run('DELETE FROM decrypted_items WHERE id = ?', [id]);
     db.run('DELETE FROM library_items WHERE id = ?', [id]);
     searchService.removeAssetIndex(db, id);
+    vectorSearch.removeVector(db, id);
     saveDatabase();
     return publicState();
   });
 
   ipcMain.handle('vault:createLibraryItem', async (_event, payload) => {
     await ensureDatabase();
-    return createLibraryItem(payload || {});
+    const result = await createLibraryItem(payload || {});
+    const settings = getSettings();
+    if (settings.feishuAutoSync && ['text', 'secret', 'web', 'video'].includes(String(payload?.kind || 'text'))) {
+      try {
+        const scopeMeta = resolveScopeFromInput(payload || {});
+        const passphrase = configuredFeishuPassphrase(settings.feishuPassphrase);
+        const text = String(payload?.content || '').trim();
+        const title = String(payload?.title || '').trim() || '未命名条目';
+        if (text) {
+          await uploadVaultPayload(payloadFromText(title, text), passphrase, scopeMeta);
+        }
+      } catch (syncError) {
+        console.error('自动同步到飞书失败:', syncError.message || syncError);
+      }
+    }
+    return result;
   });
 
   ipcMain.handle('vault:saveProjectAccount', async (_event, payload) => {
@@ -3005,7 +3179,11 @@ function registerHandlers() {
     const context = payload?.searchScope === 'all'
       ? { scope: 'all', groupId: '' }
       : (payload?.context || getContext());
-    const results = searchService.searchLocalAssets(db, queryAll, user.id, q, context);
+    const vectorOptions = {
+      enabled: isLocalVectorSearchEnabled(),
+      modelName: currentVectorModel(),
+    };
+    const results = await searchService.searchLocalAssets(db, queryAll, user.id, q, context, vectorOptions);
     return { results, state: publicState() };
   });
 
@@ -3029,7 +3207,7 @@ function registerHandlers() {
       throw new Error('只能复制自己的个人库条目到组');
     }
     const bytes = decryptContent(lib, user, password);
-    createLibraryItem({
+    await createLibraryItem({
       kind: lib.kind,
       title: `${lib.title} (组副本)`,
       url: lib.url || '',

@@ -52,24 +52,27 @@ function httpsJson(method, urlText, headers, body) {
 
 async function testDeepSeek(baseUrl, apiKey, model) {
   const root = baseUrl.replace(/\/$/, '');
-  const endpoint = root.endsWith('/v1') ? `${root}/chat/completions` : `${root}/v1/chat/completions`;
-  const { status, text } = await httpsJson('POST', endpoint, {
-    Authorization: `Bearer ${apiKey}`,
-  }, {
-    model: model || 'deepseek-chat',
-    messages: [{ role: 'user', content: 'reply with OK only' }],
-    max_tokens: 8,
-    temperature: 0,
-  });
-  if (status >= 400) {
+  const candidates = root.endsWith('/v1') ? [root] : [root, `${root}/v1`];
+  const errors = [];
+  for (const candidate of candidates) {
+    const endpoint = `${candidate}/chat/completions`;
+    const { status, text } = await httpsJson('POST', endpoint, {
+      Authorization: `Bearer ${apiKey}`,
+    }, {
+      model: model || 'deepseek-chat',
+      messages: [{ role: 'user', content: 'reply with OK only' }],
+      max_tokens: 8,
+      temperature: 0,
+    });
+    if (status < 400) return `模型 API 响应正常 (${endpoint})`;
     let msg = text.slice(0, 280);
     try {
       const j = JSON.parse(text);
       msg = j.error?.message || j.msg || msg;
     } catch { /* ignore */ }
-    throw new Error(`HTTP ${status}: ${msg}`);
+    errors.push(`${endpoint} → HTTP ${status}: ${msg}`);
   }
-  return '模型 API 响应正常';
+  throw new Error(errors.join(' | '));
 }
 
 async function main() {
