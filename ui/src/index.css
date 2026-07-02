@@ -372,3 +372,90 @@ html.light .vm-badge-violet {
   color: hsl(262 70% 38%);
   border-color: hsl(262 50% 70% / 0.5);
 }
+
+/* ─── 覆盖内联硬编码颜色 ───────────────────────────────── */
+/* 大量组件使用内联 style={{ color: 'hsl(...)' }}，在亮色主题下无法自动适配。
+   以下规则用属性选择器覆盖最常见的文本颜色，使主题切换基本可用。 */
+html.light [style*="color: hsl(210 30%"] {
+  color: hsl(var(--foreground)) !important;
+}
+html.light [style*="color: hsl(218 16%"] {
+  color: hsl(var(--muted-foreground)) !important;
+}
+html.light [style*="color: hsl(218 24%"] {
+  color: hsl(var(--border)) !important;
+}
+
+/* 覆盖内联背景：聊天框、卡片、列表悬停等 */
+html.light [style*="background: hsl(218 30% 10%"] {
+  background: hsl(var(--card)) !important;
+}
+html.light [style*="background: hsl(218 36% 7%)"] {
+  background: hsl(var(--muted)) !important;
+}
+html.light [style*="background: hsl(218 36% 8%)"] {
+  background: hsl(var(--muted)) !important;
+}
+html.light [style*="background: hsl(218 28% 14%)"] {
+  background: hsl(var(--muted)) !important;
+}
+html.light [style*="background: hsl(218 42% 2%"] {
+  background: hsl(218 20% 40% / 0.2) !important;
+}
+
+/* 覆盖内联边框 */
+html.light [style*="border: 1px solid hsl(218 24%"] {
+  border-color: hsl(var(--border)) !important;
+}
+html.light [style*="border-bottom: 1px solid hsl(218 24%"] {
+  border-bottom-color: hsl(var(--border)) !important;
+}
+html.light [style*="border-top: 1px solid hsl(218 24%"] {
+  border-top-color: hsl(var(--border)) !important;
+}
+
+/* ─── 动画 ─────────────────────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.animate-shimmer {
+  animation: shimmer 1.5s infinite linear;
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease;
+}
+
+@keyframes scale-in {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slide-up {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}

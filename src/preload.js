@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('vaultApi', {
   saveSettings: (settings) => ipcRenderer.invoke('vault:saveSettings', settings),
   testFeishuSync: (payload) => ipcRenderer.invoke('vault:testFeishuSync', payload),
   login: () => ipcRenderer.invoke('vault:login'),
+  loginFeishu: () => ipcRenderer.invoke('vault:loginFeishu'),
   openFeishuRedirectSettings: () => ipcRenderer.invoke('vault:openFeishuRedirectSettings'),
   logout: () => ipcRenderer.invoke('vault:logout'),
   chooseFiles: () => ipcRenderer.invoke('vault:chooseFiles'),

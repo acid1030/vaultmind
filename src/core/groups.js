@@ -116,13 +116,14 @@ function inviteToGroup(db, saveDatabase, queryOne, queryAll, inviter, password, 
   const groupKey = getGroupKeyForUser(db, queryOne, groupId, inviter.id, inviter, password);
   const sealed = inviteCrypto.sealGroupKeyForInvite(groupKey, email, groupId);
   db.run('DELETE FROM group_invites WHERE group_id = ? AND invitee_email = ? AND status = ?', [groupId, email, 'pending']);
+  const inviteId = crypto.randomUUID();
   db.run(
     `INSERT INTO group_invites (id, group_id, invitee_email, role, status, created_at, sealed_ciphertext, sealed_iv, sealed_tag)
      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
-    [crypto.randomUUID(), groupId, email, role, new Date().toISOString(), sealed.ciphertext, sealed.iv, sealed.tag],
+    [inviteId, groupId, email, role, new Date().toISOString(), sealed.ciphertext, sealed.iv, sealed.tag],
   );
   saveDatabase();
-  return { pending: true, email, userExists: Boolean(invitee) };
+  return { inviteCode: inviteId, pending: true, email, userExists: Boolean(invitee) };
 }
 
 function processPendingInvitesForUser(db, saveDatabase, queryOne, queryAll, user, password) {
@@ -257,7 +258,7 @@ function rotateGroupKey(db, saveDatabase, queryOne, queryAll, actor, password, g
 
   saveDatabase();
   const needsReinvite = members.filter((m) => m.user_id !== actor.id).map((m) => m.user_id);
-  return { keyVersion: newVersion, reencrypted: groupItems.length, needsReinvite };
+  return { newVersion, keyVersion: newVersion, reencrypted: groupItems.length, needsReinvite };
 }
 
 function updateMemberRole(db, saveDatabase, queryOne, actor, input) {

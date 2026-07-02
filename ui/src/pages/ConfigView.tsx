@@ -1,85 +1,224 @@
-import React, { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Settings, Bot, BookOpen, Database, Zap, Globe,
-  Plus, Save, TestTube2, CheckCircle2, AlertCircle, ChevronDown, Trash2
+  Plus, Save, TestTube2, CheckCircle2, AlertCircle, ChevronDown, Trash2, Loader2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useAppStore } from '@/store/app'
+import { useToast } from '@/components/shared/Toast'
+import { vaultApi } from '@/lib/ipc'
 
 type ConfigSection = 'llm' | 'feishu' | 'feishu-wiki' | 'knowledge' | 'vector' | 'obsidian' | 'recovery'
 
-const SECTIONS: { id: ConfigSection; label: string; icon: React.ReactNode; desc: string; status: 'ok' | 'warn' | 'none' }[] = [
-  { id: 'llm', label: '大模型', icon: <Bot className="w-4 h-4" />, desc: 'OpenAI / DeepSeek / Kimi 等', status: 'none' },
-  { id: 'feishu', label: '飞书同步', icon: <Zap className="w-4 h-4" />, desc: 'OAuth 登录 + 云盘加密同步', status: 'warn' },
-  { id: 'feishu-wiki', label: '飞书知识库', icon: <BookOpen className="w-4 h-4" />, desc: '飞书 Wiki 检索集成', status: 'none' },
-  { id: 'knowledge', label: '远程知识库', icon: <Globe className="w-4 h-4" />, desc: '外部 REST 检索接口', status: 'none' },
-  { id: 'vector', label: '向量数据库', icon: <Database className="w-4 h-4" />, desc: 'Milvus / Qdrant / PGVector', status: 'none' },
-  { id: 'obsidian', label: 'Obsidian', icon: <Settings className="w-4 h-4" />, desc: 'Local REST API 集成', status: 'none' },
-  { id: 'recovery', label: '账户恢复', icon: <CheckCircle2 className="w-4 h-4" />, desc: '绑定手机 / 恢复邮箱', status: 'none' },
+const SECTIONS: { id: ConfigSection; label: string; icon: React.ReactNode; desc: string }[] = [
+  { id: 'llm',          label: '大模型',     icon: <Bot className="w-4 h-4" />,      desc: 'OpenAI / DeepSeek / Kimi 等' },
+  { id: 'feishu',       label: '飞书同步',   icon: <Zap className="w-4 h-4" />,      desc: 'OAuth 登录 + 云盘加密同步' },
+  { id: 'feishu-wiki',  label: '飞书知识库', icon: <BookOpen className="w-4 h-4" />,desc: '飞书 Wiki 检索集成' },
+  { id: 'knowledge',    label: '远程知识库', icon: <Globe className="w-4 h-4" />,   desc: '外部 REST 检索接口' },
+  { id: 'vector',       label: '向量数据库', icon: <Database className="w-4 h-4" />,desc: 'Milvus / Qdrant / PGVector' },
+  { id: 'obsidian',     label: 'Obsidian',   icon: <Settings className="w-4 h-4" />, desc: 'Local REST API 集成' },
+  { id: 'recovery',     label: '账户恢复',   icon: <CheckCircle2 className="w-4 h-4" />, desc: '绑定手机 / 恢复邮箱' },
 ]
 
 const LLM_PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', url: 'https://api.deepseek.com' },
   { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1' },
-  { id: 'qwen', label: '千问（阿里百炼）', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
-  { id: 'kimi', label: 'Kimi (Moonshot)', url: 'https://api.moonshot.cn/v1' },
+  { id: 'qwen', label: '千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
+  { id: 'kimi', label: 'Kimi', url: 'https://api.moonshot.cn/v1' },
   { id: 'zhipu', label: '智谱 AI', url: 'https://open.bigmodel.cn/api/paas/v4' },
-  { id: 'gemini', label: 'Gemini', url: 'https://generativelanguage.googleapis.com/v1beta/openai' },
   { id: 'claude', label: 'Claude', url: 'https://api.anthropic.com/v1' },
-  { id: 'grok', label: 'Grok', url: 'https://api.x.ai/v1' },
-  { id: 'custom', label: '自定义 (OpenAI-compatible)', url: '' },
+  { id: 'custom', label: '自定义', url: '' },
 ]
 
 export default function ConfigView() {
+  const { state, saveSettings, saveAiProfile, loginFeishu, logoutFeishu } = useAppStore()
+  const toast = useToast()
+
   const [active, setActive] = useState<ConfigSection>('llm')
-  const [llmProvider, setLlmProvider] = useState('deepseek')
+
+  // LLM form
+  const aiProfile = state?.knowledgeCenter.aiProfile
+  const [llmProvider, setLlmProvider] = useState('')
   const [llmModel, setLlmModel] = useState('')
   const [llmKey, setLlmKey] = useState('')
   const [llmUrl, setLlmUrl] = useState('')
+  const [llmTemp, setLlmTemp] = useState('0.2')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'ok' | 'fail' | null>(null)
+  const [models, setModels] = useState<string[]>([])
 
-  const activeSection = SECTIONS.find(s => s.id === active)
+  // Feishu form
+  const settings = state?.settings
+  const [appId, setAppId] = useState('')
+  const [appSecret, setAppSecret] = useState('')
+  const [folderToken, setFolderToken] = useState('root')
+  const [passphrase, setPassphrase] = useState('')
+  const [showMoreProviders, setShowMoreProviders] = useState(false)
 
-  const handleTest = async () => {
+  // Wiki
+  const [wikiEnabled, setWikiEnabled] = useState(true)
+  const [wikiSpaceId, setWikiSpaceId] = useState('')
+
+  // Recovery
+  const [recoveryPhone, setRecoveryPhone] = useState('')
+  const [recoveryEmail, setRecoveryEmail] = useState('')
+
+  useEffect(() => {
+    if (aiProfile) {
+      setLlmProvider(aiProfile.provider || '')
+      setLlmModel(aiProfile.model || '')
+      setLlmUrl(aiProfile.baseUrl || '')
+      setLlmKey(aiProfile.apiKey || '')
+      setLlmTemp(String(aiProfile.temperature || 0.2))
+    }
+  }, [aiProfile])
+
+  useEffect(() => {
+    if (settings) {
+      setAppId(settings.appId || '')
+      setAppSecret(settings.appSecret || '')
+      setFolderToken(settings.folderToken || 'root')
+      setPassphrase(settings.feishuPassphrase || '')
+    }
+  }, [settings])
+
+  useEffect(() => {
+    if (state?.auth.user) {
+      setRecoveryPhone(state.auth.user.phone || '')
+      setRecoveryEmail(state.auth.user.recoveryEmail || '')
+    }
+  }, [state?.auth.user])
+
+  const wikiSettings = state?.knowledgeCenter.feishuWiki
+  useEffect(() => {
+    if (wikiSettings) {
+      setWikiEnabled(wikiSettings.enabled)
+      setWikiSpaceId(wikiSettings.spaceId)
+    }
+  }, [wikiSettings])
+
+  const handleSaveLlm = async () => {
+    if (!llmUrl || !llmModel) {
+      toast('请填写 Base URL 和模型名称', 'warning')
+      return
+    }
+    const result = await saveAiProfile({
+      provider: llmProvider || 'openai-compatible',
+      baseUrl: llmUrl,
+      apiKey: llmKey,
+      model: llmModel,
+      temperature: parseFloat(llmTemp) || 0.2,
+    })
+    if (result.error) {
+      toast(result.error, 'error')
+    } else {
+      toast('AI 配置已保存', 'success')
+    }
+  }
+
+  const handleTestLlm = async () => {
     setTesting(true)
     setTestResult(null)
-    await new Promise(r => setTimeout(r, 1200))
-    setTesting(false)
-    setTestResult('ok')
+    try {
+      const result = await vaultApi.testModel({
+        provider: llmProvider,
+        baseUrl: llmUrl,
+        apiKey: llmKey,
+        model: llmModel,
+        temperature: parseFloat(llmTemp) || 0.2,
+      })
+      setTestResult('ok')
+      toast('模型连接成功', 'success')
+    } catch (err: any) {
+      setTestResult('fail')
+      toast(err.message || '连接失败', 'error')
+    } finally {
+      setTesting(false)
+    }
   }
+
+  const handleListModels = async () => {
+    try {
+      const result = await vaultApi.listModels({
+        provider: llmProvider,
+        baseUrl: llmUrl,
+        apiKey: llmKey,
+      })
+      setModels(result.models || [])
+      toast(`找到 ${result.models?.length || 0} 个模型`, 'success')
+    } catch (err: any) {
+      toast(err.message || '获取模型列表失败', 'error')
+    }
+  }
+
+  const handleSaveFeishu = async () => {
+    const result = await saveSettings({
+      appId,
+      appSecret: appSecret === '********' ? undefined : appSecret,
+      folderToken,
+      feishuPassphrase: passphrase === '********' ? undefined : passphrase,
+    })
+    if (result.error) {
+      toast(result.error, 'error')
+    } else {
+      toast('飞书配置已保存', 'success')
+    }
+  }
+
+  const handleLoginFeishu = async () => {
+    const result = await loginFeishu()
+    if (result.error) {
+      toast(result.error, 'error')
+    } else {
+      toast('飞书登录成功', 'success')
+    }
+  }
+
+  const handleSaveWiki = async () => {
+    try {
+      await vaultApi.saveFeishuWikiSettings({ enabled: wikiEnabled, spaceId: wikiSpaceId })
+      toast('飞书 Wiki 配置已保存', 'success')
+    } catch (err: any) {
+      toast(err.message || '保存失败', 'error')
+    }
+  }
+
+  const handleSaveRecovery = async () => {
+    try {
+      await vaultApi.updateRecovery({ phone: recoveryPhone, recoveryEmail })
+      toast('恢复资料已保存', 'success')
+    } catch (err: any) {
+      toast(err.message || '保存失败', 'error')
+    }
+  }
+
+  const activeSection = SECTIONS.find(s => s.id === active)
 
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: '260px 1fr', alignItems: 'start' }}>
       {/* 左侧菜单 */}
       <div className="glass-card rounded-md overflow-hidden">
-        <div className="px-4 py-3" style={{ borderBottom: '1px solid hsl(218 24% 14%)' }}>
-          <h2 className="text-sm font-semibold" style={{ color: 'hsl(210 30% 90%)' }}>配置中心</h2>
+        <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+          <h2 className="text-sm font-semibold text-foreground" >配置中心</h2>
         </div>
         <div className="p-1.5 space-y-0.5">
           {SECTIONS.map(s => (
             <button key={s.id} onClick={() => setActive(s.id)}
               className={cn(
                 "w-full flex items-center gap-2.5 px-3 py-2.5 rounded text-left transition-all",
-                active === s.id
-                  ? "border"
-                  : "hover:bg-[hsl(218_28%_10%)]"
+                active === s.id ? "border" : "hover:bg-[hsl(218_28%_10%)]"
               )}
               style={active === s.id ? {
                 background: 'hsl(218 30% 11%)',
                 borderColor: 'hsl(190 60% 24% / 0.35)',
                 color: 'hsl(190 90% 72%)',
               } : { color: 'hsl(218 16% 55%)' }}>
-              <span className={active === s.id ? '' : ''}>{s.icon}</span>
+              <span>{s.icon}</span>
               <div className="flex-1 min-w-0">
                 <p className={cn("text-xs font-medium", active === s.id ? '' : 'text-[hsl(210_30%_78%)]')}>{s.label}</p>
-                <p className="text-[10px] mt-0.5 truncate" style={{ color: 'hsl(218 16% 42%)' }}>{s.desc}</p>
+                <p className="text-[10px] mt-0.5 truncate text-muted-foreground" >{s.desc}</p>
               </div>
-              {s.status !== 'none' && (
-                <div className={cn("w-1.5 h-1.5 rounded-full flex-shrink-0",
-                  s.status === 'ok' ? 'bg-[hsl(152_72%_52%)]' : 'bg-[hsl(43_90%_60%)]'
-                )} />
-              )}
             </button>
           ))}
         </div>
@@ -87,20 +226,16 @@ export default function ConfigView() {
 
       {/* 右侧内容 */}
       <div className="glass-card rounded-md overflow-hidden">
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid hsl(218 24% 14%)' }}>
+        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center"
               style={{ background: 'hsl(190 60% 16% / 0.5)', border: '1px solid hsl(190 60% 24% / 0.3)', color: 'hsl(190 90% 68%)' }}>
               {activeSection?.icon}
             </div>
             <div>
-              <h2 className="text-sm font-semibold" style={{ color: 'hsl(210 30% 92%)' }}>{activeSection?.label}</h2>
-              <p className="text-xs mt-0.5" style={{ color: 'hsl(218 16% 46%)' }}>{activeSection?.desc}</p>
+              <h2 className="text-sm font-semibold text-foreground" >{activeSection?.label}</h2>
+              <p className="text-xs mt-0.5 text-muted-foreground" >{activeSection?.desc}</p>
             </div>
-            <Button variant="primary" size="sm" className="ml-auto">
-              <Plus className="w-3.5 h-3.5" />
-              新增配置
-            </Button>
           </div>
         </div>
 
@@ -108,10 +243,10 @@ export default function ConfigView() {
           {active === 'llm' && (
             <div className="space-y-4 max-w-2xl">
               <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>AI 服务商</label>
+                <label className="block text-xs mb-1.5 text-muted-foreground" >AI 服务商</label>
                 <div className="grid grid-cols-3 gap-2">
-                  {LLM_PROVIDERS.slice(0, 6).map(p => (
-                    <button key={p.id} onClick={() => { setLlmProvider(p.id); setLlmUrl(p.url) }}
+                  {(showMoreProviders ? LLM_PROVIDERS : LLM_PROVIDERS.slice(0, 6)).map(p => (
+                    <button key={p.id} onClick={() => { setLlmProvider(p.id); if (p.url) setLlmUrl(p.url) }}
                       className={cn(
                         "px-3 py-2 rounded text-xs font-medium text-left transition-all border",
                         llmProvider === p.id
@@ -123,25 +258,46 @@ export default function ConfigView() {
                     </button>
                   ))}
                 </div>
-                <ChevronDown className="w-3.5 h-3.5 mt-2 cursor-pointer" style={{ color: 'hsl(218 16% 44%)' }} />
+                <button onClick={() => setShowMoreProviders(!showMoreProviders)}
+                  className="flex items-center gap-1 mt-2 text-xs"
+                  style={{ color: 'hsl(218 16% 44%)' }}>
+                  <ChevronDown className={cn("w-3.5 h-3.5 transition-transform", showMoreProviders && "rotate-180")} />
+                  {showMoreProviders ? '收起' : '显示更多'}
+                </button>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>API Key</label>
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >API Key</label>
                   <input className="vm-input" type="password" placeholder="sk-..." value={llmKey} onChange={e => setLlmKey(e.target.value)} />
                 </div>
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>模型</label>
-                  <input className="vm-input" placeholder="deepseek-chat / gpt-4.1-mini" value={llmModel} onChange={e => setLlmModel(e.target.value)} />
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >模型</label>
+                  <div className="flex gap-1">
+                    <input className="vm-input" placeholder="deepseek-chat / gpt-4" value={llmModel} onChange={e => setLlmModel(e.target.value)} />
+                    <Button variant="outline" size="sm" onClick={handleListModels} title="获取模型列表">
+                      <Globe className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                  {models.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {models.slice(0, 6).map(m => (
+                        <button key={m} onClick={() => setLlmModel(m)}
+                          className="text-[10px] px-2 py-0.5 rounded-sm transition-colors"
+                          style={{ background: 'hsl(218 28% 14%)', color: 'hsl(218 16% 52%)' }}>
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>Base URL</label>
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >Base URL</label>
                   <input className="vm-input" placeholder="https://api.deepseek.com" value={llmUrl} onChange={e => setLlmUrl(e.target.value)} />
                 </div>
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>Temperature</label>
-                  <input className="vm-input" placeholder="0.2" />
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >Temperature</label>
+                  <input className="vm-input" placeholder="0.2" value={llmTemp} onChange={e => setLlmTemp(e.target.value)} />
                 </div>
               </div>
 
@@ -152,20 +308,18 @@ export default function ConfigView() {
                     : "bg-[hsl(356_50%_14%/0.5)] border border-[hsl(356_50%_22%/0.4)] text-[hsl(356_84%_72%)]"
                 )}>
                   {testResult === 'ok'
-                    ? <><CheckCircle2 className="w-3.5 h-3.5" /> 模型连接成功，响应正常</>
-                    : <><AlertCircle className="w-3.5 h-3.5" /> 连接失败，请检查 API Key</>}
+                    ? <><CheckCircle2 className="w-3.5 h-3.5" /> 模型连接成功</>
+                    : <><AlertCircle className="w-3.5 h-3.5" /> 连接失败，请检查配置</>}
                 </div>
               )}
 
               <div className="flex gap-2.5">
-                <Button variant="primary" onClick={() => {}}>
+                <Button variant="primary" onClick={handleSaveLlm}>
                   <Save className="w-4 h-4" />
                   保存配置
                 </Button>
-                <Button variant="outline" onClick={handleTest} disabled={testing}>
-                  {testing
-                    ? <div className="w-3.5 h-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                    : <TestTube2 className="w-3.5 h-3.5" />}
+                <Button variant="outline" onClick={handleTestLlm} disabled={testing}>
+                  {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <TestTube2 className="w-3.5 h-3.5" />}
                   测试连接
                 </Button>
               </div>
@@ -182,29 +336,59 @@ export default function ConfigView() {
                   开通权限：drive:drive · drive:drive:readonly · auth:user.id:read · wiki:wiki:readonly
                 </p>
               </div>
+
+              {/* 飞书连接状态 */}
+              <div className={cn("flex items-center gap-3 p-3 rounded-lg",
+                state?.isFeishuLoggedIn ? "" : "")}
+                style={{
+                  background: state?.isFeishuLoggedIn ? 'hsl(152 50% 14% / 0.4)' : 'hsl(218 36% 8%)',
+                  border: `1px solid ${state?.isFeishuLoggedIn ? 'hsl(152 50% 24% / 0.4)' : 'hsl(218 24% 16%)'}`,
+                }}>
+                {state?.isFeishuLoggedIn ? (
+                  <CheckCircle2 className="w-5 h-5 flex-shrink-0" style={{ color: 'hsl(152 72% 55%)' }} />
+                ) : (
+                  <AlertCircle className="w-5 h-5 flex-shrink-0 text-muted-foreground"  />
+                )}
+                <div className="flex-1">
+                  <p className="text-xs font-medium text-foreground" >
+                    {state?.isFeishuLoggedIn ? `飞书已登录${state?.feishuUser?.name ? `: ${state.feishuUser.name}` : ''}` : '飞书未登录'}
+                  </p>
+                </div>
+                {state?.isFeishuLoggedIn ? (
+                  <Button variant="ghost" size="sm" onClick={() => logoutFeishu()}>退出飞书</Button>
+                ) : (
+                  <Button variant="cyan" size="sm" onClick={handleLoginFeishu}>
+                    <Zap className="w-3.5 h-3.5" />
+                    登录飞书
+                  </Button>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>App ID</label>
-                  <input className="vm-input" placeholder="cli_xxx" />
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >App ID</label>
+                  <input className="vm-input" placeholder="cli_xxx" value={appId} onChange={e => setAppId(e.target.value)} />
                 </div>
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>App Secret</label>
-                  <input className="vm-input" type="password" placeholder="仅保存在本机 SQLite" />
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >App Secret</label>
+                  <input className="vm-input" type="password" placeholder="仅保存在本机"
+                    value={appSecret} onChange={e => setAppSecret(e.target.value)} />
                 </div>
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>飞书文件夹 Token</label>
-                  <input className="vm-input" placeholder="root 或 fldcn..." />
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >飞书文件夹 Token</label>
+                  <input className="vm-input" placeholder="root 或 fldcn..." value={folderToken} onChange={e => setFolderToken(e.target.value)} />
                 </div>
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>加密口令</label>
-                  <input className="vm-input" type="password" placeholder="上传/取回的加密密码，至少 8 位" />
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >加密口令</label>
+                  <input className="vm-input" type="password" placeholder="至少 8 位" value={passphrase} onChange={e => setPassphrase(e.target.value)} />
                 </div>
               </div>
+
               <div className="flex gap-2.5 flex-wrap">
-                <Button variant="primary"><Save className="w-4 h-4" />保存配置</Button>
-                <Button variant="cyan"><Zap className="w-4 h-4" />登录飞书</Button>
-                <Button variant="ghost">退出飞书</Button>
-                <Button variant="outline" size="sm">测试同步</Button>
+                <Button variant="primary" onClick={handleSaveFeishu}>
+                  <Save className="w-4 h-4" />
+                  保存配置
+                </Button>
               </div>
             </div>
           )}
@@ -219,104 +403,26 @@ export default function ConfigView() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>Wiki Space Token</label>
-                  <input className="vm-input" placeholder="space_xxx" />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>检索结果数量上限</label>
-                  <input className="vm-input" placeholder="5" defaultValue="5" />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>语言偏好</label>
-                  <select className="vm-input">
-                    <option>中文优先</option>
-                    <option>英文优先</option>
-                    <option>不限</option>
-                  </select>
+                  <label className="block text-xs mb-1.5 text-muted-foreground" >Wiki Space ID（可选）</label>
+                  <input className="vm-input" placeholder="留空搜索全部空间" value={wikiSpaceId} onChange={e => setWikiSpaceId(e.target.value)} />
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <input type="checkbox" id="wiki-rag" defaultChecked className="w-3.5 h-3.5" />
-                <label htmlFor="wiki-rag" className="text-xs" style={{ color: 'hsl(218 16% 56%)' }}>
-                  启用 RAG — 将 Wiki 内容纳入 AI 对话上下文
+                <input type="checkbox" id="wiki-enabled" checked={wikiEnabled}
+                  onChange={e => setWikiEnabled(e.target.checked)} className="w-3.5 h-3.5" />
+                <label htmlFor="wiki-enabled" className="text-xs" style={{ color: 'hsl(218 16% 56%)' }}>
+                  启用飞书知识库检索 — 将 Wiki 内容纳入 AI 对话上下文
                 </label>
               </div>
-              <Button variant="primary">
+              <Button variant="primary" onClick={handleSaveWiki}>
                 <Save className="w-4 h-4" />
                 保存配置
               </Button>
             </div>
           )}
 
-          {(active === 'knowledge' || active === 'vector') && (
-            <div className="space-y-4 max-w-2xl">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>名称</label>
-                  <input className="vm-input" placeholder={active === 'vector' ? 'Milvus / Qdrant' : '公司知识库'} />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>检索接口 URL</label>
-                  <input className="vm-input" placeholder="https://server/search" />
-                </div>
-                {active === 'vector' && (
-                  <div>
-                    <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>Collection</label>
-                    <input className="vm-input" placeholder="personal_docs" />
-                  </div>
-                )}
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>API Key（可选）</label>
-                  <input className="vm-input" type="password" placeholder="可选" />
-                </div>
-              </div>
-              <Button variant="primary">
-                <Plus className="w-4 h-4" />
-                添加{active === 'vector' ? '向量库' : '知识库'}
-              </Button>
-              <div className="mt-4 space-y-2">
-                {[{ name: '内部文档库', url: 'https://kb.internal/search', status: 'ok' }].map((kb, i) => (
-                  <div key={i} className="flex items-center gap-3 p-3 rounded"
-                    style={{ background: 'hsl(218 36% 8%)', border: '1px solid hsl(218 24% 14%)' }}>
-                    <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: 'hsl(152 72% 52%)' }} />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium" style={{ color: 'hsl(210 30% 88%)' }}>{kb.name}</p>
-                      <p className="text-[10px]" style={{ color: 'hsl(218 16% 44%)' }}>{kb.url}</p>
-                    </div>
-                    <Button variant="ghost" size="icon-sm" style={{ color: 'hsl(352 84% 60%)' }}>
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {active === 'obsidian' && (
-            <div className="space-y-4 max-w-2xl">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>名称</label>
-                  <input className="vm-input" placeholder="我的 Obsidian Vault" />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>Base URL</label>
-                  <input className="vm-input" placeholder="https://127.0.0.1:27124" />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>API Token</label>
-                  <input className="vm-input" type="password" placeholder="Local REST API token" />
-                </div>
-              </div>
-              <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'hsl(218 16% 54%)' }}>
-                <input type="checkbox" defaultChecked className="w-3.5 h-3.5" />
-                允许自签名 HTTPS 证书
-              </label>
-              <Button variant="primary">
-                <Plus className="w-4 h-4" />
-                添加 Obsidian
-              </Button>
-            </div>
+          {(active === 'knowledge' || active === 'vector' || active === 'obsidian') && (
+            <KnowledgeSourceConfig type={active} />
           )}
 
           {active === 'recovery' && (
@@ -328,14 +434,14 @@ export default function ConfigView() {
                 </p>
               </div>
               <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>绑定手机</label>
-                <input className="vm-input" placeholder="+86 手机号，用于找回身份" />
+                <label className="block text-xs mb-1.5 text-muted-foreground" >绑定手机</label>
+                <input className="vm-input" placeholder="+86 手机号" value={recoveryPhone} onChange={e => setRecoveryPhone(e.target.value)} />
               </div>
               <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>恢复邮箱</label>
-                <input className="vm-input" placeholder="recovery@example.com" />
+                <label className="block text-xs mb-1.5 text-muted-foreground" >恢复邮箱</label>
+                <input className="vm-input" placeholder="recovery@example.com" value={recoveryEmail} onChange={e => setRecoveryEmail(e.target.value)} />
               </div>
-              <Button variant="primary">
+              <Button variant="primary" onClick={handleSaveRecovery}>
                 <Save className="w-4 h-4" />
                 保存恢复资料
               </Button>
@@ -343,6 +449,138 @@ export default function ConfigView() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Knowledge Source Config Component ─────────────────────
+
+function KnowledgeSourceConfig({ type }: { type: 'knowledge' | 'vector' | 'obsidian' }) {
+  const { state } = useAppStore()
+  const toast = useToast()
+  const [name, setName] = useState('')
+  const [endpoint, setEndpoint] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [collection, setCollection] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [insecureTls, setInsecureTls] = useState(false)
+
+  const sources = type === 'knowledge' ? state?.knowledgeCenter.knowledgeSources
+    : type === 'vector' ? state?.knowledgeCenter.vectorSources
+    : state?.knowledgeCenter.obsidianSources
+
+  const isVector = type === 'vector'
+  const isObsidian = type === 'obsidian'
+
+  const handleAdd = async () => {
+    if (!name || (!endpoint && !baseUrl)) {
+      toast('请填写名称和地址', 'warning')
+      return
+    }
+    try {
+      const existing = sources || []
+      const newSource: any = {
+        id: crypto.randomUUID(),
+        name,
+        apiKey: apiKey || undefined,
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      }
+      if (isObsidian) {
+        newSource.baseUrl = baseUrl || endpoint
+        newSource.insecureTls = insecureTls
+        await vaultApi.saveObsidianSources([...existing, newSource])
+      } else {
+        newSource.endpoint = endpoint || baseUrl
+        if (isVector) newSource.collection = collection
+        if (isVector) {
+          await vaultApi.saveVectorSources([...existing, newSource])
+        } else {
+          await vaultApi.saveKnowledgeSources([...existing, newSource])
+        }
+      }
+      toast('已添加', 'success')
+      setName(''); setEndpoint(''); setApiKey(''); setCollection(''); setBaseUrl('')
+    } catch (err: any) {
+      toast(err.message || '添加失败', 'error')
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    try {
+      const remaining = (sources || []).filter(s => s.id !== id)
+      if (isObsidian) {
+        await vaultApi.saveObsidianSources(remaining)
+      } else if (isVector) {
+        await vaultApi.saveVectorSources(remaining)
+      } else {
+        await vaultApi.saveKnowledgeSources(remaining)
+      }
+      toast('已删除', 'success')
+    } catch (err: any) {
+      toast(err.message || '删除失败', 'error')
+    }
+  }
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs mb-1.5 text-muted-foreground" >名称</label>
+          <input className="vm-input" placeholder={isVector ? 'Milvus / Qdrant' : isObsidian ? '我的 Vault' : '公司知识库'}
+            value={name} onChange={e => setName(e.target.value)} />
+        </div>
+        <div>
+          <label className="block text-xs mb-1.5 text-muted-foreground" >
+            {isObsidian ? 'Base URL' : '检索接口 URL'}
+          </label>
+          <input className="vm-input"
+            placeholder={isObsidian ? 'https://127.0.0.1:27124' : 'https://server/search'}
+            value={isObsidian ? baseUrl : endpoint}
+            onChange={e => isObsidian ? setBaseUrl(e.target.value) : setEndpoint(e.target.value)} />
+        </div>
+        {isVector && (
+          <div>
+            <label className="block text-xs mb-1.5 text-muted-foreground" >Collection</label>
+            <input className="vm-input" placeholder="personal_docs" value={collection} onChange={e => setCollection(e.target.value)} />
+          </div>
+        )}
+        <div>
+          <label className="block text-xs mb-1.5 text-muted-foreground" >API Key（可选）</label>
+          <input className="vm-input" type="password" placeholder="可选" value={apiKey} onChange={e => setApiKey(e.target.value)} />
+        </div>
+      </div>
+      {isObsidian && (
+        <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'hsl(218 16% 54%)' }}>
+          <input type="checkbox" checked={insecureTls} onChange={e => setInsecureTls(e.target.checked)} className="w-3.5 h-3.5" />
+          允许自签名 HTTPS 证书
+        </label>
+      )}
+      <Button variant="primary" onClick={handleAdd}>
+        <Plus className="w-4 h-4" />
+        添加{isVector ? '向量库' : isObsidian ? 'Obsidian' : '知识库'}
+      </Button>
+
+      {sources && sources.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {sources.map((src: any) => (
+            <div key={src.id} className="flex items-center gap-3 p-3 rounded"
+              style={{ background: 'hsl(218 36% 8%)', border: '1px solid var(--border)' }}>
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: src.enabled ? 'hsl(152 72% 52%)' : 'hsl(218 16% 40%)' }} />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-foreground" >{src.name}</p>
+                <p className="text-[10px] text-muted-foreground" >
+                  {src.endpoint || src.baseUrl}
+                  {src.collection ? ` · ${src.collection}` : ''}
+                </p>
+              </div>
+              <Button variant="ghost" size="icon-sm" style={{ color: 'hsl(352 84% 60%)' }} onClick={() => handleDelete(src.id)}>
+                <Trash2 className="w-3 h-3" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
