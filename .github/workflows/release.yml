@@ -29,7 +29,16 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Build and publish macOS installers
-        run: npm run build:ui && npx electron-builder --mac dmg zip --arm64 --publish always
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build macOS installers
+        run: npm run build:ui && npx electron-builder --mac dmg zip --arm64 --publish never
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: true
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
