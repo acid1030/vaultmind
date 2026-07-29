@@ -66,4 +66,15 @@ contextBridge.exposeInMainWorld('vaultApi', {
   acceptPendingInvites: () => ipcRenderer.invoke('vault:acceptPendingInvites'),
   openExternal: (url) => ipcRenderer.invoke('vault:openExternal', url),
   showDatabase: () => ipcRenderer.invoke('vault:showDatabase'),
+  getUpdateState: () => ipcRenderer.invoke('vault:getUpdateState'),
+  checkForUpdates: () => ipcRenderer.invoke('vault:checkForUpdates'),
+  downloadUpdate: () => ipcRenderer.invoke('vault:downloadUpdate'),
+  installUpdate: () => ipcRenderer.invoke('vault:installUpdate'),
+  openReleases: () => ipcRenderer.invoke('vault:openReleases'),
+  onUpdateStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:updateStatus', listener);
+    return () => ipcRenderer.removeListener('vault:updateStatus', listener);
+  },
 });

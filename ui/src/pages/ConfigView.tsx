@@ -2,14 +2,15 @@ import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Settings, Bot, BookOpen, Database, Zap, Globe,
-  Plus, Save, TestTube2, CheckCircle2, AlertCircle, ChevronDown, Trash2, Loader2
+  Plus, Save, TestTube2, CheckCircle2, AlertCircle, ChevronDown, Trash2, Loader2,
+  RefreshCw, Download, RotateCcw, ExternalLink
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
-import { vaultApi } from '@/lib/ipc'
+import { vaultApi, type AppUpdateState } from '@/lib/ipc'
 
-type ConfigSection = 'llm' | 'feishu' | 'feishu-wiki' | 'knowledge' | 'vector' | 'obsidian' | 'recovery'
+type ConfigSection = 'llm' | 'feishu' | 'feishu-wiki' | 'knowledge' | 'vector' | 'obsidian' | 'recovery' | 'updates'
 
 const SECTIONS: { id: ConfigSection; label: string; icon: React.ReactNode; desc: string }[] = [
   { id: 'llm',          label: '大模型',     icon: <Bot className="w-4 h-4" />,      desc: 'OpenAI / DeepSeek / Kimi 等' },
@@ -19,6 +20,7 @@ const SECTIONS: { id: ConfigSection; label: string; icon: React.ReactNode; desc:
   { id: 'vector',       label: '向量数据库', icon: <Database className="w-4 h-4" />,desc: 'Milvus / Qdrant / PGVector' },
   { id: 'obsidian',     label: 'Obsidian',   icon: <Settings className="w-4 h-4" />, desc: 'Local REST API 集成' },
   { id: 'recovery',     label: '账户恢复',   icon: <CheckCircle2 className="w-4 h-4" />, desc: '绑定手机 / 恢复邮箱' },
+  { id: 'updates',      label: '版本更新',   icon: <RefreshCw className="w-4 h-4" />, desc: '由 GitHub Releases 提供' },
 ]
 
 const LLM_PROVIDERS = [
@@ -82,6 +84,7 @@ export default function ConfigView() {
   // Recovery
   const [recoveryPhone, setRecoveryPhone] = useState('')
   const [recoveryEmail, setRecoveryEmail] = useState('')
+  const [updateState, setUpdateState] = useState<AppUpdateState | null>(null)
 
   useEffect(() => {
     if (aiProfile) {
@@ -111,6 +114,21 @@ export default function ConfigView() {
       setRecoveryEmail(state.auth.user.recoveryEmail || '')
     }
   }, [state?.auth.user])
+
+  useEffect(() => {
+    vaultApi.getUpdateState().then(setUpdateState).catch(() => {})
+    return vaultApi.onUpdateStatus(setUpdateState)
+  }, [])
+
+  const runUpdateAction = async (action: 'check' | 'download' | 'install') => {
+    try {
+      if (action === 'check') setUpdateState(await vaultApi.checkForUpdates())
+      if (action === 'download') setUpdateState(await vaultApi.downloadUpdate())
+      if (action === 'install') await vaultApi.installUpdate()
+    } catch (err: any) {
+      toast(err.message || '更新操作失败', 'error')
+    }
+  }
 
   const wikiSettings = state?.knowledgeCenter.feishuWiki
   useEffect(() => {
@@ -580,6 +598,65 @@ export default function ConfigView() {
                 <Save className="w-4 h-4" />
                 保存恢复资料
               </Button>
+            </div>
+          )}
+
+          {active === 'updates' && (
+            <div className="space-y-4 max-w-2xl">
+              <div className="p-4 rounded-lg" style={{ background: 'hsl(218 36% 8%)', border: '1px solid var(--border)' }}>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs text-muted-foreground">当前版本</p>
+                    <p className="text-xl font-semibold text-foreground mt-1">v{updateState?.currentVersion || '...'}</p>
+                  </div>
+                  {updateState?.latestVersion && updateState.latestVersion !== updateState.currentVersion && (
+                    <div className="text-right">
+                      <p className="text-xs text-muted-foreground">最新版本</p>
+                      <p className="text-xl font-semibold mt-1" style={{ color: 'hsl(152 72% 62%)' }}>v{updateState.latestVersion}</p>
+                    </div>
+                  )}
+                </div>
+                <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+                  {(updateState?.status === 'checking' || updateState?.status === 'downloading') && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {updateState?.status === 'downloaded' && <CheckCircle2 className="w-3.5 h-3.5" style={{ color: 'hsl(152 72% 62%)' }} />}
+                  {updateState?.status === 'error' && <AlertCircle className="w-3.5 h-3.5" style={{ color: 'hsl(352 84% 68%)' }} />}
+                  <span>{updateState?.message || '可从 GitHub Releases 检查新版本'}</span>
+                </div>
+                {updateState?.status === 'downloading' && (
+                  <div className="mt-3 h-2 rounded overflow-hidden" style={{ background: 'hsl(218 24% 16%)' }}>
+                    <div className="h-full transition-all" style={{ width: `${Math.max(0, Math.min(100, updateState.percent || 0))}%`, background: 'hsl(190 72% 48%)' }} />
+                  </div>
+                )}
+              </div>
+
+              {updateState?.releaseNotes && (
+                <div className="p-4 rounded-lg" style={{ background: 'hsl(218 36% 8%)', border: '1px solid var(--border)' }}>
+                  <p className="text-xs font-medium text-foreground mb-2">更新说明</p>
+                  <p className="text-xs whitespace-pre-wrap leading-relaxed text-muted-foreground">{updateState.releaseNotes}</p>
+                </div>
+              )}
+
+              <div className="flex gap-2.5 flex-wrap">
+                <Button variant="primary" onClick={() => runUpdateAction('check')} disabled={updateState?.status === 'checking' || updateState?.status === 'downloading'}>
+                  <RefreshCw className="w-4 h-4" />检查更新
+                </Button>
+                {updateState?.status === 'available' && (
+                  <Button variant="primary" onClick={() => runUpdateAction('download')}>
+                    <Download className="w-4 h-4" />下载更新
+                  </Button>
+                )}
+                {updateState?.status === 'downloaded' && (
+                  <Button variant="primary" onClick={() => runUpdateAction('install')}>
+                    <RotateCcw className="w-4 h-4" />重启并安装
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => vaultApi.openReleases()}>
+                  <ExternalLink className="w-4 h-4" />GitHub Releases
+                </Button>
+              </div>
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                VaultMind 仅从 acid1030/vaultmind 的 GitHub Releases 获取版本信息和安装包。应用启动后会自动检查一次，也可以在这里手动检查。
+              </p>
             </div>
           )}
         </div>

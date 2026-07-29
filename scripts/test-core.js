@@ -12,6 +12,7 @@ const manifestService = require('../src/core/manifest-sync');
 const feishuDrive = require('../src/core/feishu-drive');
 const feishuWiki = require('../src/core/feishu-wiki');
 const knowledgeHints = require('../src/core/knowledge-hints');
+const llmFallback = require('../src/core/llm-fallback');
 
 const LOCAL_KEY_ITERATIONS = 180000;
 
@@ -223,6 +224,10 @@ async function main() {
   assert.equal(feishuWiki.truncateQuery('a'.repeat(60)).length, 50);
   assert.ok(knowledgeHints.obsidianSetupHint().isHint);
   assert.ok(knowledgeHints.feishuWikiLoginHint().isHint);
+  const balanceNotice = llmFallback.describeLlmFailure(new Error('HTTP 402: Insufficient Balance'));
+  assert.ok(balanceNotice.includes('余额或额度不足'));
+  const fallbackAnswer = llmFallback.buildEvidenceFallback([{ source: '本地库', title: '部署手册', content: '部署步骤' }], balanceNotice);
+  assert.ok(fallbackAnswer.includes('部署手册'));
 
   const rotate = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, userA, 'password-a', group.id);
   assert.ok(rotate.keyVersion >= 2);

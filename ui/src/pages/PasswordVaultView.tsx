@@ -5,6 +5,7 @@ import {
   Globe, Terminal, FileKey2, Shield, Trash2, Github, Gitlab
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { effectiveContentKind } from '@/lib/content-kind'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import PasswordGen from '@/components/shared/PasswordGen'
@@ -53,12 +54,15 @@ export default function PasswordVaultView() {
   const [newContent, setNewContent] = useState('')
   const [newKind, setNewKind] = useState<'secret' | 'text'>('secret')
 
-  // Combined items: library items (kind=secret) + project accounts
-  const secretItems = (state?.items || []).filter(i => i.kind === 'secret' || i.kind === 'text')
+  // Combined items: explicit secrets and clearly secret-like legacy text entries.
+  const secretItems = (state?.items || []).filter(i => effectiveContentKind(i) === 'secret')
   const projectAccounts = state?.projects?.accounts || []
 
   const filteredSecrets = secretItems.filter(item => {
-    if (category !== 'all' && category !== 'secret' && item.kind !== 'text') return false
+    const title = item.title || ''
+    if (category === 'api' && !/(?:api\s*[-_]?\s*key|access\s*[-_]?\s*key|token|secret)/i.test(title)) return false
+    if (category === 'ssh' && !/(?:ssh|私钥|公钥|private\s*[-_]?\s*key)/i.test(title)) return false
+    if (category === 'git' && !/(?:git|github|gitlab|gitee|token)/i.test(title)) return false
     if (search && !item.title?.toLowerCase().includes(search.toLowerCase())) return false
     return true
   })
@@ -148,7 +152,9 @@ export default function PasswordVaultView() {
                 <span className="ml-auto text-[10px] text-muted-foreground" >
                   {c.id === 'all' ? secretItems.length + projectAccounts.length
                     : c.id === 'git' ? projectAccounts.length
-                    : secretItems.filter(i => i.kind === 'secret').length}
+                    : c.id === 'secret' ? secretItems.length
+                    : c.id === 'api' ? secretItems.filter(i => /(?:api\s*[-_]?\s*key|access\s*[-_]?\s*key|token|secret)/i.test(i.title || '')).length
+                    : secretItems.filter(i => /(?:ssh|私钥|公钥|private\s*[-_]?\s*key)/i.test(i.title || '')).length}
                 </span>
               </button>
             ))}

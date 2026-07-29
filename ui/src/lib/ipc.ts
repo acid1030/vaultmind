@@ -210,6 +210,19 @@ export interface UploadProgress {
   message?: string
 }
 
+export interface AppUpdateState {
+  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error' | 'development'
+  currentVersion: string
+  latestVersion: string
+  releaseName: string
+  releaseNotes: string
+  percent: number
+  message: string
+  transferred?: number
+  total?: number
+  bytesPerSecond?: number
+}
+
 // ── VaultApi Interface ────────────────────────────────────
 
 export interface VaultApi {
@@ -278,6 +291,12 @@ export interface VaultApi {
   acceptPendingInvites: () => Promise<{ accepted: any[]; state: VaultState }>
   openExternal: (url: string) => Promise<void>
   showDatabase: () => Promise<void>
+  getUpdateState: () => Promise<AppUpdateState>
+  checkForUpdates: () => Promise<AppUpdateState>
+  downloadUpdate: () => Promise<AppUpdateState>
+  installUpdate: () => Promise<{ ok: boolean }>
+  openReleases: () => Promise<void>
+  onUpdateStatus: (callback: (payload: AppUpdateState) => void) => () => void
 }
 
 // ── Dev-mode mock (when not running in Electron) ──────────
@@ -366,6 +385,18 @@ const mockVaultApi: VaultApi = {
   acceptPendingInvites: async () => { throw new Error('Electron 不可用') },
   openExternal: async () => {},
   showDatabase: async () => {},
+  getUpdateState: async () => ({
+    status: 'development', currentVersion: '0.3.0', latestVersion: '', releaseName: '',
+    releaseNotes: '', percent: 0, message: '开发模式不检查更新',
+  }),
+  checkForUpdates: async () => ({
+    status: 'development', currentVersion: '0.3.0', latestVersion: '', releaseName: '',
+    releaseNotes: '', percent: 0, message: '开发模式不检查更新',
+  }),
+  downloadUpdate: async () => { throw new Error('开发模式不下载更新') },
+  installUpdate: async () => { throw new Error('开发模式不安装更新') },
+  openReleases: async () => {},
+  onUpdateStatus: () => () => {},
 }
 
 /**

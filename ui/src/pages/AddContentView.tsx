@@ -5,6 +5,7 @@ import {
   CheckCircle, FolderOpen, MessageSquare
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { effectiveContentKind } from '@/lib/content-kind'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import { vaultApi, type UploadProgress } from '@/lib/ipc'
@@ -345,7 +346,7 @@ export default function AddContentView() {
               </div>
             )}
             {localItems.map(item => {
-              const KindIcon = KIND_ICONS[item.kind] || FileText
+              const KindIcon = KIND_ICONS[effectiveContentKind(item)] || FileText
               return (
                 <div key={item.id} className="flex items-start gap-2.5 p-2.5 rounded transition-colors cursor-pointer hover:bg-[hsl(218_28%_11%)]">
                   <div className="w-7 h-7 rounded flex items-center justify-center flex-shrink-0"

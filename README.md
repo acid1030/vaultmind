@@ -82,6 +82,19 @@ npm install
 npm start
 ```
 
+正式版安装包统一发布在 [GitHub Releases](https://github.com/acid1030/vaultmind/releases)。应用会从该页面对应的更新元数据检查新版本，并在「配置 → 版本更新」中显示下载和安装进度。
+
+### 发布新版本
+
+1. 更新 `package.json` 中的版本号并提交代码。
+2. 创建与版本一致的标签，例如 `git tag v0.3.0`。
+3. 推送标签：`git push origin v0.3.0`。
+4. GitHub Actions 自动测试、构建 macOS DMG/ZIP，并发布到 GitHub Releases。
+
+客户端只读取 `acid1030/vaultmind` 的正式 Release；草稿和预发布版本不会自动推送给用户。
+
+macOS静默自动安装要求使用Apple Developer ID签名。GitHub仓库中配置`CSC_LINK`和`CSC_KEY_PASSWORD`对应的Actions Secret后，Electron Builder会对应用和更新包签名；未配置证书时仍会发布DMG/ZIP，用户可以从Releases手动下载安装，但macOS可能显示未认证开发者提示。
+
 ### 运行测试
 
 ```bash

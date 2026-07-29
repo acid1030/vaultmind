@@ -5,6 +5,7 @@ import {
   Trash2, Unlock, Database, Send, Bot, User2, Loader2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { effectiveContentKind } from '@/lib/content-kind'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import { vaultApi } from '@/lib/ipc'
@@ -105,7 +106,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
 
   const filteredItems = items.filter((item: LibraryItem) => {
     const f = FILTERS.find(fi => fi.id === filter)
-    if (f?.kind && item.kind !== f.kind) return false
+    if (f?.kind && effectiveContentKind(item) !== f.kind) return false
     if (search) {
       const q = search.toLowerCase()
       const tags = parseTags(item.tags).join(' ')
@@ -233,7 +234,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
                 <p className="text-xs">没有找到匹配的内容</p>
               </div>
             ) : filteredItems.map((item: LibraryItem) => {
-              const kc = kindConfig(item.kind)
+              const kc = kindConfig(effectiveContentKind(item))
               const cc = COLOR_CLASSES[kc.color]
               const Icon = kc.icon
               return (
@@ -293,7 +294,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
           <div className="px-4 py-3 flex items-center justify-between border-b border-border">
             <h2 className="text-sm font-semibold text-foreground">飞书同步记录</h2>
           </div>
-          <div className="divide-y divide-border">
+          <div className="divide-y divide-border overflow-y-scroll overscroll-contain" style={{ maxHeight: '45vh' }}>
             {records.length === 0 ? (
               <div className="vm-empty py-8">
                 <Database className="w-8 h-8 text-muted-foreground" />

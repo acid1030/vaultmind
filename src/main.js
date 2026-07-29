@@ -5,6 +5,7 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const { execFile } = require('child_process');
+const { autoUpdater } = require('electron-updater');
 const initSqlJs = require('sql.js');
 const { migrateSchema } = require('./core/schema');
 const groupService = require('./core/groups');
@@ -15,6 +16,7 @@ const groupCrypto = require('./core/group-crypto');
 const feishuDrive = require('./core/feishu-drive');
 const feishuWiki = require('./core/feishu-wiki');
 const knowledgeHints = require('./core/knowledge-hints');
+const llmFallback = require('./core/llm-fallback');
 const vectorSearch = require('./core/vector-search');
 const gitProject = require('./core/git-project');
 
@@ -56,6 +58,15 @@ const REQUIRED_SCOPES = [
 ].join(' ');
 
 let mainWindow = null;
+let updateState = {
+  status: 'idle',
+  currentVersion: app.getVersion(),
+  latestVersion: '',
+  releaseName: '',
+  releaseNotes: '',
+  percent: 0,
+  message: '',
+};
 let pendingLogin = null;
 let feishuAuthWindow = null;
 let SQL = null;
@@ -1840,7 +1851,7 @@ async function testLlmProfile(input) {
     source: 'VaultMind',
     title: '模型连接测试',
     content: '这是一次最小化模型连通性测试。',
-  }]);
+  }], { allowFallback: false });
   return { ok: true, reply: String(result.answer || '').slice(0, 240) };
 }
 
@@ -2319,56 +2330,63 @@ async function callObsidianRetriever(source, question) {
   }));
 }
 
-async function synthesizeWithLlm(profile, question, evidence) {
+async function synthesizeWithLlm(profile, question, evidence, options = {}) {
   if (!profile || !profile.base_url || !profile.model) {
     return {
-      answer: [
-        '未配置可用的大模型，以下是自动检索到的证据摘要：',
-        ...evidence.map((item, index) => `${index + 1}. [${item.source}] ${item.title}: ${item.content.slice(0, 240)}`),
-      ].join('\n'),
+      answer: llmFallback.buildEvidenceFallback(evidence, '未配置可用的大模型，以下是知识库检索结果。'),
       usedLlm: false,
     };
   }
-  if (profile.provider === 'claude') {
-    const prompt = `请基于证据回答用户问题；不要编造；引用证据来源名。\n\n问题：${question}\n\n证据：\n${evidence.map((item, index) => `[${index + 1}] 来源=${item.source}; 标题=${item.title}; 内容=${item.content}`).join('\n\n')}`;
-    const result = await requestAnyJson('POST', `${profile.base_url.replace(/\/$/, '')}/messages`, {
+  try {
+    if (profile.provider === 'claude') {
+      const prompt = `请基于证据回答用户问题；不要编造；引用证据来源名。\n\n问题：${question}\n\n证据：\n${evidence.map((item, index) => `[${index + 1}] 来源=${item.source}; 标题=${item.title}; 内容=${item.content}`).join('\n\n')}`;
+      const result = await requestAnyJson('POST', `${profile.base_url.replace(/\/$/, '')}/messages`, {
+        headers: llmHeaders({
+          provider: profile.provider,
+          apiKey: profile.api_key,
+        }),
+        body: {
+          model: profile.model,
+          max_tokens: 1600,
+          temperature: profile.temperature,
+          system: '你是严谨、简洁、重视出处的个人知识库助手。',
+          messages: [{ role: 'user', content: prompt }],
+        },
+      });
+      const content = Array.isArray(result.content)
+        ? result.content.map((item) => item.text || '').join('\n').trim()
+        : '';
+      return { answer: content || JSON.stringify(result), usedLlm: true };
+    }
+    const endpoint = `${profile.base_url.replace(/\/$/, '')}/chat/completions`;
+    const prompt = `你是个人知识库中心的检索助手。请基于证据回答用户问题；不要编造；引用证据来源名。\n\n问题：${question}\n\n证据：\n${evidence.map((item, index) => `[${index + 1}] 来源=${item.source}; 标题=${item.title}; 内容=${item.content}`).join('\n\n')}`;
+    const result = await requestAnyJson('POST', endpoint, {
       headers: llmHeaders({
         provider: profile.provider,
         apiKey: profile.api_key,
       }),
       body: {
         model: profile.model,
-        max_tokens: 1600,
         temperature: profile.temperature,
-        system: '你是严谨、简洁、重视出处的个人知识库助手。',
-        messages: [{ role: 'user', content: prompt }],
+        messages: [
+          { role: 'system', content: '你是严谨、简洁、重视出处的个人知识库助手。' },
+          { role: 'user', content: prompt },
+        ],
       },
     });
-    const content = Array.isArray(result.content)
-      ? result.content.map((item) => item.text || '').join('\n').trim()
+    const content = result && result.choices && result.choices[0] && result.choices[0].message
+      ? result.choices[0].message.content
       : '';
     return { answer: content || JSON.stringify(result), usedLlm: true };
+  } catch (error) {
+    if (options.allowFallback === false) throw error;
+    const notice = llmFallback.describeLlmFailure(error);
+    return {
+      answer: llmFallback.buildEvidenceFallback(evidence, notice),
+      usedLlm: false,
+      llmWarning: notice,
+    };
   }
-  const endpoint = `${profile.base_url.replace(/\/$/, '')}/chat/completions`;
-  const prompt = `你是个人知识库中心的检索助手。请基于证据回答用户问题；不要编造；引用证据来源名。\n\n问题：${question}\n\n证据：\n${evidence.map((item, index) => `[${index + 1}] 来源=${item.source}; 标题=${item.title}; 内容=${item.content}`).join('\n\n')}`;
-  const result = await requestAnyJson('POST', endpoint, {
-    headers: llmHeaders({
-      provider: profile.provider,
-      apiKey: profile.api_key,
-    }),
-    body: {
-      model: profile.model,
-      temperature: profile.temperature,
-      messages: [
-        { role: 'system', content: '你是严谨、简洁、重视出处的个人知识库助手。' },
-        { role: 'user', content: prompt },
-      ],
-    },
-  });
-  const content = result && result.choices && result.choices[0] && result.choices[0].message
-    ? result.choices[0].message.content
-    : '';
-  return { answer: content || JSON.stringify(result), usedLlm: true };
 }
 
 async function queryKnowledgeCenter(question, options = {}) {
@@ -2513,6 +2531,79 @@ function createWindow() {
   }
 }
 
+function normalizeReleaseNotes(notes) {
+  if (typeof notes === 'string') return notes;
+  if (!Array.isArray(notes)) return '';
+  return notes.map((item) => item && item.note ? String(item.note) : '').filter(Boolean).join('\n');
+}
+
+function publishUpdateState(patch = {}) {
+  updateState = { ...updateState, ...patch, currentVersion: app.getVersion() };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('vault:updateStatus', updateState);
+  }
+  return updateState;
+}
+
+function configureAutoUpdater() {
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = false;
+
+  autoUpdater.on('checking-for-update', () => {
+    publishUpdateState({ status: 'checking', message: '正在检查 GitHub Releases...' });
+  });
+  autoUpdater.on('update-available', (info) => {
+    publishUpdateState({
+      status: 'available',
+      latestVersion: String(info.version || ''),
+      releaseName: String(info.releaseName || ''),
+      releaseNotes: normalizeReleaseNotes(info.releaseNotes),
+      message: `发现新版本 ${info.version}`,
+    });
+  });
+  autoUpdater.on('update-not-available', (info) => {
+    publishUpdateState({
+      status: 'not-available',
+      latestVersion: String(info.version || app.getVersion()),
+      message: '当前已是最新版本',
+    });
+  });
+  autoUpdater.on('download-progress', (progress) => {
+    publishUpdateState({
+      status: 'downloading',
+      percent: Number(progress.percent || 0),
+      transferred: Number(progress.transferred || 0),
+      total: Number(progress.total || 0),
+      bytesPerSecond: Number(progress.bytesPerSecond || 0),
+      message: `正在下载更新 ${Math.round(progress.percent || 0)}%`,
+    });
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    publishUpdateState({
+      status: 'downloaded',
+      latestVersion: String(info.version || updateState.latestVersion || ''),
+      percent: 100,
+      message: '更新已下载，可以重启安装',
+    });
+  });
+  autoUpdater.on('error', (error) => {
+    publishUpdateState({
+      status: 'error',
+      message: String(error && error.message ? error.message : error),
+    });
+  });
+}
+
+async function checkForAppUpdate() {
+  if (!app.isPackaged) {
+    return publishUpdateState({ status: 'development', message: '开发模式不检查更新' });
+  }
+  publishUpdateState({ status: 'checking', message: '正在检查 GitHub Releases...' });
+  await autoUpdater.checkForUpdates();
+  return updateState;
+}
+
 function closeHttpServer(server) {
   return new Promise((resolve) => {
     if (!server) {
@@ -2636,6 +2727,20 @@ function oauthSuccessHtml() {
 }
 
 function registerHandlers() {
+  ipcMain.handle('vault:getUpdateState', () => updateState);
+  ipcMain.handle('vault:checkForUpdates', () => checkForAppUpdate());
+  ipcMain.handle('vault:downloadUpdate', async () => {
+    if (updateState.status !== 'available') throw new Error('当前没有可下载的新版本');
+    await autoUpdater.downloadUpdate();
+    return updateState;
+  });
+  ipcMain.handle('vault:installUpdate', () => {
+    if (updateState.status !== 'downloaded') throw new Error('更新尚未下载完成');
+    setImmediate(() => autoUpdater.quitAndInstall(false, true));
+    return { ok: true };
+  });
+  ipcMain.handle('vault:openReleases', () => shell.openExternal('https://github.com/acid1030/vaultmind/releases'));
+
   ipcMain.handle('vault:getState', async () => {
     await ensureDatabase();
     restoreLocalSession();
@@ -3269,8 +3374,12 @@ app.on('before-quit', () => {
 
 app.whenReady().then(async () => {
   await ensureDatabase();
+  configureAutoUpdater();
   registerHandlers();
   createWindow();
+  if (app.isPackaged) {
+    setTimeout(() => checkForAppUpdate().catch(() => {}), 15000);
+  }
 });
 
 app.on('window-all-closed', () => {

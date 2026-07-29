@@ -16,7 +16,7 @@ async function getEmbedder(modelName = 'Xenova/all-MiniLM-L6-v2') {
   currentModel = modelName;
   modelLoadPromise = (async () => {
     try {
-      const { pipeline, env } = require('@xenova/transformers');
+      const { pipeline, env } = require('@huggingface/transformers');
       if (process.env.HF_ENDPOINT) {
         env.remoteHost = process.env.HF_ENDPOINT.endsWith('/')
           ? process.env.HF_ENDPOINT
