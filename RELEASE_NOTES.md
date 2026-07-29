@@ -1,4 +1,4 @@
-# VaultMind 0.3.0
+# VaultMind 0.3.1
 
 - 新增Git/SVN项目管理与仓库状态、提交、拉取、推送操作。
 - 新增GitHub Releases版本检查、下载进度和重启安装界面。

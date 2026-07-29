@@ -1,6 +1,6 @@
 {
   "name": "vaultmind",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "VaultMind - private knowledge center with secure vault and AI retrieval",
   "author": "VaultMind",
