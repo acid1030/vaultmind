@@ -93,7 +93,7 @@ npm start
 
 客户端只读取 `acid1030/vaultmind` 的正式 Release；草稿和预发布版本不会自动推送给用户。
 
-macOS静默自动安装要求使用Apple Developer ID签名。GitHub仓库中配置`CSC_LINK`和`CSC_KEY_PASSWORD`对应的Actions Secret后，Electron Builder会对应用和更新包签名；未配置证书时仍会发布DMG/ZIP，用户可以从Releases手动下载安装，但macOS可能显示未认证开发者提示。
+当前GitHub Actions默认发布未签名的DMG/ZIP，用户可以从Releases手动下载安装，但macOS可能显示未认证开发者提示。要启用macOS静默自动安装，需要Apple Developer ID证书：在GitHub仓库中配置`CSC_LINK`和`CSC_KEY_PASSWORD`两个Actions Secret，并将它们加入发布工作流构建步骤的`env`后再发布。
 
 ### 运行测试
 
