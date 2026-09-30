@@ -66,6 +66,53 @@ function migrateSchema(db) {
   ensureColumn(db, 'library_items', 'updated_at', 'TEXT');
   ensureColumn(db, 'library_items', 'remote_only', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'records', 'asset_id', 'TEXT');
+  ensureColumn(db, 'users', 'vault_id', 'TEXT');
+  ensureColumn(db, 'users', 'cloud_linked', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'users', 'feishu_open_id_hash', 'TEXT');
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS vault_devices (
+      vault_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      platform TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      PRIMARY KEY (vault_id, device_id)
+    );
+    CREATE TABLE IF NOT EXISTS sync_tombstones (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      vault_id TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'personal',
+      group_id TEXT,
+      deleted_at TEXT NOT NULL,
+      device_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS sync_conflicts (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      vault_id TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT 'personal',
+      group_id TEXT,
+      entity_type TEXT NOT NULL,
+      asset_id TEXT NOT NULL,
+      strategy TEXT NOT NULL,
+      resolution TEXT NOT NULL,
+      local_changed_at TEXT,
+      remote_changed_at TEXT,
+      remote_device_id TEXT,
+      local_value TEXT NOT NULL,
+      remote_value TEXT NOT NULL,
+      detected_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+  `);
+  db.run('CREATE INDEX IF NOT EXISTS idx_tombstones_vault ON sync_tombstones(vault_id, scope, group_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sync_conflicts_vault ON sync_conflicts(vault_id, scope, group_id, detected_at)');
 
   try {
     db.run(`

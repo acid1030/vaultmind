@@ -2,13 +2,14 @@ import { _electron as electron } from 'playwright-core'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { fileURLToPath } from 'url'
 
 const userDataDir = mkdtempSync(join(tmpdir(), 'vm-theme-'))
+const appPath = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..')
 
 async function run() {
   const app = await electron.launch({
-    args: ['.', `--user-data-dir=${userDataDir}`],
-    cwd: '/Users/nike/Documents/project/haichuan/vaultmind',
+    args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'production' },
   })
 
@@ -32,7 +33,7 @@ async function run() {
       await page.waitForTimeout(1500)
     }
     const allButtons = await page.locator('button').allInnerTexts()
-    const enterIdx = allButtons.findIndex(t => t.includes('进入工作台'))
+    const enterIdx = allButtons.findIndex(t => t.includes('我已保存'))
     if (enterIdx >= 0) await page.locator('button').nth(enterIdx).click()
     await page.waitForTimeout(1000)
   }

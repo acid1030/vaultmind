@@ -2,7 +2,7 @@ const OBSIDIAN_LOCAL_URL = 'https://127.0.0.1:27124';
 
 function obsidianSetupHint() {
   return {
-    source: 'VaultMind',
+    source: 'AxonMind',
     type: 'setup',
     title: 'Obsidian 尚未配置',
     content: [
@@ -19,7 +19,7 @@ function obsidianSetupHint() {
 
 function feishuWikiLoginHint() {
   return {
-    source: 'VaultMind',
+    source: 'AxonMind',
     type: 'setup',
     title: '飞书知识库未连接',
     content: '请先在顶栏登录飞书，并在「配置 → 飞书知识库」中启用 Wiki 检索。应用会使用你已可见的飞书知识库文档作为检索来源。',

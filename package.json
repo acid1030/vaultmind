@@ -1,9 +1,9 @@
 {
-  "name": "vaultmind",
-  "version": "0.3.1",
+  "name": "axonmind",
+  "version": "0.4.0",
   "private": true,
-  "description": "VaultMind - private knowledge center with secure vault and AI retrieval",
-  "author": "VaultMind",
+  "description": "AxonMind - local-first secure knowledge and credential workspace",
+  "author": "AxonMind",
   "repository": {
     "type": "git",
     "url": "https://github.com/acid1030/vaultmind.git"
@@ -17,24 +17,38 @@
     "package:mac": "npm run build:ui && electron-builder --mac dmg zip",
     "release:mac": "npm run build:ui && electron-builder --mac dmg zip --publish always",
     "test": "node scripts/test-core.js",
+    "test:sync": "node scripts/test-sync-multidevice.js",
+    "test:package": "node ui/e2e/package-smoke.spec.mjs",
+    "test:e2e": "node ui/e2e/auth.spec.mjs && node ui/e2e/content.spec.mjs && node ui/e2e/vault.spec.mjs && node ui/e2e/groups.spec.mjs && node ui/e2e/projects.spec.mjs && node ui/e2e/sync-config.spec.mjs && node ui/e2e/theme-dingtalk.spec.mjs && node ui/e2e/responsive.spec.mjs",
     "test:vector": "node scripts/test-vector.js"
   },
   "devDependencies": {
-    "electron": "^33.4.11",
+    "electron": "^44.1.0",
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
     "electron-updater": "^6.8.9",
-    "mammoth": "^1.12.0",
-    "pdf-parse": "^2.4.5",
-    "sql.js": "^1.14.1",
-    "xlsx": "^0.18.5"
+    "mammoth": "^1.12.2",
+    "pdfjs-dist": "^5.4.296",
+    "read-excel-file": "^9.3.10",
+    "sql.js": "^1.14.2"
+  },
+  "overrides": {
+    "js-yaml": "^4.3.1"
   },
   "build": {
-    "appId": "com.vaultmind.desktop",
-    "productName": "VaultMind",
-    "asar": false,
+    "appId": "com.axonmind.desktop",
+    "productName": "AxonMind",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/sql.js/dist/*.wasm"
+    ],
+    "compression": "maximum",
+    "electronLanguages": [
+      "en",
+      "zh-CN",
+      "zh-TW"
+    ],
     "npmRebuild": false,
     "directories": {
       "output": "release"
@@ -42,10 +56,31 @@
     "files": [
       "src/**/*",
       "assets/**/*",
-      "package.json"
+      "package.json",
+      "!assets/app-icon.png",
+      "!assets/app-icon.icns",
+      "!assets/app-icon.svg",
+      "!assets/app-icon-v2.icns",
+      "!assets/app-icon-v2.png",
+      "!assets/app-icon-axonmind.icns",
+      "!node_modules/@napi-rs/canvas*/**",
+      "!node_modules/pdfjs-dist/build/**",
+      "!node_modules/pdfjs-dist/web/**",
+      "!node_modules/pdfjs-dist/types/**",
+      "!node_modules/pdfjs-dist/legacy/web/**",
+      "!node_modules/pdfjs-dist/legacy/build/pdf.sandbox*",
+      "!node_modules/pdfjs-dist/legacy/build/*.min.mjs",
+      "!node_modules/pdfjs-dist/cmaps/**",
+      "!node_modules/pdfjs-dist/iccs/**",
+      "!node_modules/pdfjs-dist/image_decoders/**",
+      "!node_modules/pdfjs-dist/legacy/image_decoders/**",
+      "!node_modules/pdfjs-dist/standard_fonts/**",
+      "!node_modules/pdfjs-dist/wasm/**",
+      "!**/*.map",
+      "!**/{test,tests,__tests__,example,examples,docs,doc}/**"
     ],
     "mac": {
-      "icon": "assets/app-icon.icns",
+      "icon": "assets/app-icon-axonmind.icns",
       "category": "public.app-category.productivity",
       "target": [
         "dmg",

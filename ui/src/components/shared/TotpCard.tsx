@@ -56,7 +56,7 @@ export default function TotpCard() {
             {remaining}秒后刷新
           </span>
         </div>
-        <div className="w-24 h-1 rounded-full overflow-hidden" style={{ background: 'hsl(218 28% 14%)' }}>
+        <div className="w-24 h-1 rounded-full overflow-hidden bg-muted">
           <div className="h-full rounded-full transition-all duration-1000"
             style={{
               width: `${progress}%`,
@@ -70,18 +70,12 @@ export default function TotpCard() {
         const code = codes[t.id] || '------'
         const isCopied = copied === t.id
         return (
-          <div key={t.id}
-            className="flex items-center gap-3 px-4 py-3 rounded-lg transition-all"
-            style={{
-              background: 'hsl(218 30% 9%)',
-              border: '1px solid hsl(218 24% 14%)',
-            }}>
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
-              style={{ background: 'hsl(218 28% 14%)', border: '1px solid hsl(218 24% 18%)' }}>
+          <div key={t.id} className="vm-surface-card flex items-center gap-3 px-4 py-3 rounded-lg transition-all">
+            <div className="vm-surface-raised w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0">
               {t.icon}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold" style={{ color: 'hsl(210 30% 90%)' }}>{t.name}</p>
+              <p className="text-sm font-semibold text-foreground">{t.name}</p>
               <p className="text-[10px]" style={{ color: 'hsl(218 16% 42%)' }}>{t.issuer}</p>
             </div>
             {/* 验证码 */}
@@ -107,8 +101,7 @@ export default function TotpCard() {
       </Button>
 
       {showAdd && (
-        <div className="p-4 rounded-xl space-y-3 animate-fade-in"
-          style={{ background: 'hsl(218 36% 8%)', border: '1px solid hsl(218 24% 15%)' }}>
+        <div className="vm-surface-card p-4 rounded-xl space-y-3 animate-fade-in">
           <div>
             <label className="block text-xs mb-1.5" style={{ color: 'hsl(218 16% 52%)' }}>服务名称</label>
             <input className="vm-input" placeholder="GitHub / AWS / ..." value={newName} onChange={e => setNewName(e.target.value)} />

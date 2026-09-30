@@ -1,4 +1,4 @@
-name: Release VaultMind
+name: Release AxonMind
 
 on:
   push:
@@ -51,6 +51,6 @@ jobs:
               release/*.blockmap \
               release/latest-mac.yml \
               --notes-file RELEASE_NOTES.md \
-              --title "VaultMind ${GITHUB_REF_NAME#v}" \
+              --title "AxonMind ${GITHUB_REF_NAME#v}" \
               --latest
           fi

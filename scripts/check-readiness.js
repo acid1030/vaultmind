@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Read-only readiness check against local VaultMind SQLite (no network).
+ * Read-only readiness check against local AxonMind SQLite (no network).
  */
 const fs = require('fs');
 const path = require('path');
@@ -102,7 +102,7 @@ async function main() {
 }
 
 function printReport(checks) {
-  console.log('\n=== VaultMind 就绪检查 ===\n');
+  console.log('\n=== AxonMind 就绪检查 ===\n');
   for (const c of checks) {
     const icon = c.ok === true ? '✓' : c.ok === 'warn' ? '!' : '✗';
     console.log(`${icon} ${c.name}: ${c.detail}`);

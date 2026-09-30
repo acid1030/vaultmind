@@ -36,11 +36,11 @@ export function useToast() {
   }, [addToast])
 }
 
-const TOAST_STYLES: Record<Toast['type'], { bg: string; border: string; color: string; icon: string }> = {
-  success: { bg: 'hsl(152 50% 14% / 0.95)', border: 'hsl(152 50% 28% / 0.5)', color: 'hsl(152 72% 68%)', icon: '✓' },
-  error:   { bg: 'hsl(356 50% 14% / 0.95)', border: 'hsl(356 50% 28% / 0.5)', color: 'hsl(356 84% 78%)', icon: '✕' },
-  warning: { bg: 'hsl(43 60% 16% / 0.95)',   border: 'hsl(43 60% 30% / 0.5)', color: 'hsl(43 90% 72%)',  icon: '!' },
-  info:    { bg: 'hsl(218 36% 10% / 0.95)', border: 'hsl(218 24% 22% / 0.5)', color: 'hsl(190 90% 72%)', icon: 'i' },
+const TOAST_ICONS: Record<Toast['type'], string> = {
+  success: '✓',
+  error: '✕',
+  warning: '!',
+  info: 'i',
 }
 
 export function ToastContainer() {
@@ -50,31 +50,18 @@ export function ToastContainer() {
   return (
     <div className="fixed bottom-5 right-5 z-[9999] flex flex-col gap-2 pointer-events-none">
       {toasts.map((toast) => {
-        const style = TOAST_STYLES[toast.type]
         return (
           <div
             key={toast.id}
-            className="pointer-events-auto flex items-center gap-2.5 px-4 py-3 rounded-lg backdrop-blur-xl animate-slide-in-right max-w-[400px]"
-            style={{
-              background: style.bg,
-              border: `1px solid ${style.border}`,
-              boxShadow: '0 8px 32px hsl(218 42% 2% / 0.4)',
-            }}
+            className={`vm-toast vm-toast-${toast.type} pointer-events-auto animate-slide-in-right`}
+            role={toast.type === 'error' ? 'alert' : 'status'}
           >
-            <span
-              className="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold"
-              style={{ background: style.color + '20', color: style.color }}
-            >
-              {style.icon}
-            </span>
-            <span className="text-sm flex-1" style={{ color: 'hsl(210 30% 90%)' }}>
-              {toast.message}
-            </span>
+            <span className="vm-toast-icon">{TOAST_ICONS[toast.type]}</span>
+            <span className="vm-toast-message">{toast.message}</span>
             <button
               onClick={() => removeToast(toast.id)}
-              className="flex-shrink-0 text-xs opacity-50 hover:opacity-100 transition-opacity"
-              style={{ color: 'hsl(218 16% 60%)' }}
-            >
+              className="vm-toast-close"
+              aria-label="关闭通知">
               ✕
             </button>
           </div>

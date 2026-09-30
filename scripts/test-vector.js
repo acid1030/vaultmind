@@ -5,6 +5,10 @@ const { migrateSchema } = require('../src/core/schema');
 const vectorSearch = require('../src/core/vector-search');
 
 async function main() {
+  if (!vectorSearch.isAvailable()) {
+    console.log('Vector search test skipped: optional local vector runtime is not installed.');
+    return;
+  }
   const SQL = await initSqlJs({
     locateFile: (file) => path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', file),
   });

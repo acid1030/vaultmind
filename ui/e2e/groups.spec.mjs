@@ -25,6 +25,8 @@ async function register(window) {
   await window.fill('input[placeholder="你的名字"]', 'TestUser');
   await window.fill('input[placeholder="至少 8 位"]', 'TestPass123!');
   await window.click('button:has-text("创建账户")');
+  await window.waitForSelector('button:has-text("我已保存")');
+  await window.click('button:has-text("我已保存")');
   await window.waitForTimeout(1500);
 }
 

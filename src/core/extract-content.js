@@ -5,24 +5,42 @@ async function extractTextFromBuffer(buffer, fileName) {
   const ext = path.extname(fileName || '').toLowerCase();
   try {
     if (ext === '.pdf') {
-      const pdfParse = require('pdf-parse');
-      const data = await pdfParse(buffer);
-      return String(data.text || '').trim();
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+      const loadingTask = pdfjs.getDocument({
+        data: new Uint8Array(buffer),
+        isEvalSupported: false,
+        useSystemFonts: true,
+      });
+      const document = await loadingTask.promise;
+      const pages = [];
+      try {
+        for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+          const page = await document.getPage(pageNumber);
+          const text = await page.getTextContent();
+          pages.push(text.items
+            .map((item) => ('str' in item ? item.str : ''))
+            .filter(Boolean)
+            .join(' '));
+          page.cleanup();
+        }
+      } finally {
+        await document.destroy();
+      }
+      return pages.join('\n').trim();
     }
     if (ext === '.docx') {
       const mammoth = require('mammoth');
       const result = await mammoth.extractRawText({ buffer });
       return String(result.value || '').trim();
     }
-    if (ext === '.xlsx' || ext === '.xls') {
-      const xlsx = require('xlsx');
-      const workbook = xlsx.read(buffer, { type: 'buffer' });
+    if (ext === '.xlsx') {
+      const readXlsxFile = require('read-excel-file/node');
+      const sheets = await readXlsxFile(buffer, { getSheets: true });
       const texts = [];
-      for (const sheetName of workbook.SheetNames) {
-        const sheet = workbook.Sheets[sheetName];
-        const json = xlsx.utils.sheet_to_json(sheet, { header: 1 });
-        for (const row of json) {
-          texts.push(row.filter(Boolean).join(' '));
+      for (const sheet of sheets) {
+        const rows = await readXlsxFile(buffer, { sheet: sheet.name });
+        for (const row of rows) {
+          texts.push(row.filter(value => value !== null && value !== undefined && value !== '').join(' '));
         }
       }
       return texts.join('\n').trim();

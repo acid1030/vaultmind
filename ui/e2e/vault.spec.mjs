@@ -25,6 +25,8 @@ async function register(window) {
   await window.fill('input[placeholder="你的名字"]', 'TestUser');
   await window.fill('input[placeholder="至少 8 位"]', 'TestPass123!');
   await window.click('button:has-text("创建账户")');
+  await window.waitForSelector('button:has-text("我已保存")');
+  await window.click('button:has-text("我已保存")');
   await window.waitForTimeout(1500);
 }
 
@@ -72,6 +74,26 @@ async function register(window) {
   }
 
   await window.screenshot({ path: '/tmp/electron-vault-unlock.png' });
+
+  // Close the reveal panel and verify the shared destructive-action dialog.
+  await window.locator('.glass-panel button:has-text("关闭")').click();
+  await window.locator('button[title="删除"]').first().click({ force: true });
+  const confirmDialog = window.getByRole('alertdialog');
+  await confirmDialog.waitFor({ state: 'visible' });
+  if (!await confirmDialog.getByText('删除加密凭据？').isVisible()) {
+    throw new Error('Shared confirmation dialog did not show the expected copy');
+  }
+  await window.screenshot({ path: '/tmp/electron-confirm-dialog.png' });
+  await confirmDialog.getByRole('button', { name: '取消' }).click();
+  if (!await itemLocator.isVisible()) throw new Error('Canceling deletion removed the secret');
+
+  await window.locator('button[title="删除"]').first().click({ force: true });
+  await window.getByRole('alertdialog').getByRole('button', { name: '删除凭据' }).click();
+  await window.waitForTimeout(500);
+  if (await itemLocator.isVisible().catch(() => false)) throw new Error('Confirmed deletion did not remove the secret');
+  if (!await window.getByRole('button', { name: '添加第一条凭据' }).isVisible()) {
+    throw new Error('Actionable empty state did not appear after deleting the last secret');
+  }
 
   console.log('Password vault test passed');
   console.log('Errors:', JSON.stringify(errors, null, 2));

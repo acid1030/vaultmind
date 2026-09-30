@@ -1,5 +1,5 @@
 /**
- * VaultMind IPC Type Bridge
+ * AxonMind IPC Type Bridge
  *
  * Provides type-safe access to the Electron preload API (window.vaultApi).
  * In browser-only dev mode, falls back to mock implementations.
@@ -16,6 +16,8 @@ export interface VaultUser {
 }
 
 export interface VaultSettings {
+  syncAccessMode?: 'personal' | 'enterprise' | 'managed'
+  managedServiceUrl?: string
   appId: string
   appSecret: string
   feishuPassphrase: string
@@ -23,8 +25,35 @@ export interface VaultSettings {
   folderToken: string
   redirectPort: number
   feishuAutoSync?: boolean
+  syncIntervalSeconds?: number
+  syncConflictStrategy?: 'newest' | 'local' | 'cloud' | 'manual'
+  syncDownloadMode?: 'all' | 'content' | 'manual'
+  syncDeviceName?: string
   localVectorSearch?: boolean
   localVectorModel?: string
+  localVectorAvailable?: boolean
+}
+
+export interface VaultDevice {
+  id: string
+  name: string
+  platform: string
+  status: 'active' | 'revoked'
+  createdAt: string
+  lastSeenAt: string
+  current: boolean
+  online: boolean
+}
+
+export interface AccountSyncState {
+  linked: boolean
+  vaultId: string
+  deviceId: string
+  deviceName: string
+  devices: VaultDevice[]
+  cloudEmail: string
+  syncedAt: string
+  feishuAccountMatches: boolean
 }
 
 export interface VaultContext {
@@ -57,6 +86,32 @@ export interface ManifestMeta {
   url: string
   syncedAt: string
   pulledAt: string
+  conflictCount?: number
+  pendingConflictCount?: number
+}
+
+export interface AutoSyncState {
+  status: 'idle' | 'scheduled' | 'syncing' | 'success' | 'attention' | 'offline'
+  lastSuccessAt: string
+  lastAttemptAt: string
+  lastError: string
+  nextSyncAt: string
+  reason: string
+}
+
+export interface SyncConflict {
+  id: string
+  entityType: 'item' | 'record'
+  assetId: string
+  strategy: string
+  resolution: string
+  localChangedAt: string
+  remoteChangedAt: string
+  remoteDeviceId: string
+  detectedAt: string
+  resolvedAt: string
+  localTitle: string
+  remoteTitle: string
 }
 
 export interface LibraryItem {
@@ -133,6 +188,7 @@ export interface QueryLog {
 export interface Evidence {
   source: string
   type: string
+  kind?: string
   title: string
   content: string
   score: number | null
@@ -181,6 +237,15 @@ export interface VaultState {
   groups: VaultGroup[]
   pendingInvites: PendingInvite[]
   manifestMeta: ManifestMeta | null
+  accountSync: AccountSyncState | null
+  autoSync: AutoSyncState | null
+  syncConflicts: SyncConflict[]
+  syncAccess: {
+    mode: 'personal' | 'enterprise' | 'managed'
+    ready: boolean
+    serviceUrl: string
+    reason: string
+  }
   records: SyncRecord[]
   items: LibraryItem[]
   knowledgeCenter: {
@@ -223,6 +288,13 @@ export interface AppUpdateState {
   bytesPerSecond?: number
 }
 
+export interface DatabaseBackup {
+  name: string
+  path: string
+  size: number
+  createdAt: string
+}
+
 // ── VaultApi Interface ────────────────────────────────────
 
 export interface VaultApi {
@@ -242,6 +314,8 @@ export interface VaultApi {
   saveSettings: (settings: Partial<VaultSettings>) => Promise<VaultState>
   saveLocalVectorSettings: (input: { localVectorSearch?: boolean; localVectorModel?: string }) => Promise<VaultState>
   testFeishuSync: (payload: any) => Promise<any>
+  linkCloudAccount: (payload: { mode: 'create' | 'join'; passphrase?: string; deviceName?: string }) => Promise<VaultState>
+  refreshCloudAccount: (payload: { passphrase?: string }) => Promise<VaultState>
   login: () => Promise<VaultState>
   loginFeishu: () => Promise<VaultState>
   openFeishuRedirectSettings: () => Promise<any>
@@ -251,6 +325,7 @@ export interface VaultApi {
   scanWechatAttachments: () => Promise<any>
   chooseWechatAttachments: () => Promise<any>
   uploadFiles: (payload: any) => Promise<{ state: VaultState; records: any[]; failures: any[] }>
+  importFiles: (payload: any) => Promise<{ state: VaultState; items: LibraryItem[]; failures: any[] }>
   onUploadProgress: (callback: (payload: UploadProgress) => void) => () => void
   uploadText: (payload: any) => Promise<{ state: VaultState; records: any[] }>
   downloadRecord: (payload: any) => Promise<VaultState>
@@ -284,6 +359,9 @@ export interface VaultApi {
   syncManifest: (payload: any) => Promise<any>
   pullManifest: (payload: any) => Promise<any>
   fullSync: (payload: any) => Promise<any>
+  listSyncConflicts: () => Promise<SyncConflict[]>
+  resolveSyncConflict: (payload: { id: string; action: 'local' | 'cloud' }) => Promise<VaultState>
+  onSyncStatus: (callback: (payload: AutoSyncState) => void) => () => void
   removeGroupMember: (payload: any) => Promise<VaultState>
   rotateGroupKey: (groupId: string) => Promise<any>
   updateMemberRole: (payload: any) => Promise<VaultState>
@@ -291,6 +369,11 @@ export interface VaultApi {
   acceptPendingInvites: () => Promise<{ accepted: any[]; state: VaultState }>
   openExternal: (url: string) => Promise<void>
   showDatabase: () => Promise<void>
+  listBackups: () => Promise<DatabaseBackup[]>
+  createBackup: () => Promise<DatabaseBackup>
+  restoreBackup: () => Promise<{ canceled: boolean; restored?: boolean; source?: string }>
+  openBackupFolder: () => Promise<{ path: string }>
+  copySensitiveText: (text: string) => Promise<{ ok: boolean; expiresInSeconds: number }>
   getUpdateState: () => Promise<AppUpdateState>
   checkForUpdates: () => Promise<AppUpdateState>
   downloadUpdate: () => Promise<AppUpdateState>
@@ -304,13 +387,17 @@ export interface VaultApi {
 const mockVaultApi: VaultApi = {
   getState: async () => ({
     auth: { hasUsers: false, isLoggedIn: false, user: null },
-    settings: { appId: '', appSecret: '', feishuPassphrase: '', hasFeishuPassphrase: false, folderToken: 'root', redirectPort: 37891 },
+    settings: { syncAccessMode: 'managed', managedServiceUrl: '', appId: '', appSecret: '', feishuPassphrase: '', hasFeishuPassphrase: false, folderToken: 'root', redirectPort: 37891, feishuAutoSync: true, syncIntervalSeconds: 30, syncConflictStrategy: 'newest', syncDownloadMode: 'all', syncDeviceName: '' },
     isFeishuLoggedIn: false,
     feishuUser: null,
     context: { scope: 'personal', groupId: '', groupName: '' },
     groups: [],
     pendingInvites: [],
     manifestMeta: null,
+    accountSync: null,
+    autoSync: null,
+    syncConflicts: [],
+    syncAccess: { mode: 'managed', ready: false, serviceUrl: '', reason: 'AxonMind 托管服务尚未配置' },
     records: [],
     items: [],
     knowledgeCenter: {
@@ -336,6 +423,8 @@ const mockVaultApi: VaultApi = {
   saveSettings: async () => { throw new Error('Electron 不可用') },
   saveLocalVectorSettings: async () => { throw new Error('Electron 不可用') },
   testFeishuSync: async () => { throw new Error('Electron 不可用') },
+  linkCloudAccount: async () => { throw new Error('Electron 不可用') },
+  refreshCloudAccount: async () => { throw new Error('Electron 不可用') },
   login: async () => { throw new Error('Electron 不可用') },
   loginFeishu: async () => { throw new Error('Electron 不可用') },
   openFeishuRedirectSettings: async () => { throw new Error('Electron 不可用') },
@@ -345,6 +434,7 @@ const mockVaultApi: VaultApi = {
   scanWechatAttachments: async () => ({ canceled: true, roots: [], files: [] }),
   chooseWechatAttachments: async () => ({ canceled: true }),
   uploadFiles: async () => { throw new Error('Electron 不可用') },
+  importFiles: async () => { throw new Error('Electron 不可用') },
   onUploadProgress: () => () => {},
   uploadText: async () => { throw new Error('Electron 不可用') },
   downloadRecord: async () => { throw new Error('Electron 不可用') },
@@ -378,6 +468,9 @@ const mockVaultApi: VaultApi = {
   syncManifest: async () => { throw new Error('Electron 不可用') },
   pullManifest: async () => { throw new Error('Electron 不可用') },
   fullSync: async () => { throw new Error('Electron 不可用') },
+  listSyncConflicts: async () => [],
+  resolveSyncConflict: async () => { throw new Error('Electron 不可用') },
+  onSyncStatus: () => () => {},
   removeGroupMember: async () => { throw new Error('Electron 不可用') },
   rotateGroupKey: async () => { throw new Error('Electron 不可用') },
   updateMemberRole: async () => { throw new Error('Electron 不可用') },
@@ -385,6 +478,11 @@ const mockVaultApi: VaultApi = {
   acceptPendingInvites: async () => { throw new Error('Electron 不可用') },
   openExternal: async () => {},
   showDatabase: async () => {},
+  listBackups: async () => [],
+  createBackup: async () => { throw new Error('Electron 不可用') },
+  restoreBackup: async () => { throw new Error('Electron 不可用') },
+  openBackupFolder: async () => { throw new Error('Electron 不可用') },
+  copySensitiveText: async () => { throw new Error('Electron 不可用') },
   getUpdateState: async () => ({
     status: 'development', currentVersion: '0.3.0', latestVersion: '', releaseName: '',
     releaseNotes: '', percent: 0, message: '开发模式不检查更新',

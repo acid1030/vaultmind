@@ -1,15 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Search, File, FileText, Link2, Video, Key, Download,
-  Trash2, Unlock, Database, Send, Bot, User2, Loader2
+  Trash2, Unlock, Database, Send, Bot, User2, Loader2, Eye, FolderOpen, RotateCcw
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { effectiveContentKind } from '@/lib/content-kind'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
+import PageHero from '@/components/shared/PageHero'
+import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
+import KnowledgeAnswer from '@/components/shared/KnowledgeAnswer'
 import { vaultApi } from '@/lib/ipc'
-import type { LibraryItem, SyncRecord } from '@/lib/ipc'
+import type { Evidence, LibraryItem, SyncRecord } from '@/lib/ipc'
 
 interface LibraryViewProps {
   context: string
@@ -74,7 +77,7 @@ function parseTags(tags: string): string[] {
   return String(tags).split(/[,，\s]+/).filter(Boolean)
 }
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string }
+type ChatMessage = { role: 'user' | 'assistant'; content: string; evidence?: Evidence[] }
 
 const WELCOME_MESSAGE: ChatMessage = {
   role: 'assistant',
@@ -90,12 +93,16 @@ export default function LibraryView({ context }: LibraryViewProps) {
     forgetItem,
     forgetRecord,
     downloadRecord,
+    openAsset,
     queryKnowledge,
   } = useAppStore()
   const toast = useToast()
+  const { confirm, confirmDialog } = useConfirmDialog()
 
   const items = state?.items || []
   const records = state?.records || []
+  const aiReady = Boolean(state?.knowledgeCenter?.aiProfile?.baseUrl && state?.knowledgeCenter?.aiProfile?.model)
+  const remoteCount = items.filter(item => item.remoteOnly).length + records.filter(record => !record.localPath).length
 
   const [search, setSearch] = useState('')
   const [question, setQuestion] = useState('')
@@ -103,6 +110,11 @@ export default function LibraryView({ context }: LibraryViewProps) {
   const [isQuerying, setIsQuerying] = useState(false)
   const [filter, setFilter] = useState<string>('all')
   const [preview, setPreview] = useState<{ open: boolean; item?: LibraryItem; content?: string; url?: string; kind?: string; loading: boolean }>({ open: false, loading: false })
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
+  }, [chatMessages, isQuerying])
 
   const filteredItems = items.filter((item: LibraryItem) => {
     const f = FILTERS.find(fi => fi.id === filter)
@@ -116,11 +128,13 @@ export default function LibraryView({ context }: LibraryViewProps) {
   })
 
   const handleUnlock = async (item: LibraryItem) => {
+    setPreview({ open: true, item, loading: true })
     const result = await unlockItem(item.id)
     if (result.error) {
+      setPreview({ open: false, loading: false })
       toast(result.error, 'error')
     } else {
-      toast('内容已解锁', 'success')
+      setPreview({ open: true, item, content: result.text || '', kind: effectiveContentKind(item), loading: false })
     }
   }
 
@@ -150,7 +164,11 @@ export default function LibraryView({ context }: LibraryViewProps) {
   }
 
   const handleDeleteItem = async (item: LibraryItem) => {
-    if (!window.confirm(`确定要删除内容条目「${item.title || '未命名'}」吗？\n删除后不可恢复。`)) return
+    if (!await confirm({
+      title: '删除内容条目？',
+      description: `「${item.title || '未命名'}」将从本地知识库中永久移除，此操作无法撤销。`,
+      confirmLabel: '删除条目',
+    })) return
     await forgetItem(item.id)
     toast('已删除内容条目', 'info')
   }
@@ -165,8 +183,40 @@ export default function LibraryView({ context }: LibraryViewProps) {
     }
   }
 
+  const handleOpenRecord = async (record: SyncRecord) => {
+    const result = await openAsset({ assetId: record.id, sourceTable: 'records' })
+    if (!result?.opened) toast('本地文件无法打开，请检查原文件是否仍在该路径', 'warning')
+  }
+
+  const handleDownloadItem = async (item: LibraryItem) => {
+    const record = records.find(record => record.assetId === item.id || record.id === item.recordId)
+    if (!record) {
+      toast('没有找到对应的云端加密文件，请先拉取同步清单', 'warning')
+      return
+    }
+    await handleDownloadRecord(record)
+  }
+
+  const handleOpenEvidence = async (evidence: Evidence) => {
+    if (!evidence.assetId) return
+    if (evidence.sourceTable === 'library_items') {
+      const item = items.find(entry => entry.id === evidence.assetId)
+      if (item && !item.remoteOnly) {
+        if (effectiveContentKind(item) === 'secret') await handleUnlock(item)
+        else await handleOpen(item)
+        return
+      }
+    }
+    const result = await openAsset({ assetId: evidence.assetId, sourceTable: evidence.sourceTable })
+    if (!result?.opened) toast('该来源当前无法直接打开', 'warning')
+  }
+
   const handleDeleteRecord = async (record: SyncRecord) => {
-    if (!window.confirm(`确定要删除同步记录「${record.fileName || '未命名'}」吗？\n这会移除本地索引，已上传到飞书的文件仍保留在云端。`)) return
+    if (!await confirm({
+      title: '移除本地同步记录？',
+      description: `「${record.fileName || '未命名'}」的本地索引会被移除，飞书云端中的加密文件仍会保留。`,
+      confirmLabel: '移除记录',
+    })) return
     await forgetRecord(record.id)
     toast('已删除同步记录', 'info')
   }
@@ -177,19 +227,27 @@ export default function LibraryView({ context }: LibraryViewProps) {
     setQuestion('')
     setChatMessages(prev => [...prev, { role: 'user' as const, content: userMsg }])
     setIsQuerying(true)
-    const { answer, error } = await queryKnowledge(userMsg, {})
+    const { answer, evidence, error } = await queryKnowledge(userMsg, {})
     setIsQuerying(false)
     if (error) {
       toast(error, 'error')
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `### 暂时无法完成检索\n\n${error}\n\n请检查知识源或模型配置后重试。` }])
     } else {
-      setChatMessages(prev => [...prev, { role: 'assistant' as const, content: answer || '未找到相关结果' }])
+      setChatMessages(prev => [...prev, { role: 'assistant' as const, content: answer || '未找到相关结果', evidence }])
     }
   }
 
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: '400px 1fr', alignItems: 'start' }}>
+    <div className="vm-page-stack vm-library-page animate-fade-in">
+      <PageHero
+        eyebrow="知识资产"
+        title="知识库与智能检索"
+        description="浏览本地与云端资料，直接打开原文，或基于已授权来源进行问答。"
+        details={[`${items.length + records.length} 项内容`, remoteCount ? `${remoteCount} 项待取回` : '全部本机可用', aiReady ? 'AI 模型已连接' : '本地检索模式']}
+      />
+      <div className="vm-library-grid">
       {/* 左栏：内容库 */}
-      <div className="flex flex-col gap-4">
+      <div className="vm-library-sidebar flex flex-col gap-4">
         {/* 搜索 */}
         <div className="glass-card rounded-md p-4">
           <div className="relative mb-3">
@@ -199,7 +257,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
           </div>
 
           {/* 类型筛选 */}
-          <div className="flex gap-1 flex-wrap">
+          <div className="vm-library-filters flex gap-1 flex-wrap">
             {FILTERS.map(f => (
               <button key={f.id} onClick={() => setFilter(f.id)}
                 className={cn(
@@ -222,7 +280,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
                 {filteredItems.length} 项
               </span>
             </h2>
-            <Button variant="ghost" size="icon-sm" title="查看 SQLite 数据库">
+            <Button variant="ghost" size="icon-sm" title="在访达中查看本地数据库" onClick={() => vaultApi.showDatabase()}>
               <Database className="w-3.5 h-3.5" />
             </Button>
           </div>
@@ -230,8 +288,9 @@ export default function LibraryView({ context }: LibraryViewProps) {
           <div className="divide-y divide-border">
             {filteredItems.length === 0 ? (
               <div className="vm-empty">
-                <Search className="w-8 h-8 text-muted-foreground" />
-                <p className="text-xs">没有找到匹配的内容</p>
+                <FileText className="w-8 h-8 text-muted-foreground" aria-hidden="true" />
+                <p className="vm-empty-title">没有找到匹配的内容</p>
+                <p className="vm-empty-description">尝试缩短关键词、切换内容类型，或从“添加内容”录入新资料。</p>
               </div>
             ) : filteredItems.map((item: LibraryItem) => {
               const kc = kindConfig(effectiveContentKind(item))
@@ -239,8 +298,8 @@ export default function LibraryView({ context }: LibraryViewProps) {
               const Icon = kc.icon
               return (
                 <div key={item.id}
-                  onDoubleClick={() => handleOpen(item)}
-                  className="px-4 py-3 flex items-center gap-3 group transition-colors cursor-pointer hover:bg-muted border-b border-border last:border-b-0">
+                  onClick={() => !item.remoteOnly && effectiveContentKind(item) !== 'secret' && handleOpen(item)}
+                  className={cn("px-4 py-3 flex items-center gap-3 group transition-colors hover:bg-muted border-b border-border last:border-b-0", !item.remoteOnly && effectiveContentKind(item) !== 'secret' && 'cursor-pointer')}>
                   {/* 图标 */}
                   <div className={cn(
                     "w-9 h-9 rounded flex items-center justify-center flex-shrink-0",
@@ -271,13 +330,26 @@ export default function LibraryView({ context }: LibraryViewProps) {
                   </div>
 
                   {/* 操作 */}
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                    <Button variant="ghost" size="icon-sm" title="解锁查看" onClick={() => handleUnlock(item)}>
-                      <Unlock className="w-3 h-3" />
-                    </Button>
-                    <Button variant="ghost" size="icon-sm" title="保存到文件" onClick={() => handleSaveFile(item)}>
-                      <Download className="w-3 h-3" />
-                    </Button>
+                  <div className="flex items-center gap-1 flex-shrink-0" onClick={event => event.stopPropagation()}>
+                    {item.remoteOnly ? (
+                      <Button variant="cyan" size="sm" title="从云端下载并解密到本机" onClick={() => handleDownloadItem(item)}>
+                        <Download className="w-3 h-3" />取回
+                      </Button>
+                    ) : effectiveContentKind(item) === 'secret' ? (
+                      <Button variant="ghost" size="sm" title="主动解锁并查看凭据" onClick={() => handleUnlock(item)}>
+                        <Unlock className="w-3 h-3" />解锁
+                      </Button>
+                    ) : (
+                      <Button variant="ghost" size="sm" title={effectiveContentKind(item) === 'file' ? '打开本地文件' : '直接查看本地内容'} onClick={() => handleOpen(item)}>
+                        {effectiveContentKind(item) === 'file' ? <FolderOpen className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                        {effectiveContentKind(item) === 'file' ? '打开' : '查看'}
+                      </Button>
+                    )}
+                    {effectiveContentKind(item) === 'file' && !item.remoteOnly && Boolean(item.recordId || item.sourcePath) && (
+                      <Button variant="ghost" size="icon-sm" title="另存为" className="opacity-0 group-hover:opacity-100" onClick={() => handleSaveFile(item)}>
+                        <Download className="w-3 h-3" />
+                      </Button>
+                    )}
                     <Button variant="ghost" size="icon-sm" title="删除" className="text-rose hover:text-rose"
                       onClick={() => handleDeleteItem(item)}>
                       <Trash2 className="w-3 h-3" />
@@ -292,13 +364,14 @@ export default function LibraryView({ context }: LibraryViewProps) {
         {/* 飞书同步记录 */}
         <div className="glass-card rounded-md overflow-hidden">
           <div className="px-4 py-3 flex items-center justify-between border-b border-border">
-            <h2 className="text-sm font-semibold text-foreground">飞书同步记录</h2>
+            <h2 className="text-sm font-semibold text-foreground">飞书同步记录 <span className="ml-1 text-xs font-normal text-muted-foreground">{records.length} 项</span></h2>
           </div>
           <div className="divide-y divide-border overflow-y-scroll overscroll-contain" style={{ maxHeight: '45vh' }}>
             {records.length === 0 ? (
               <div className="vm-empty py-8">
                 <Database className="w-8 h-8 text-muted-foreground" />
-                <p className="text-xs">暂无同步记录</p>
+                <p className="vm-empty-title">暂无同步记录</p>
+                <p className="vm-empty-description">完成一次飞书加密同步后，远端文件会显示在这里。</p>
               </div>
             ) : records.map((r: SyncRecord) => (
               <div key={r.id} className="px-4 py-2.5 flex items-center gap-3">
@@ -307,13 +380,15 @@ export default function LibraryView({ context }: LibraryViewProps) {
                   <p className="text-[10px] mt-0.5 text-muted-foreground">{formatSize(r.size)}</p>
                 </div>
                 <div className={cn("vm-badge text-[10px]",
-                  r.token ? 'vm-badge-emerald' : 'vm-badge-gold')}>
-                  {r.token ? '已同步' : '待下载'}
+                  r.localPath ? 'vm-badge-emerald' : 'vm-badge-gold')}>
+                  {r.localPath ? '本机可用' : '云端待取回'}
                 </div>
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="icon-sm" title="下载解密" onClick={() => handleDownloadRecord(r)}>
-                    <Download className="w-3 h-3" />
-                  </Button>
+                  {r.localPath ? (
+                    <Button variant="ghost" size="sm" title="打开原始本地文件" onClick={() => handleOpenRecord(r)}><FolderOpen className="w-3 h-3" />打开</Button>
+                  ) : (
+                    <Button variant="cyan" size="sm" title="从云端下载并解密到本机" onClick={() => handleDownloadRecord(r)}><Download className="w-3 h-3" />取回</Button>
+                  )}
                   <Button variant="ghost" size="icon-sm" title="删除" className="text-rose hover:text-rose"
                     onClick={() => handleDeleteRecord(r)}>
                     <Trash2 className="w-3 h-3" />
@@ -326,19 +401,26 @@ export default function LibraryView({ context }: LibraryViewProps) {
       </div>
 
       {/* 右栏：AI 知识库对话 */}
-      <div className="glass-panel rounded-xl flex flex-col" style={{ height: 'calc(100vh - 88px)' }}>
+      <div className="glass-panel rounded-xl flex flex-col vm-library-chat">
         {/* 头部 */}
         <div className="px-5 py-4 flex items-center gap-3 flex-shrink-0 border-b border-border">
           <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-muted border border-border">
             <Bot className="w-5 h-5 text-cyan" />
           </div>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-sm font-semibold text-foreground">知识库对话</h2>
             <p className="text-xs mt-0.5 text-muted-foreground">
               优先检索本地库 · 飞书 Wiki · Obsidian
             </p>
           </div>
-          <div className="ml-auto vm-badge vm-badge-cyan text-[10px]">AI 就绪</div>
+          <div className={cn('ml-auto vm-badge text-[10px]', aiReady ? 'vm-badge-emerald' : 'vm-badge-cyan')}>
+            {aiReady ? '模型已连接' : '本地检索'}
+          </div>
+          {chatMessages.length > 1 && (
+            <Button variant="ghost" size="icon-sm" title="清空当前对话" onClick={() => setChatMessages([WELCOME_MESSAGE])}>
+              <RotateCcw className="w-3.5 h-3.5" />
+            </Button>
+          )}
         </div>
 
         {/* 对话区域 */}
@@ -357,16 +439,18 @@ export default function LibraryView({ context }: LibraryViewProps) {
               </div>
 
               {/* 气泡 */}
-              <div className={cn("flex flex-col gap-1 max-w-[78%]",
+              <div className={cn("flex flex-col gap-1", msg.role === 'assistant' ? 'max-w-[92%]' : 'max-w-[78%]',
                 msg.role === 'user' ? 'items-end' : 'items-start')}>
                 <span className="text-[10px] text-muted-foreground">
-                  {msg.role === 'assistant' ? 'VaultMind AI' : '你'}
+                  {msg.role === 'assistant' ? 'AxonMind AI' : '你'}
                 </span>
-                <div className={cn("px-4 py-3 rounded-xl text-sm leading-relaxed text-foreground",
+                <div className={cn("px-4 py-3 rounded-xl text-sm leading-relaxed text-foreground min-w-0",
                   msg.role === 'user'
                     ? "rounded-tr-sm bg-emerald/10 border border-emerald/30"
                     : "rounded-tl-sm bg-card border border-border")}>
-                  {msg.content}
+                  {msg.role === 'assistant'
+                    ? <KnowledgeAnswer content={msg.content} evidence={msg.evidence} onOpenEvidence={handleOpenEvidence} />
+                    : msg.content}
                 </div>
               </div>
             </div>
@@ -382,6 +466,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
               </div>
             </div>
           )}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* 输入区 */}
@@ -412,7 +497,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
 
       {/* 内容预览弹窗 */}
       {preview.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: 'rgba(0,0,0,0.6)' }} onClick={() => setPreview({ open: false, loading: false })}>
+        <div className="vm-modal-mask fixed inset-0 z-50 flex items-center justify-center p-6" onClick={() => setPreview({ open: false, loading: false })}>
           <div className="glass-card rounded-lg w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
               <h3 className="text-sm font-semibold truncate pr-4">{preview.item?.title}</h3>
@@ -426,7 +511,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
               ) : preview.url ? (
                 <a href={preview.url} target="_blank" rel="noreferrer" className="text-sm text-cyan hover:underline break-all" onClick={(e) => { e.preventDefault(); vaultApi.openExternal?.(preview.url || '') }}>{preview.url}</a>
               ) : (
-                <pre className="text-xs whitespace-pre-wrap font-mono" style={{ color: 'hsl(218 16% 72%)' }}>{preview.content}</pre>
+                <pre className="text-xs whitespace-pre-wrap font-mono text-foreground">{preview.content}</pre>
               )}
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">
@@ -435,6 +520,8 @@ export default function LibraryView({ context }: LibraryViewProps) {
           </div>
         </div>
       )}
+      {confirmDialog}
+      </div>
     </div>
   )
 }

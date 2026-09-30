@@ -18,6 +18,15 @@ function isGitRepository(localPath) {
   return fs.existsSync(path.join(root, '.git'));
 }
 
+function redactCommandOutput(value, secrets = []) {
+  let output = String(value || '');
+  for (const secret of secrets) {
+    const text = String(secret || '');
+    if (text) output = output.split(text).join('***');
+  }
+  return output;
+}
+
 function runCommand(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, {
@@ -26,9 +35,12 @@ function runCommand(command, args, options = {}) {
       maxBuffer: 1024 * 1024 * 8,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
     }, (error, stdout, stderr) => {
-      const output = [stdout, stderr].filter(Boolean).join('\n').trim();
+      const output = redactCommandOutput(
+        [stdout, stderr].filter(Boolean).join('\n').trim(),
+        options.redact,
+      );
       if (error) {
-        reject(new Error(output || error.message));
+        reject(new Error(output || redactCommandOutput(error.message, options.redact)));
         return;
       }
       resolve(output || 'OK');
@@ -101,7 +113,7 @@ async function inspectRepo(localPath, tool = 'git') {
 async function runGitAction(repo, action, input = {}) {
   const localPath = repo.localPath || repo.local_path;
   const remoteUrl = String(repo.remoteUrl || repo.remote_url || '').trim();
-  const message = String(input.message || 'Update from VaultMind').trim() || 'Update from VaultMind';
+  const message = String(input.message || 'Update from AxonMind').trim() || 'Update from AxonMind';
 
   if (action === 'clone') {
     fs.mkdirSync(path.dirname(localPath), { recursive: true });
@@ -109,7 +121,7 @@ async function runGitAction(repo, action, input = {}) {
       return '本地目录已存在且非空，未执行 clone。';
     }
     const cloneUrl = authRemoteUrl(remoteUrl, repo.accountUsername, repo.secret);
-    return gitRun(process.cwd(), ['clone', cloneUrl, localPath]);
+    return gitRun(process.cwd(), ['clone', cloneUrl, localPath], { redact: [repo.secret, cloneUrl] });
   }
 
   if (action === 'init') {
@@ -131,15 +143,18 @@ async function runGitAction(repo, action, input = {}) {
   }
 
   if (action === 'push') {
-    return withAuthenticatedRemote(repo, () => gitRun(localPath, ['push', '-u', 'origin', 'HEAD']));
+    const authUrl = authRemoteUrl(remoteUrl, repo.accountUsername, repo.secret);
+    return withAuthenticatedRemote(repo, () => gitRun(localPath, ['push', '-u', 'origin', 'HEAD'], { redact: [repo.secret, authUrl] }));
   }
 
   if (action === 'update' || action === 'pull') {
-    return withAuthenticatedRemote(repo, () => gitRun(localPath, ['pull', '--ff-only']));
+    const authUrl = authRemoteUrl(remoteUrl, repo.accountUsername, repo.secret);
+    return withAuthenticatedRemote(repo, () => gitRun(localPath, ['pull', '--ff-only'], { redact: [repo.secret, authUrl] }));
   }
 
   if (action === 'fetch') {
-    return withAuthenticatedRemote(repo, () => gitRun(localPath, ['fetch', '--all', '--prune']));
+    const authUrl = authRemoteUrl(remoteUrl, repo.accountUsername, repo.secret);
+    return withAuthenticatedRemote(repo, () => gitRun(localPath, ['fetch', '--all', '--prune'], { redact: [repo.secret, authUrl] }));
   }
 
   const gitMap = {
@@ -154,7 +169,7 @@ async function runGitAction(repo, action, input = {}) {
 async function runSvnAction(repo, action, input = {}) {
   const localPath = repo.localPath || repo.local_path;
   const remoteUrl = String(repo.remoteUrl || repo.remote_url || '').trim();
-  const message = String(input.message || 'Update from VaultMind').trim() || 'Update from VaultMind';
+  const message = String(input.message || 'Update from AxonMind').trim() || 'Update from AxonMind';
 
   if (action === 'clone') {
     fs.mkdirSync(path.dirname(localPath), { recursive: true });
@@ -164,7 +179,7 @@ async function runSvnAction(repo, action, input = {}) {
     const args = ['checkout', remoteUrl, localPath];
     if (repo.accountUsername) args.push('--username', repo.accountUsername);
     if (repo.secret) args.push('--password', repo.secret, '--non-interactive', '--trust-server-cert');
-    return runCommand('svn', args);
+    return runCommand('svn', args, { redact: [repo.secret] });
   }
 
   if (!fs.existsSync(localPath)) throw new Error('本地目录不存在，请先检出');
@@ -175,7 +190,7 @@ async function runSvnAction(repo, action, input = {}) {
     log: ['log', '-l', '20'],
     commit: ['commit', '-m', message],
   };
-  return runCommand('svn', svnMap[action] || svnMap.status, { cwd: localPath });
+  return runCommand('svn', svnMap[action] || svnMap.status, { cwd: localPath, redact: [repo.secret] });
 }
 
 module.exports = {

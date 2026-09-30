@@ -9,12 +9,38 @@ const groupCrypto = require('../src/core/group-crypto');
 const inviteCrypto = require('../src/core/invite-crypto');
 const searchService = require('../src/core/search');
 const manifestService = require('../src/core/manifest-sync');
+const cloudAccount = require('../src/core/cloud-account');
 const feishuDrive = require('../src/core/feishu-drive');
 const feishuWiki = require('../src/core/feishu-wiki');
 const knowledgeHints = require('../src/core/knowledge-hints');
 const llmFallback = require('../src/core/llm-fallback');
+const knowledgeSafety = require('../src/core/knowledge-safety');
+const extractContent = require('../src/core/extract-content');
+const syncAccess = require('../src/core/sync-access');
 
 const LOCAL_KEY_ITERATIONS = 180000;
+
+function createTestPdf(text) {
+  const content = `BT /F1 18 Tf 72 720 Td (${text}) Tj ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let output = '%PDF-1.4\n';
+  const offsets = [];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(output));
+    output += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(output);
+  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) output += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(output);
+}
 
 function hashPassword(password, salt) {
   return crypto.pbkdf2Sync(password, Buffer.from(salt, 'base64'), LOCAL_KEY_ITERATIONS, 32, 'sha256').toString('base64');
@@ -37,6 +63,13 @@ function encryptForUser(bytes, password, user) {
 }
 
 async function main() {
+  assert.equal(syncAccess.normalizeMode(undefined, { appId: 'legacy-app' }), 'personal', 'legacy credentials migrate to personal mode');
+  assert.equal(syncAccess.normalizeMode(undefined, {}), 'managed', 'new installations default to managed mode');
+  assert.equal(syncAccess.readiness({ syncAccessMode: 'personal', appId: 'cli-test', appSecret: 'secret' }).ready, true);
+  assert.equal(syncAccess.readiness({ syncAccessMode: 'enterprise', appId: 'cli-test' }).ready, false);
+  assert.equal(syncAccess.readiness({ syncAccessMode: 'managed' }, 'https://sync.axonmind.example').ready, true);
+  assert.throws(() => syncAccess.normalizeServiceUrl('http://127.0.0.1:8787'), /HTTPS/);
+  assert.throws(() => syncAccess.normalizeServiceUrl('http://public.example'), /HTTPS/);
   const SQL = await initSqlJs({
     locateFile: (file) => path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', file),
   });
@@ -139,8 +172,10 @@ async function main() {
     password_hash: hashPassword('password-b', saltB),
     created_at: new Date().toISOString(),
   };
-  db.run('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)', [userA.id, userA.email, userA.username, userA.password_salt, userA.password_hash, userA.created_at]);
-  db.run('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)', [userB.id, userB.email, userB.username, userB.password_salt, userB.password_hash, userB.created_at]);
+  db.run('INSERT INTO users (id, email, username, password_salt, password_hash, created_at, vault_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [userA.id, userA.email, userA.username, userA.password_salt, userA.password_hash, userA.created_at, 'vault-a']);
+  db.run('INSERT INTO users (id, email, username, password_salt, password_hash, created_at, vault_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [userB.id, userB.email, userB.username, userB.password_salt, userB.password_hash, userB.created_at, 'vault-b']);
 
   groupService.createGroup(db, saveDatabase, queryOne, userA, 'password-a', { name: '测试组' });
   const group = queryOne('SELECT * FROM groups LIMIT 1');
@@ -184,8 +219,12 @@ async function main() {
   const hits = await searchService.searchLocalAssets(db, queryAll, userA.id, '生产', { scope: 'personal', groupId: '' });
   assert.ok(hits.length >= 1, 'fts should find item');
   assert.ok(hits[0].content.includes('生产密钥') || hits[0].title.includes('生产密钥'), 'evidence should include content');
+  const unrelatedHits = await searchService.searchLocalAssets(db, queryAll, userA.id, '完全不存在的检索短语', { scope: 'personal', groupId: '' });
+  assert.equal(unrelatedHits.length, 0, 'unmatched query must not fall back to unrelated recent items');
 
-  const localManifest = manifestService.buildManifestEntries(db, queryAll, userA.id, 'personal', '');
+  const localManifest = manifestService.buildManifestEntries(db, queryAll, userA.id, 'personal', '', {
+    vaultId: 'vault-a', deviceId: 'device-a',
+  });
   const remoteManifest = {
     ...localManifest,
     items: [...localManifest.items, {
@@ -203,6 +242,26 @@ async function main() {
   };
   const merged = manifestService.mergeManifests(localManifest, remoteManifest);
   assert.ok(merged.items.some((i) => i.id === 'remote-item'), 'merge keeps remote item');
+  const concurrentItem = { ...localManifest.items[0], title: '远端并发标题' };
+  const conflictManifest = manifestService.mergeManifests(localManifest, { ...localManifest, items: [concurrentItem] }, { strategy: 'local' });
+  assert.equal(conflictManifest.conflicts.length, 1, 'same-timestamp divergent edits are reported as conflicts');
+  assert.equal(conflictManifest.items.find((item) => item.id === concurrentItem.id).title, localManifest.items[0].title, 'conflicts preserve the local version');
+  const deletedManifest = manifestService.mergeManifests(localManifest, {
+    ...remoteManifest,
+    tombstones: [{ id: 'delete-item-1', assetId: 'item-1', entityType: 'item', deletedAt: new Date(Date.now() + 1000).toISOString(), deviceId: 'device-b' }],
+  });
+  assert.ok(!deletedManifest.items.some((i) => i.id === 'item-1'), 'newer tombstone prevents deleted item resurrection');
+  assert.throws(() => manifestService.mergeManifests(localManifest, { ...remoteManifest, vaultId: 'vault-other' }), /另一个/);
+
+  const profile = cloudAccount.createProfile({
+    vaultId: 'vault-a', email: userA.email, username: userA.username,
+    device: { id: 'device-a', name: 'Mac A', platform: 'darwin-arm64' },
+  });
+  const joined = cloudAccount.mergeDevice(profile, { id: 'device-b', name: 'Mac B', platform: 'darwin-arm64' });
+  assert.equal(joined.devices.length, 2, 'cloud profile keeps multiple devices');
+  const recoveredDevices = cloudAccount.mergeKnownDevices(profile, joined.devices);
+  assert.equal(recoveredDevices.devices.length, 2, 'known devices survive a stale cloud profile write');
+  assert.ok(cloudAccount.accountFileName('ou-test').startsWith('vaultmind-account-'));
 
   const files = feishuDrive.parseListFilesResponse({
     data: { files: [{ token: 'tok1', name: 'vaultmind-user-x.axonvault' }] },
@@ -216,6 +275,8 @@ async function main() {
   assert.ok(authed.includes('ghp_test'));
   assert.equal(gitProject.authRemoteUrl('git@github.com:org/repo.git', 'wally', 'ghp_test'), 'git@github.com:org/repo.git');
   assert.equal(gitProject.isGitRepository('/tmp/not-a-repo'), false);
+  const redactedOutput = await gitProject.runCommand(process.execPath, ['-e', "process.stderr.write('ghp_sensitive')"], { redact: ['ghp_sensitive'] });
+  assert.equal(redactedOutput, '***');
 
   const wikiHits = feishuWiki.parseSearchResponse({
     data: { items: [{ title: '部署手册', url: 'https://feishu.cn/wiki/x', node_id: 'n1' }] },
@@ -227,7 +288,21 @@ async function main() {
   const balanceNotice = llmFallback.describeLlmFailure(new Error('HTTP 402: Insufficient Balance'));
   assert.ok(balanceNotice.includes('余额或额度不足'));
   const fallbackAnswer = llmFallback.buildEvidenceFallback([{ source: '本地库', title: '部署手册', content: '部署步骤' }], balanceNotice);
-  assert.ok(fallbackAnswer.includes('部署手册'));
+  assert.ok(fallbackAnswer.includes('### 当前状态'));
+  assert.ok(fallbackAnswer.includes('1 条相关资料'));
+  const redacted = knowledgeSafety.redactSensitiveText('password: Test@123456 token=ghp_1234567890abcdef');
+  assert.ok(!redacted.includes('Test@123456'));
+  assert.ok(!redacted.includes('ghp_1234567890abcdef'));
+  const safeEvidence = knowledgeSafety.prepareEvidence([
+    { source: '本地库', type: 'local', kind: 'secret', title: 'GitHub Token', content: 'ghp_1234567890abcdef' },
+    { source: '本地库', type: 'local', kind: 'text', title: '重复文档', content: '第一条' },
+    { source: '本地库', type: 'local', kind: 'text', title: '重复文档', content: '第二条' },
+  ]);
+  assert.equal(safeEvidence.length, 2, 'evidence should be deduplicated');
+  assert.ok(safeEvidence[0].content.includes('密码库'), 'secret evidence should not expose content');
+
+  const pdfText = await extractContent.extractTextFromBuffer(createTestPdf('AxonMind PDF extraction works'), 'test.pdf');
+  assert.ok(pdfText.includes('AxonMind PDF extraction works'), 'PDF text extraction should work without native canvas');
 
   const rotate = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, userA, 'password-a', group.id);
   assert.ok(rotate.keyVersion >= 2);

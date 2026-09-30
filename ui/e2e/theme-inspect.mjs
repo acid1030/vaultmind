@@ -2,13 +2,14 @@ import { _electron as electron } from 'playwright-core'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { fileURLToPath } from 'url'
 
 const userDataDir = mkdtempSync(join(tmpdir(), 'vm-inspect-'))
+const appPath = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..')
 
 async function run() {
   const app = await electron.launch({
-    args: ['.', `--user-data-dir=${userDataDir}`],
-    cwd: '/Users/nike/Documents/project/haichuan/vaultmind',
+    args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'production' },
   })
 
@@ -25,7 +26,9 @@ async function run() {
   const registerIdx = buttons.findIndex(t => t.includes('创建账户'))
   if (registerIdx >= 0) {
     await page.locator('button').nth(registerIdx).click()
-    await page.waitForTimeout(1500)
+    await page.waitForSelector('button:has-text("我已保存")')
+    await page.click('button:has-text("我已保存")')
+    await page.waitForTimeout(1000)
   }
 
   // Toggle to light
@@ -33,8 +36,8 @@ async function run() {
   if (await toggle.count() > 0) await toggle.click()
   await page.waitForTimeout(800)
 
-  // Inspect VaultMind logo text
-  const logoSpan = await page.locator('span.text-sm.font-bold.tracking-tight').first()
+  // Inspect AxonMind logo text
+  const logoSpan = await page.locator('.vm-brand strong').first()
   const style = await logoSpan.getAttribute('style')
   const computedColor = await logoSpan.evaluate(el => window.getComputedStyle(el).color)
   const htmlClass = await page.locator('html').getAttribute('class')

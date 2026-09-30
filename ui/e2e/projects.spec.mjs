@@ -25,6 +25,8 @@ async function register(window) {
   await window.fill('input[placeholder="你的名字"]', 'TestUser');
   await window.fill('input[placeholder="至少 8 位"]', 'TestPass123!');
   await window.click('button:has-text("创建账户")');
+  await window.waitForSelector('button:has-text("我已保存")');
+  await window.click('button:has-text("我已保存")');
   await window.waitForTimeout(1500);
 }
 
@@ -40,8 +42,8 @@ async function register(window) {
   await window.waitForLoadState('networkidle');
   await register(window);
 
-  // Navigate to Projects
-  await window.click('nav button:has-text("项目")');
+  // Navigate to the advanced development connector.
+  await window.click('nav button:has-text("开发连接")');
   await window.waitForTimeout(800);
 
   // Add account
@@ -60,7 +62,7 @@ async function register(window) {
   await window.screenshot({ path: '/tmp/electron-project-account.png' });
 
   // Add repository
-  await window.click('button:has-text("项目仓库")');
+  await window.locator('button').filter({ hasText: /^项目仓库$/ }).last().click();
   await window.waitForTimeout(300);
   // Click plus button in the repo panel header
   await window.locator('h2:has-text("仓库列表")').locator('xpath=..').locator('button').first().click();

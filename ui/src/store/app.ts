@@ -19,6 +19,7 @@ interface AppState {
   refresh: () => Promise<VaultState | null>
   register: (payload: { email: string; username: string; password: string; phone?: string; recoveryEmail?: string }) => Promise<{ recoveryCode?: string; error?: string }>
   login: (email: string, password: string) => Promise<{ error?: string }>
+  completeRegistration: () => void
   logout: () => Promise<void>
   setContext: (scope: 'personal' | 'group', groupId?: string) => Promise<void>
   createLibraryItem: (payload: any) => Promise<{ error?: string }>
@@ -32,14 +33,17 @@ interface AppState {
   saveSettings: (settings: any) => Promise<{ error?: string }>
   saveLocalVectorSettings: (input: { localVectorSearch?: boolean; localVectorModel?: string }) => Promise<{ error?: string }>
   loginFeishu: () => Promise<{ error?: string }>
+  linkCloudAccount: (mode: 'create' | 'join', deviceName?: string) => Promise<{ error?: string }>
+  refreshCloudAccount: () => Promise<{ error?: string }>
   logoutFeishu: () => Promise<void>
   saveAiProfile: (profile: any) => Promise<{ error?: string }>
   uploadFiles: (filePaths: string[], passphrase: string, scope?: any) => Promise<{ records?: any[]; failures?: any[]; error?: string }>
+  importFiles: (filePaths: string[], scope?: any) => Promise<{ items?: any[]; failures?: any[]; error?: string }>
   uploadText: (payload: { name: string; text: string; passphrase: string; scope?: string; groupId?: string }) => Promise<{ records?: any[]; error?: string }>
   downloadRecord: (recordId: string, passphrase: string) => Promise<{ error?: string }>
-  fullSync: (passphrase: string, scope?: any) => Promise<{ pull?: any; push?: any; pullError?: string; pushError?: string }>
+  fullSync: (passphrase: string, scope?: any) => Promise<{ pull?: any; push?: any; pullError?: string; pushError?: string; accountError?: string }>
   syncManifest: (passphrase: string, scope?: any) => Promise<{ error?: string }>
-  pullManifest: (passphrase: string, scope?: any) => Promise<{ error?: string }>
+  pullManifest: (passphrase: string, scope?: any) => Promise<{ error?: string; stats?: any }>
   chooseFiles: () => Promise<{ canceled: boolean; filePaths: string[] }>
   chooseDirectory: () => Promise<{ canceled: boolean; filePaths: string[] }>
   scanWechatAttachments: () => Promise<any>
@@ -112,7 +116,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const result = await vaultApi.register(payload)
       set({
         state: result,
-        isLoggedIn: result.auth.isLoggedIn,
+        // Keep the registration screen mounted until the one-time recovery
+        // code has been acknowledged by the user.
+        isLoggedIn: false,
         user: result.auth.user,
         hasUsers: true,
         pendingInvites: result.pendingInvites || [],
@@ -121,6 +127,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (err: any) {
       return { error: err.message || '注册失败' }
     }
+  },
+
+  completeRegistration: () => {
+    set({ isLoggedIn: true })
   },
 
   login: async (email, password) => {
@@ -266,6 +276,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  linkCloudAccount: async (mode, deviceName) => {
+    try {
+      const state = await vaultApi.linkCloudAccount({ mode, deviceName })
+      set({ state })
+      return {}
+    } catch (err: any) {
+      return { error: err.message }
+    }
+  },
+
+  refreshCloudAccount: async () => {
+    try {
+      const state = await vaultApi.refreshCloudAccount({})
+      set({ state })
+      return {}
+    } catch (err: any) {
+      return { error: err.message }
+    }
+  },
+
   logoutFeishu: async () => {
     try {
       const state = await vaultApi.logout()
@@ -295,6 +325,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  importFiles: async (filePaths, scope) => {
+    try {
+      const result = await vaultApi.importFiles({ filePaths, ...scope })
+      set({ state: result.state })
+      return { items: result.items, failures: result.failures }
+    } catch (err: any) {
+      return { error: err.message }
+    }
+  },
+
   uploadText: async (payload) => {
     try {
       const result = await vaultApi.uploadText(payload)
@@ -319,7 +359,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const result = await vaultApi.fullSync({ passphrase, ...scope })
       if (result.state) set({ state: result.state })
-      return { pull: result.pull, push: result.push, pullError: result.pullError, pushError: result.pushError }
+      return { pull: result.pull, push: result.push, pullError: result.pullError, pushError: result.pushError, accountError: result.accountError }
     } catch (err: any) {
       return { pullError: err.message }
     }
@@ -339,7 +379,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const result = await vaultApi.pullManifest({ passphrase, ...scope })
       if (result.state) set({ state: result.state })
-      return {}
+      return { stats: result.stats }
     } catch (err: any) {
       return { error: err.message }
     }

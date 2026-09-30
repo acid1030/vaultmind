@@ -9,6 +9,9 @@ import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import { CardSkeleton } from '@/components/shared/Skeleton'
+import PageHero from '@/components/shared/PageHero'
+import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
+import { vaultApi } from '@/lib/ipc'
 
 const ROLE_CONFIG: Record<string, { label: string; badge: string; icon: React.ElementType }> = {
   owner:  { label: '所有者', badge: 'vm-badge-gold',   icon: Crown  },
@@ -28,6 +31,7 @@ export default function GroupsView() {
     rotateGroupKey, removeGroupMember, updateMemberRole, acceptPendingInvites,
     copyItemToGroup } = useAppStore()
   const toast = useToast()
+  const { confirm, confirmDialog } = useConfirmDialog()
 
   const groups = state?.groups || []
   const pendingInvites = state?.pendingInvites || []
@@ -140,7 +144,11 @@ export default function GroupsView() {
 
   const handleRemoveMember = async (memberId: string) => {
     const member = members.find(m => m.id === memberId)
-    if (!window.confirm(`确定要将成员「${member?.name || member?.username || '未命名'}」移出用户组吗？`)) return
+    if (!await confirm({
+      title: '移出用户组？',
+      description: `成员「${member?.name || member?.username || '未命名'}」将失去该组内容的后续访问权限。`,
+      confirmLabel: '移出成员',
+    })) return
     setActionLoading(true)
     const { error } = await removeGroupMember(selectedGroupId, memberId)
     setActionLoading(false)
@@ -183,14 +191,22 @@ export default function GroupsView() {
     }
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
+  const copyToClipboard = async (text: string) => {
+    await vaultApi.copySensitiveText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: '300px 1fr', alignItems: 'start' }}>
+    <div className="vm-page-stack animate-fade-in">
+      <PageHero
+        eyebrow="团队协作"
+        title="团队空间与成员权限"
+        description="创建加密协作空间，管理成员角色、组密钥和已共享内容。"
+        details={[`${groups.length} 个用户组`, `${pendingInvites.length} 个待处理邀请`, '角色权限']}
+        tone="violet"
+      />
+      <div className="vm-sidebar-grid">
       {/* ====== Left Column ====== */}
       <div className="flex flex-col gap-4">
         {/* Pending Invites */}
@@ -247,8 +263,8 @@ export default function GroupsView() {
                   className={cn(
                     "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-left",
                     selectedGroupId === g.id
-                      ? "bg-[hsl(218_28%_12%)] border border-[hsl(190_60%_24%/0.3)]"
-                      : "hover:bg-[hsl(218_28%_10%)] border border-transparent"
+                      ? "bg-accent border border-primary/30"
+                      : "vm-hover-row border border-transparent"
                   )}>
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-base font-bold text-cyan-300"
                     style={{ background: 'linear-gradient(145deg, hsl(190 60% 18%), hsl(218 36% 14%))', border: '1px solid var(--border)' }}>
@@ -354,7 +370,7 @@ export default function GroupsView() {
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 p-2 rounded bg-[hsl(218_40%_5%)] border border-[hsl(218_24%_12%)]">
+                  <div className="vm-surface-card flex items-center gap-2 p-2 rounded">
                     <code className="text-[10px] text-[hsl(218_16%_52%)] flex-1 truncate font-mono">
                       {inviteCode}
                     </code>
@@ -388,9 +404,8 @@ export default function GroupsView() {
                     const rc = ROLE_CONFIG[m.role] || ROLE_CONFIG.member
                     const RoleIcon = rc.icon
                     return (
-                      <div key={m.userId || m.id} className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[hsl(218_28%_10%)] group transition-colors">
-                        <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold text-cyan-300"
-                          style={{ background: 'hsl(218 30% 14%)', border: '1px solid hsl(218 24% 20%)' }}>
+                      <div key={m.userId || m.id} className="vm-hover-row flex items-center gap-3 px-3 py-2.5 rounded-lg group">
+                        <div className="vm-surface-raised w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold text-cyan-500">
                           {(m.username || m.email || '?').charAt(0).toUpperCase()}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -408,7 +423,7 @@ export default function GroupsView() {
                         </div>
                         {m.role !== 'owner' && (
                           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <select className="text-[10px] h-6 px-1.5 rounded border border-[hsl(218_24%_20%)] bg-[hsl(218_36%_8%)] text-[hsl(218_16%_56%)]"
+                            <select className="h-6 rounded border border-border bg-background px-1.5 text-[10px] text-foreground"
                               value={m.role}
                               onChange={e => handleUpdateRole(m.userId || m.id, e.target.value)}>
                               <option value="admin">管理员</option>
@@ -428,8 +443,7 @@ export default function GroupsView() {
               )}
 
               {/* Invite form */}
-              <div className="rounded-lg p-3.5 space-y-2.5"
-                style={{ background: 'hsl(218 36% 8%)', border: '1px solid var(--border)' }}>
+              <div className="vm-surface-card rounded-lg p-3.5 space-y-2.5">
                 <p className="text-xs font-medium text-[hsl(210_30%_82%)] flex items-center gap-1.5">
                   <UserPlus className="w-3.5 h-3.5 text-cyan-400" />
                   邀请新成员
@@ -476,9 +490,8 @@ export default function GroupsView() {
               {groupItems.map(item => {
                 const KindIcon = KIND_ICONS[item.kind] || FileText
                 return (
-                  <div key={item.id} className="flex items-center gap-3 p-3 rounded-lg border border-[hsl(218_24%_13%)] hover:bg-[hsl(218_30%_10%)] group transition-colors">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-cyan-400"
-                      style={{ background: 'hsl(218 28% 13%)', border: '1px solid var(--border)' }}>
+                  <div key={item.id} className="vm-hover-row flex items-center gap-3 p-3 rounded-lg border border-border group">
+                    <div className="vm-surface-raised w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-cyan-500">
                       <KindIcon className="w-3.5 h-3.5" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -503,18 +516,17 @@ export default function GroupsView() {
       ) : (
         <div className="glass-card rounded-lg flex items-center justify-center"
           style={{ minHeight: '400px' }}>
-          <div className="text-center">
+          <div className="vm-empty py-12">
             <Users className="w-12 h-12 mx-auto mb-3 text-[hsl(218_16%_28%)]" />
-            <p className="text-sm text-[hsl(218_16%_44%)]">选择一个用户组查看详情</p>
-            <p className="text-xs text-[hsl(218_16%_36%)] mt-1">或创建新用户组开始协作</p>
+            <p className="vm-empty-title">选择一个用户组查看详情</p>
+            <p className="vm-empty-description">也可以在左侧创建新的加密协作空间，再邀请可信成员加入。</p>
           </div>
         </div>
       )}
 
       {/* Share from personal library modal */}
       {showShareModal && currentGroup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'hsl(218 42% 4% / 0.8)', backdropFilter: 'blur(4px)' }}
+        <div className="vm-modal-mask fixed inset-0 z-50 flex items-center justify-center p-4"
           onClick={() => setShowShareModal(false)}>
           <div className="glass-panel rounded-xl w-full max-w-md p-5 animate-scale-in"
             onClick={e => e.stopPropagation()}>
@@ -535,7 +547,7 @@ export default function GroupsView() {
                 const KindIcon = KIND_ICONS[item.kind] || FileText
                 return (
                   <div key={item.id}
-                    className="flex items-center gap-2.5 px-2.5 py-2 rounded hover:bg-[hsl(218_30%_12%)] cursor-pointer"
+                    className="vm-hover-row flex items-center gap-2.5 px-2.5 py-2 rounded cursor-pointer"
                     onClick={() => handleCopyItemToGroup(item.id)}>
                     <KindIcon className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
                     <span className="text-xs text-[hsl(210_30%_82%)] flex-1 truncate">
@@ -550,6 +562,8 @@ export default function GroupsView() {
           </div>
         </div>
       )}
+      {confirmDialog}
+      </div>
     </div>
   )
 }

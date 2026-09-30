@@ -23,6 +23,12 @@ const appPath = path.resolve(__dirname, '..', '..');
   await window.waitForLoadState('networkidle');
   await window.waitForTimeout(1000);
 
+  await window.waitForSelector('.vm-auth-frame');
+  const authImagesReady = await window.locator('.vm-auth-frame img').evaluateAll(images =>
+    images.length >= 2 && images.every(image => image.complete && image.naturalWidth > 0),
+  );
+  if (!authImagesReady) throw new Error('Brand images did not load on the authentication screen');
+
   // Take screenshot of initial state
   await window.screenshot({ path: '/tmp/electron-initial.png' });
 
@@ -40,9 +46,24 @@ const appPath = path.resolve(__dirname, '..', '..');
   await window.fill('input[placeholder="你的名字"]', 'TestUser');
   await window.fill('input[placeholder="至少 8 位"]', 'TestPass123!');
   await window.click('button:has-text("创建账户")');
-
-  await window.waitForTimeout(2000);
+  await window.waitForSelector('text=请妥善保存以下恢复码');
+  await window.screenshot({ path: '/tmp/electron-recovery-code.png' });
+  await window.click('button:has-text("我已保存")');
+  await window.waitForTimeout(1200);
   await window.screenshot({ path: '/tmp/electron-registered.png' });
+
+  const appImagesReady = await window.locator('img').evaluateAll(images =>
+    images.length > 0 && images.every(image => image.complete && image.naturalWidth > 0),
+  );
+  if (!appImagesReady) throw new Error('A generated interface image failed to load');
+
+  const brandName = await window.locator('.vm-brand strong').textContent();
+  if (brandName?.trim() !== 'AxonMind') throw new Error(`Unexpected product brand: ${brandName}`);
+
+  const backup = await window.evaluate(() => window.vaultApi.createBackup());
+  if (!backup?.path || !fs.existsSync(backup.path)) throw new Error('Manual database backup was not created');
+  const backups = await window.evaluate(() => window.vaultApi.listBackups());
+  if (!backups.some(item => item.path === backup.path)) throw new Error('Created backup is missing from backup inventory');
 
   console.log('Errors:', JSON.stringify(errors, null, 2));
   await app.close();

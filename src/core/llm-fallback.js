@@ -15,13 +15,17 @@ function describeLlmFailure(error) {
 
 function buildEvidenceFallback(evidence, notice) {
   const items = Array.isArray(evidence) ? evidence : [];
+  const resultCount = items.filter((item) => !item.isHint).length;
   return [
+    '### 当前状态',
+    '',
     notice,
     '',
-    '检索到的相关内容：',
-    ...items.map((item, index) => (
-      `${index + 1}. [${item.source || '本地库'}] ${item.title || '未命名'}：${String(item.content || '').slice(0, 240)}`
-    )),
+    '### 检索摘要',
+    '',
+    resultCount > 0
+      ? `找到 ${resultCount} 条相关资料。详细内容已整理为下方来源卡片，敏感凭据会自动隐藏。`
+      : '没有找到可用于回答的匹配资料。请尝试更具体或更短的关键词。',
   ].join('\n');
 }
 

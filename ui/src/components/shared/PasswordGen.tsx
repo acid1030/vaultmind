@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { RefreshCw, Copy, Check, Sliders } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { vaultApi } from '@/lib/ipc'
 
 function generatePassword(length: number, opts: {
   upper: boolean; lower: boolean; number: boolean; special: boolean
@@ -15,10 +16,20 @@ function generatePassword(length: number, opts: {
   if (!sets.length) return ''
   const chars = sets.join('')
   let pwd = ''
-  // guarantee at least one from each set
-  for (const s of sets) pwd += s[Math.floor(Math.random() * s.length)]
-  while (pwd.length < length) pwd += chars[Math.floor(Math.random() * chars.length)]
-  return pwd.split('').sort(() => Math.random() - 0.5).join('')
+  const secureIndex = (max: number) => {
+    const values = new Uint32Array(1)
+    const limit = 0x1_0000_0000 - (0x1_0000_0000 % max)
+    do crypto.getRandomValues(values); while (values[0] >= limit)
+    return values[0] % max
+  }
+  for (const set of sets) pwd += set[secureIndex(set.length)]
+  while (pwd.length < length) pwd += chars[secureIndex(chars.length)]
+  const shuffled = pwd.split('')
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const swapIndex = secureIndex(index + 1)
+    ;[shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]
+  }
+  return shuffled.join('')
 }
 
 function passwordStrength(pwd: string): { score: number; label: string; color: string } {
@@ -51,8 +62,8 @@ export default function PasswordGen({ onUse }: PasswordGenProps) {
     setPassword(generatePassword(length, opts))
   }, [length, opts])
 
-  const copy = () => {
-    navigator.clipboard.writeText(password)
+  const copy = async () => {
+    await vaultApi.copySensitiveText(password)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -60,19 +71,16 @@ export default function PasswordGen({ onUse }: PasswordGenProps) {
   const strength = passwordStrength(password)
 
   return (
-    <div className="rounded-xl p-4 space-y-4"
-      style={{ background: 'hsl(218 36% 7%)', border: '1px solid hsl(218 24% 14%)' }}>
+    <div className="vm-surface-card rounded-xl p-4 space-y-4">
       <div className="flex items-center gap-2">
         <Sliders className="w-4 h-4" style={{ color: 'hsl(190 90% 60%)' }} />
-        <span className="text-sm font-semibold" style={{ color: 'hsl(210 30% 88%)' }}>密码生成器</span>
+        <span className="text-sm font-semibold text-foreground">密码生成器</span>
       </div>
 
       {/* 生成结果 */}
       <div className="relative">
-        <div className="px-4 py-3 rounded-lg font-mono text-sm break-all pr-24 select-all"
+        <div className="vm-terminal px-4 py-3 rounded-lg font-mono text-sm break-all pr-24 select-all"
           style={{
-            background: 'hsl(218 40% 5%)',
-            border: '1px solid hsl(218 24% 16%)',
             color: 'hsl(152 72% 62%)',
             minHeight: 48,
           }}>
@@ -94,7 +102,7 @@ export default function PasswordGen({ onUse }: PasswordGenProps) {
           <span>密码强度</span>
           <span style={{ color: strength.color, fontWeight: 600 }}>{strength.label}</span>
         </div>
-        <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'hsl(218 28% 14%)' }}>
+        <div className="h-1.5 rounded-full overflow-hidden bg-muted">
           <div className="h-full rounded-full transition-all duration-300"
             style={{ width: `${(strength.score / 7) * 100}%`, background: strength.color }} />
         </div>
@@ -135,7 +143,7 @@ export default function PasswordGen({ onUse }: PasswordGenProps) {
             )}
               style={opts[o.key as keyof typeof opts]
                 ? { background: 'linear-gradient(135deg, hsl(190 90% 60%), hsl(152 72% 52%))' }
-                : { background: 'hsl(218 36% 9%)' }}
+                : { background: 'hsl(var(--surface))' }}
               onClick={() => {
                 const newOpts = { ...opts, [o.key]: !opts[o.key as keyof typeof opts] }
                 setOpts(newOpts)

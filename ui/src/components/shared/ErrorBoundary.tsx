@@ -23,7 +23,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
-    console.error('VaultMind ErrorBoundary:', error, info)
+    console.error('AxonMind ErrorBoundary:', error, info)
   }
 
   render() {
@@ -37,10 +37,10 @@ export class ErrorBoundary extends Component<Props, State> {
               style={{ background: 'hsl(356 50% 14% / 0.5)', border: '1px solid hsl(356 50% 28% / 0.4)' }}>
               <AlertTriangle className="w-7 h-7" style={{ color: 'hsl(356 84% 70%)' }} />
             </div>
-            <h2 className="text-lg font-semibold mb-2" style={{ color: 'hsl(210 30% 92%)' }}>
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               页面出错了
             </h2>
-            <p className="text-xs mb-4 leading-relaxed" style={{ color: 'hsl(218 16% 50%)' }}>
+            <p className="text-xs mb-4 leading-relaxed text-muted-foreground">
               {this.state.error?.message || '发生未知错误'}
             </p>
             <Button variant="outline" size="sm" onClick={() => {

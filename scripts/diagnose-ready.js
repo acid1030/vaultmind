@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Readiness check against local VaultMind SQLite (no secrets printed).
+ * Readiness check against local AxonMind SQLite (no secrets printed).
  */
 const fs = require('fs');
 const path = require('path');

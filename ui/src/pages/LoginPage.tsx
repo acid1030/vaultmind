@@ -1,13 +1,15 @@
 import React, { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Shield, Eye, EyeOff, Mail, User, Key, ArrowRight, ChevronDown, CheckCircle2 } from 'lucide-react'
+import { Eye, EyeOff, Mail, User, Key, ArrowRight, ChevronDown, CheckCircle2, Copy, Check, Cloud, Database, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import { vaultApi } from '@/lib/ipc'
+import BrandMark from '@/components/shared/BrandMark'
+import loginVisual from '@/assets/brand-login-v2.jpg'
 
 export default function LoginPage() {
-  const { register, login, hasUsers, logout } = useAppStore()
+  const { register, login, completeRegistration, hasUsers } = useAppStore()
   const toast = useToast()
 
   const [mode, setMode] = useState<'login' | 'register'>(hasUsers ? 'login' : 'register')
@@ -19,6 +21,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [hint, setHint] = useState('')
   const [recoveryCode, setRecoveryCode] = useState('')
+  const [recoveryCopied, setRecoveryCopied] = useState(false)
 
   // Reset form
   const [resetEmail, setResetEmail] = useState('')
@@ -104,21 +107,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4" style={{ background: 'var(--bg-dot-grid)' }}>
-      {/* 背景光晕 */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -top-40 -left-40 w-96 h-96 rounded-full"
-          style={{ background: 'radial-gradient(circle, hsl(190 90% 60% / 0.08), transparent 70%)' }} />
-        <div className="absolute top-1/3 -right-32 w-80 h-80 rounded-full"
-          style={{ background: 'radial-gradient(circle, hsl(152 72% 52% / 0.06), transparent 70%)' }} />
-        <div className="absolute -bottom-40 left-1/3 w-96 h-96 rounded-full"
-          style={{ background: 'radial-gradient(circle, hsl(262 80% 72% / 0.05), transparent 70%)' }} />
-      </div>
+    <div className="vm-auth-shell">
 
       {/* 恢复码展示 */}
       {recoveryCode ? (
-        <div className="relative w-full max-w-[420px] animate-scale-in">
-          <div className="glass-panel rounded-xl p-6 text-center">
+        <div className="vm-auth-recovery animate-scale-in">
+          <div className="vm-auth-card text-center">
             <div className="w-14 h-14 rounded-xl mx-auto mb-4 flex items-center justify-center"
               style={{ background: 'hsl(152 50% 18% / 0.5)', border: '1px solid hsl(152 50% 28% / 0.4)' }}>
               <CheckCircle2 className="w-7 h-7" style={{ color: 'hsl(152 72% 65%)' }} />
@@ -127,44 +121,63 @@ export default function LoginPage() {
             <p className="text-xs mb-4 text-muted-foreground" >
               请妥善保存以下恢复码，遗失后无法找回：
             </p>
-            <div className="font-mono text-lg tracking-widest p-3 rounded-lg mb-4"
-              style={{ background: 'hsl(218 36% 7%)', border: '1px solid var(--border)', color: 'hsl(43 90% 65%)' }}>
+            <div className="vm-terminal font-mono text-lg tracking-widest p-3 rounded-lg mb-4" style={{ color: 'hsl(43 90% 65%)' }}>
               {recoveryCode}
             </div>
-            <Button variant="primary" className="w-full" onClick={() => setRecoveryCode('')}>
-              <ArrowRight className="w-4 h-4" />
-              进入应用
-            </Button>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={async () => {
+                await vaultApi.copySensitiveText(recoveryCode)
+                setRecoveryCopied(true)
+                toast('恢复码已复制，30 秒后自动清除', 'success', 3000)
+              }}>
+                {recoveryCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                {recoveryCopied ? '已复制' : '复制恢复码'}
+              </Button>
+              <Button variant="primary" onClick={() => { setRecoveryCode(''); completeRegistration() }}>
+                <ArrowRight className="w-4 h-4" />
+                我已保存
+              </Button>
+            </div>
           </div>
         </div>
       ) : (
-        <div className="relative w-full max-w-[420px] animate-scale-in">
-          {/* Logo 区域 */}
-          <div className="flex flex-col items-center gap-3 mb-8">
-            <div className="relative">
-              <div className="w-16 h-16 rounded-xl flex items-center justify-center"
-                style={{
-                  background: 'linear-gradient(145deg, hsl(190 60% 24%), hsl(152 50% 18%))',
-                  border: '1px solid hsl(190 60% 32% / 0.5)',
-                  boxShadow: '0 0 32px hsl(190 90% 60% / 0.2), inset 0 1px 0 hsl(190 90% 80% / 0.15)',
-                }}>
-                <Shield className="w-8 h-8" style={{ color: 'hsl(190 90% 72%)' }} />
+        <div className="vm-auth-frame animate-scale-in">
+          <aside className="vm-auth-visual">
+            <img src={loginVisual} alt="抽象加密知识核心" />
+            <div className="vm-auth-visual-shade" />
+            <div className="vm-auth-visual-brand">
+              <BrandMark size="sm" decorative />
+              <span><strong>AxonMind</strong><small>SECURE KNOWLEDGE WORKSPACE</small></span>
+            </div>
+            <div className="vm-auth-visual-copy">
+              <span className="vm-auth-kicker">LOCAL FIRST · END-TO-END ENCRYPTED</span>
+              <h2>重要的信息，应该<br />安静地掌握在你手中。</h2>
+              <p>把知识、密钥与项目线索收进一个可信空间，在本地检索，并按你的规则同步。</p>
+              <div className="vm-auth-feature-row">
+                <span><Database />本地保险库</span>
+                <span><Search />统一检索</span>
+                <span><Cloud />加密同步</span>
               </div>
-              <div className="absolute -inset-2 rounded-2xl opacity-40 animate-pulse"
-                style={{ background: 'radial-gradient(circle, hsl(190 90% 60% / 0.15), transparent 70%)' }} />
             </div>
-            <div className="text-center">
-              <h1 className="text-2xl font-bold tracking-tight text-foreground" >
-                VaultMind
-              </h1>
-              <p className="text-sm mt-1 text-muted-foreground" >
-                加密知识工作台
-              </p>
+          </aside>
+
+          <section className="vm-auth-form-panel">
+            <div className="vm-auth-form-heading">
+              <div className="flex items-center gap-3">
+                <BrandMark size="md" decorative />
+                <div>
+                  <h1>AxonMind</h1>
+                  <p>加密知识工作台</p>
+                </div>
+              </div>
+              <div className="mt-8">
+                <h2>{mode === 'login' ? '欢迎回来' : '建立你的本地保险库'}</h2>
+                <p>{mode === 'login' ? '使用本地密码解锁此设备。' : '先创建本机账号，之后可连接飞书开启多端协同。'}</p>
+              </div>
             </div>
-          </div>
 
           {/* 登录卡片 */}
-          <div className="glass-panel rounded-xl p-6">
+          <div className="vm-auth-card">
             {/* 模式切换 */}
             <div className="flex gap-1 p-1 rounded-lg mb-5 bg-muted"
               >
@@ -177,7 +190,7 @@ export default function LoginPage() {
                       : "text-[hsl(218_16%_48%)] hover:text-[hsl(210_30%_75%)]"
                   )}
                   style={mode === m ? {
-                    background: 'hsl(218 32% 12%)',
+                    background: 'hsl(var(--accent))',
                     color: 'hsl(190 90% 72%)',
                     border: '1px solid hsl(190 60% 24% / 0.4)',
                   } : {}}>
@@ -294,8 +307,7 @@ export default function LoginPage() {
               </button>
 
               {showReset && (
-                <div className="mt-3 p-3 rounded-lg space-y-2.5 animate-fade-in"
-                  style={{ background: 'hsl(218 36% 7%)', border: '1px solid var(--border)' }}>
+                <div className="vm-surface-card mt-3 p-3 rounded-lg space-y-2.5 animate-fade-in">
                   <input className="vm-input" placeholder="注册邮箱或恢复邮箱"
                     value={resetEmail} onChange={e => setResetEmail(e.target.value)} />
                   <input className="vm-input" placeholder="恢复码"
@@ -312,9 +324,10 @@ export default function LoginPage() {
           </div>
 
           {/* 底部说明 */}
-          <p className="text-center text-xs mt-5 text-muted-foreground" >
+          <p className="vm-auth-footnote" >
             数据默认储存在本机 SQLite · 端到端加密 · 无服务器读取明文
           </p>
+          </section>
         </div>
       )}
     </div>

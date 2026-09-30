@@ -5,6 +5,15 @@ let pipelineInstance = null;
 let modelLoadPromise = null;
 let currentModel = '';
 
+function isAvailable() {
+  try {
+    require.resolve('@huggingface/transformers');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function modelCacheDir() {
   return path.join(os.homedir(), 'Library/Application Support/vaultmind/xenova-models');
 }
@@ -31,6 +40,9 @@ async function getEmbedder(modelName = 'Xenova/all-MiniLM-L6-v2') {
       return embedder;
     } catch (error) {
       console.error('加载本地 embedding 模型失败:', error.message || error);
+      if (!isAvailable()) {
+        throw new Error('精简安装包未包含本地向量组件；关键词全文搜索仍可正常使用');
+      }
       throw error;
     }
   })();
@@ -201,6 +213,7 @@ function resetEmbedder() {
 }
 
 module.exports = {
+  isAvailable,
   embedText,
   indexVector,
   removeVector,

@@ -7,6 +7,8 @@ import {
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
+import PageHero from '@/components/shared/PageHero'
+import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
 
 type ProjectTab = 'repos' | 'accounts'
 
@@ -14,6 +16,7 @@ export default function ProjectsView() {
   const { state, saveProjectAccount, saveProjectRepository, deleteProjectRepository,
     runProjectAction, chooseDirectory } = useAppStore()
   const toast = useToast()
+  const { confirm, confirmDialog } = useConfirmDialog()
 
   const projects = state?.projects || { accounts: [], repositories: [] }
   const context = state?.context || { scope: 'personal' as const, groupId: '', groupName: '' }
@@ -109,7 +112,11 @@ export default function ProjectsView() {
 
   const handleDeleteRepo = async (repoId: string) => {
     const repo = repos.find(r => r.id === repoId)
-    if (!window.confirm(`确定要删除项目「${repo?.name || '未命名'}」吗？\n删除后不可恢复。`)) return
+    if (!await confirm({
+      title: '移除项目配置？',
+      description: `「${repo?.name || '未命名'}」会从 AxonMind 中移除，本地仓库文件不会被删除。`,
+      confirmLabel: '移除项目',
+    })) return
     const { error } = await deleteProjectRepository(repoId)
     if (error) {
       toast(`删除失败: ${error}`, 'error')
@@ -143,9 +150,17 @@ export default function ProjectsView() {
   }
 
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: '320px 1fr', alignItems: 'start', height: 'calc(100vh - 88px)' }}>
+    <div className="vm-page-stack animate-fade-in">
+      <PageHero
+        eyebrow="项目工作区"
+        title="项目仓库"
+        description="管理 Git 与 SVN 项目、授权账号和本地工作目录，并执行常用仓库操作。"
+        details={[`${repos.length} 个仓库`, `${accounts.length} 个账号`, context.scope === 'group' ? '团队上下文' : '个人上下文']}
+        tone="violet"
+      />
+      <div className="vm-project-grid">
       {/* ====== Left: Repo & Account List ====== */}
-      <div className="flex flex-col gap-3 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 88px)' }}>
+      <div className="flex flex-col gap-3 overflow-y-auto vm-full-height-panel">
         {/* Tabs */}
         <div className="glass-card rounded-lg p-1 flex gap-1">
           {([
@@ -158,8 +173,8 @@ export default function ProjectsView() {
                 className={cn(
                   "flex-1 flex items-center justify-center gap-1.5 py-2 rounded text-xs font-medium transition-all",
                   activeTab === tab.id
-                    ? "bg-[hsl(218_28%_12%)] text-cyan-400 border border-[hsl(190_60%_24%/0.3)]"
-                    : "text-[hsl(218_16%_48%)] hover:text-[hsl(210_30%_72%)]"
+                    ? "bg-accent text-accent-foreground border border-primary/30"
+                    : "text-muted-foreground hover:text-foreground"
                 )}>
                 <Icon className="w-3.5 h-3.5" />
                 {tab.label}
@@ -173,7 +188,7 @@ export default function ProjectsView() {
           <div className="glass-card rounded-lg overflow-hidden">
             <div className="px-4 py-3 flex items-center justify-between"
               style={{ borderBottom: '1px solid var(--border)' }}>
-              <h2 className="text-sm font-semibold text-[hsl(210_30%_90%)]">仓库列表</h2>
+              <h2 className="text-sm font-semibold text-foreground">仓库列表</h2>
               <Button variant="primary" size="icon-sm" onClick={() => setShowRepoModal(true)}>
                 <Plus className="w-3.5 h-3.5" />
               </Button>
@@ -190,12 +205,12 @@ export default function ProjectsView() {
                   className={cn(
                     "w-full text-left px-3 py-3 rounded-lg transition-all border",
                     selectedRepo === repo.id
-                      ? "bg-[hsl(218_30%_11%)] border-[hsl(190_60%_24%/0.35)]"
-                      : "border-transparent hover:bg-[hsl(218_28%_10%)]"
+                      ? "bg-accent border-primary/35"
+                      : "border-transparent vm-hover-row"
                   )}>
                   <div className="flex items-center gap-2">
                     <GitBranch className="w-3.5 h-3.5 flex-shrink-0 text-[hsl(190_90%_60%)]" />
-                    <span className="text-xs font-semibold truncate text-[hsl(210_30%_90%)]">{repo.name}</span>
+                    <span className="text-xs font-semibold truncate text-foreground">{repo.name}</span>
                     <span className={cn("vm-badge text-[9px] flex-shrink-0 ml-auto",
                       repo.tool === 'svn' ? "vm-badge-violet" : "vm-badge-cyan")}>
                       {repo.tool.toUpperCase()}
@@ -214,7 +229,7 @@ export default function ProjectsView() {
           <div className="glass-card rounded-lg overflow-hidden">
             <div className="px-4 py-3 flex items-center justify-between"
               style={{ borderBottom: '1px solid var(--border)' }}>
-              <h2 className="text-sm font-semibold text-[hsl(210_30%_90%)]">Git/SVN 账号</h2>
+              <h2 className="text-sm font-semibold text-foreground">Git/SVN 账号</h2>
               <Button variant="primary" size="icon-sm" onClick={() => setShowAccountModal(true)}>
                 <Plus className="w-3.5 h-3.5" />
               </Button>
@@ -227,10 +242,10 @@ export default function ProjectsView() {
                 </div>
               )}
               {accounts.map(acc => (
-                <div key={acc.id} className="px-3 py-2.5 rounded-lg hover:bg-[hsl(218_28%_10%)] transition-colors">
+                <div key={acc.id} className="vm-hover-row px-3 py-2.5 rounded-lg">
                   <div className="flex items-center gap-2">
                     <Key className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" />
-                    <span className="text-xs font-medium text-[hsl(210_30%_88%)] truncate">{acc.label}</span>
+                    <span className="text-xs font-medium text-foreground truncate">{acc.label}</span>
                     <span className="vm-badge vm-badge-cyan text-[9px] flex-shrink-0 ml-auto">{acc.provider}</span>
                   </div>
                   {acc.username && (
@@ -249,7 +264,7 @@ export default function ProjectsView() {
           {/* Repo Info Bar */}
           <div className="glass-card rounded-md px-4 py-3 flex items-center gap-3 flex-shrink-0">
             <GitBranch className="w-4 h-4 text-[hsl(190_90%_60%)]" />
-            <span className="text-sm font-semibold text-[hsl(210_30%_90%)]">{currentRepo.name}</span>
+            <span className="text-sm font-semibold text-foreground">{currentRepo.name}</span>
             <span className="vm-badge vm-badge-cyan text-[9px]">{currentRepo.tool.toUpperCase()}</span>
             {currentRepo.migrationDir && (
               <span className="text-[10px] text-[hsl(218_16%_44%)]">迁移目录: {currentRepo.migrationDir}</span>
@@ -320,10 +335,9 @@ export default function ProjectsView() {
                 </div>
               )}
             </div>
-            <pre className="flex-1 overflow-auto p-4 text-xs font-mono leading-relaxed"
+            <pre className="vm-terminal flex-1 overflow-auto p-4 text-xs font-mono leading-relaxed"
               style={{
                 color: 'hsl(152 60% 58%)',
-                background: 'hsl(218 40% 4%)',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-all',
               }}>
@@ -334,18 +348,21 @@ export default function ProjectsView() {
       ) : (
         <div className="glass-card rounded-lg flex items-center justify-center"
           style={{ minHeight: '400px' }}>
-          <div className="text-center">
+          <div className="vm-empty py-12">
             <FolderGit2 className="w-12 h-12 mx-auto mb-3 text-[hsl(218_16%_28%)]" />
-            <p className="text-sm text-[hsl(218_16%_44%)]">选择一个项目查看详情</p>
-            <p className="text-xs text-[hsl(218_16%_36%)] mt-1">或添加新项目开始管理</p>
+            <p className="vm-empty-title">还没有选中的项目</p>
+            <p className="vm-empty-description">选择已有仓库查看状态，或者添加一个本地 Git / SVN 项目。</p>
+            <div className="flex items-center gap-2 mt-1">
+              <Button variant="primary" size="sm" onClick={() => setShowRepoModal(true)}><Plus className="w-3.5 h-3.5" />新建项目配置</Button>
+              <Button variant="outline" size="sm" onClick={() => setShowAccountModal(true)}><Key className="w-3.5 h-3.5" />添加账号凭据</Button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Add Account Modal */}
       {showAccountModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'hsl(218 42% 4% / 0.8)', backdropFilter: 'blur(4px)' }}
+        <div className="vm-modal-mask fixed inset-0 z-50 flex items-center justify-center p-4"
           onClick={() => setShowAccountModal(false)}>
           <div className="glass-panel rounded-xl w-full max-w-md p-5 animate-scale-in"
             onClick={e => e.stopPropagation()}>
@@ -396,8 +413,7 @@ export default function ProjectsView() {
 
       {/* Add Repo Modal */}
       {showRepoModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'hsl(218 42% 4% / 0.8)', backdropFilter: 'blur(4px)' }}
+        <div className="vm-modal-mask fixed inset-0 z-50 flex items-center justify-center p-4"
           onClick={() => setShowRepoModal(false)}>
           <div className="glass-panel rounded-xl w-full max-w-md p-5 animate-scale-in"
             onClick={e => e.stopPropagation()}>
@@ -463,6 +479,8 @@ export default function ProjectsView() {
           </div>
         </div>
       )}
+      {confirmDialog}
+      </div>
     </div>
   )
 }

@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('vaultApi', {
   saveSettings: (settings) => ipcRenderer.invoke('vault:saveSettings', settings),
   saveLocalVectorSettings: (payload) => ipcRenderer.invoke('vault:saveLocalVectorSettings', payload),
   testFeishuSync: (payload) => ipcRenderer.invoke('vault:testFeishuSync', payload),
+  linkCloudAccount: (payload) => ipcRenderer.invoke('vault:linkCloudAccount', payload),
+  refreshCloudAccount: (payload) => ipcRenderer.invoke('vault:refreshCloudAccount', payload),
   login: () => ipcRenderer.invoke('vault:login'),
   loginFeishu: () => ipcRenderer.invoke('vault:loginFeishu'),
   openFeishuRedirectSettings: () => ipcRenderer.invoke('vault:openFeishuRedirectSettings'),
@@ -20,6 +22,7 @@ contextBridge.exposeInMainWorld('vaultApi', {
   scanWechatAttachments: () => ipcRenderer.invoke('vault:scanWechatAttachments'),
   chooseWechatAttachments: () => ipcRenderer.invoke('vault:chooseWechatAttachments'),
   uploadFiles: (payload) => ipcRenderer.invoke('vault:uploadFiles', payload),
+  importFiles: (payload) => ipcRenderer.invoke('vault:importFiles', payload),
   onUploadProgress: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const listener = (_event, payload) => callback(payload);
@@ -59,6 +62,14 @@ contextBridge.exposeInMainWorld('vaultApi', {
   syncManifest: (payload) => ipcRenderer.invoke('vault:syncManifest', payload),
   pullManifest: (payload) => ipcRenderer.invoke('vault:pullManifest', payload),
   fullSync: (payload) => ipcRenderer.invoke('vault:fullSync', payload),
+  listSyncConflicts: () => ipcRenderer.invoke('vault:listSyncConflicts'),
+  resolveSyncConflict: (payload) => ipcRenderer.invoke('vault:resolveSyncConflict', payload),
+  onSyncStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:syncStatus', listener);
+    return () => ipcRenderer.removeListener('vault:syncStatus', listener);
+  },
   removeGroupMember: (payload) => ipcRenderer.invoke('vault:removeGroupMember', payload),
   rotateGroupKey: (groupId) => ipcRenderer.invoke('vault:rotateGroupKey', groupId),
   updateMemberRole: (payload) => ipcRenderer.invoke('vault:updateMemberRole', payload),
@@ -66,6 +77,11 @@ contextBridge.exposeInMainWorld('vaultApi', {
   acceptPendingInvites: () => ipcRenderer.invoke('vault:acceptPendingInvites'),
   openExternal: (url) => ipcRenderer.invoke('vault:openExternal', url),
   showDatabase: () => ipcRenderer.invoke('vault:showDatabase'),
+  listBackups: () => ipcRenderer.invoke('vault:listBackups'),
+  createBackup: () => ipcRenderer.invoke('vault:createBackup'),
+  restoreBackup: () => ipcRenderer.invoke('vault:restoreBackup'),
+  openBackupFolder: () => ipcRenderer.invoke('vault:openBackupFolder'),
+  copySensitiveText: (text) => ipcRenderer.invoke('vault:copySensitiveText', text),
   getUpdateState: () => ipcRenderer.invoke('vault:getUpdateState'),
   checkForUpdates: () => ipcRenderer.invoke('vault:checkForUpdates'),
   downloadUpdate: () => ipcRenderer.invoke('vault:downloadUpdate'),

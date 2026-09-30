@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="VaultMind"
-BUNDLE_ID="com.vaultmind.desktop"
+APP_NAME="AxonMind"
+BUNDLE_ID="com.axonmind.desktop"
 VERSION="$(node -p "require('$ROOT_DIR/package.json').version")"
 ELECTRON_APP="$ROOT_DIR/node_modules/electron/dist/Electron.app"
-OUTPUT_DIR="$ROOT_DIR/out/VaultMind-darwin-arm64"
+OUTPUT_DIR="$ROOT_DIR/out/AxonMind-darwin-arm64"
 APP_DIR="$OUTPUT_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -34,11 +34,11 @@ plutil -replace CFBundleExecutable -string "$APP_NAME" "$CONTENTS_DIR/Info.plist
 plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$CONTENTS_DIR/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS_DIR/Info.plist"
 plutil -replace CFBundleVersion -string "$VERSION" "$CONTENTS_DIR/Info.plist"
-plutil -replace CFBundleIconFile -string "VaultMind.icns" "$CONTENTS_DIR/Info.plist"
+plutil -replace CFBundleIconFile -string "AxonMind.icns" "$CONTENTS_DIR/Info.plist"
 plutil -replace LSApplicationCategoryType -string "public.app-category.productivity" "$CONTENTS_DIR/Info.plist"
 plutil -remove ElectronAsarIntegrity "$CONTENTS_DIR/Info.plist" 2>/dev/null || true
 
-cp "$ROOT_DIR/assets/app-icon.icns" "$RESOURCES_DIR/VaultMind.icns"
+cp "$ROOT_DIR/assets/app-icon-axonmind.icns" "$RESOURCES_DIR/AxonMind.icns"
 
 rm -f "$RESOURCES_DIR/default_app.asar"
 mkdir -p "$RESOURCES_DIR/app"

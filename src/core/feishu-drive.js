@@ -11,7 +11,9 @@ function parseListFilesResponse(payload) {
 }
 
 function findManifestFile(files, fileName) {
-  return files.find((f) => f.name === fileName) || null;
+  return files
+    .filter((f) => f.name === fileName)
+    .sort((a, b) => Date.parse(b.modifiedTime || 0) - Date.parse(a.modifiedTime || 0))[0] || null;
 }
 
 module.exports = {

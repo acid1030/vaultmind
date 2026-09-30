@@ -11,7 +11,7 @@ async function launchApp() {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vaultmind-e2e-'));
   const app = await electron.launch({
     args: [appPath, `--user-data-dir=${userDataDir}`],
-    env: { ...process.env, NODE_ENV: 'production' },
+    env: { ...process.env, NODE_ENV: 'production', AXONMIND_E2E: '1', AXONMIND_MANAGED_SERVICE_URL: '' },
   });
   return { app, userDataDir };
 }
@@ -25,6 +25,8 @@ async function register(window) {
   await window.fill('input[placeholder="你的名字"]', 'TestUser');
   await window.fill('input[placeholder="至少 8 位"]', 'TestPass123!');
   await window.click('button:has-text("创建账户")');
+  await window.waitForSelector('button:has-text("我已保存")');
+  await window.click('button:has-text("我已保存")');
   await window.waitForTimeout(1500);
 }
 
@@ -53,14 +55,28 @@ async function register(window) {
   await window.screenshot({ path: '/tmp/electron-sync.png' });
 
   // Navigate to Config
-  await window.click('nav button:has-text("配置")');
+  await window.click('nav button:has-text("设置")');
   await window.waitForTimeout(800);
 
   // Verify config center loads
-  const configHeader = await window.locator('text=配置中心').isVisible().catch(() => false);
+  const configHeader = await window.getByRole('heading', { name: '配置中心', exact: true }).isVisible().catch(() => false);
   if (!configHeader) {
     throw new Error('Config view did not load correctly');
   }
+
+  // Verify all three sync access modes and their mode-specific fields.
+  await window.click('button:has-text("飞书同步")');
+  await window.getByRole('radio', { name: /AxonMind 托管/ }).waitFor();
+  await window.getByRole('radio', { name: /个人自建/ }).waitFor();
+  await window.getByRole('radio', { name: /企业自建/ }).waitFor();
+  await window.getByText('托管服务等待上线').waitFor();
+  const managedLoginDisabled = await window.getByRole('button', { name: '登录飞书' }).isDisabled();
+  if (!managedLoginDisabled) throw new Error('Managed login must be disabled without a configured service');
+  await window.getByRole('radio', { name: /个人自建/ }).click();
+  await window.locator('input[placeholder="cli_xxx"]').waitFor();
+  await window.locator('input[placeholder*="所有设备保持一致"]').waitFor();
+  await window.getByRole('radio', { name: /企业自建/ }).click();
+  await window.getByText(/由企业管理员创建并授权企业自建应用/).waitFor();
 
   // Save recovery info
   await window.click('button:has-text("账户恢复")');

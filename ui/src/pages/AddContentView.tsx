@@ -1,19 +1,20 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   File, FileText, Link2, Video, Key, Upload, Cloud,
-  CheckCircle, FolderOpen, MessageSquare
+  FolderOpen, HardDrive, MessageSquare
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { effectiveContentKind } from '@/lib/content-kind'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
+import PageHero from '@/components/shared/PageHero'
 import { vaultApi, type UploadProgress } from '@/lib/ipc'
 
 type ContentMode = 'file' | 'text' | 'secret' | 'web' | 'video'
 
 const MODES: { id: ContentMode; label: string; icon: React.ReactNode; desc: string }[] = [
-  { id: 'file', label: '文件', icon: <File className="w-4 h-4" />, desc: '上传本地文件，加密存储' },
+  { id: 'file', label: '文件', icon: <File className="w-4 h-4" />, desc: '导入本地或加密同步' },
   { id: 'text', label: '文本', icon: <FileText className="w-4 h-4" />, desc: '笔记、代码、文档片段' },
   { id: 'secret', label: '密钥', icon: <Key className="w-4 h-4" />, desc: 'API Key、Token、密码' },
   { id: 'web', label: '网页', icon: <Link2 className="w-4 h-4" />, desc: '书签与链接收藏' },
@@ -43,7 +44,7 @@ function formatSize(bytes: number): string {
 }
 
 export default function AddContentView() {
-  const { state, uploadFiles, createLibraryItem, scanWechatAttachments } = useAppStore()
+  const { state, uploadFiles, importFiles, createLibraryItem, scanWechatAttachments } = useAppStore()
   const toast = useToast()
 
   const context = state?.context || { scope: 'personal' as const, groupId: '', groupName: '' }
@@ -58,6 +59,7 @@ export default function AddContentView() {
   const [tags, setTags] = useState('')
   const [passphrase, setPassphrase] = useState('')
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
+  const [fileDestination, setFileDestination] = useState<'local' | 'cloud'>('local')
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState<UploadProgress | null>(null)
 
@@ -104,17 +106,19 @@ export default function AddContentView() {
     }
     setUploading(true)
     setProgress(null)
-    const result = await uploadFiles(selectedFiles, passphrase, {
-      scope: context.scope,
-      groupId: context.groupId,
-    })
+    const scope = { scope: context.scope, groupId: context.groupId }
+    const result = fileDestination === 'local'
+      ? await importFiles(selectedFiles, scope)
+      : await uploadFiles(selectedFiles, passphrase, scope)
     setUploading(false)
     if (result.error) {
-      toast(`上传失败: ${result.error}`, 'error')
+      toast(`${fileDestination === 'local' ? '导入' : '上传'}失败：${result.error}`, 'error')
     } else {
-      const ok = result.records?.length || 0
+      let ok = 0
+      if ('items' in result) ok = result.items?.length || 0
+      else if ('records' in result) ok = result.records?.length || 0
       const fail = result.failures?.length || 0
-      toast(`上传完成: ${ok} 成功${fail > 0 ? `, ${fail} 失败` : ''}`, fail > 0 ? 'warning' : 'success')
+      toast(`${fileDestination === 'local' ? '本机导入' : '加密上传'}完成：${ok} 成功${fail > 0 ? `，${fail} 失败` : ''}`, fail > 0 ? 'warning' : 'success')
       setSelectedFiles([])
     }
   }
@@ -172,19 +176,29 @@ export default function AddContentView() {
   }
 
   const canSave = mode === 'file'
-    ? selectedFiles.length > 0
-    : title.trim().length > 0
+    ? selectedFiles.length > 0 && (fileDestination === 'local' || Boolean(state?.isFeishuLoggedIn))
+    : title.trim().length > 0 && (
+      (mode === 'text' || mode === 'secret') ? content.trim().length > 0 : url.trim().length > 0
+    )
 
   // Separate local items from synced records
   const localItems = items.filter(i => !i.remoteOnly)
   const cloudRecords = records
 
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: 'minmax(440px, 0.82fr) minmax(600px, 1.18fr)', alignItems: 'start' }}>
+    <div className="vm-page-stack animate-fade-in">
+      <PageHero
+        eyebrow="安全导入"
+        title="添加到 AxonMind"
+        description="保存文件、笔记、密钥和链接；文件可仅导入本机，也可选择加密同步到飞书。"
+        details={['五类内容', isPersonal ? '个人空间' : '团队空间', '自动索引']}
+        tone="emerald"
+      />
+      <div className="vm-add-grid">
       {/* Left: Add Form */}
       <div className="glass-card rounded-md p-5">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[hsl(210_30%_90%)]">添加内容</h2>
+          <h2 className="text-sm font-semibold text-foreground">添加内容</h2>
           <span className="vm-badge vm-badge-cyan text-[10px]">
             {isPersonal ? '个人空间' : context.groupName || '团队共享'}
           </span>
@@ -196,16 +210,9 @@ export default function AddContentView() {
           {MODES.map(m => (
             <button key={m.id} onClick={() => setMode(m.id)}
               className={cn(
-                "flex flex-col items-center gap-1 py-2.5 px-1 rounded text-center transition-all",
-                mode === m.id
-                  ? "shadow-[0_1px_8px_hsl(218_42%_2%/0.4)]"
-                  : "hover:bg-[hsl(218_28%_12%)]"
-              )}
-              style={mode === m.id ? {
-                background: 'hsl(218 32% 12%)',
-                color: 'hsl(190 90% 72%)',
-                border: '1px solid hsl(190 60% 24% / 0.35)',
-              } : { color: 'hsl(218 16% 50%)' }}>
+                "vm-content-mode flex flex-col items-center gap-1 py-2.5 px-1 rounded text-center transition-all",
+                mode === m.id && "active"
+              )}>
               {m.icon}
               <span className="text-[10px] font-medium">{m.label}</span>
             </button>
@@ -215,29 +222,36 @@ export default function AddContentView() {
         {/* File Mode */}
         {mode === 'file' && (
           <div className="space-y-3">
-            <button className="w-full border-2 border-dashed rounded-lg py-8 flex flex-col items-center gap-2 transition-all hover:border-[hsl(190_60%_34%)]"
-              style={{
-                borderColor: selectedFiles.length > 0 ? 'hsl(190 60% 28%)' : 'hsl(218 24% 18%)',
-                background: 'hsl(218 36% 7%)',
-                color: 'hsl(218 16% 46%)',
-              }}
+            <div className="vm-destination-switch" role="radiogroup" aria-label="文件保存位置">
+              <button className={cn(fileDestination === 'local' && 'active')} role="radio"
+                aria-checked={fileDestination === 'local'} onClick={() => setFileDestination('local')}>
+                <HardDrive className="w-4 h-4" />
+                <span><strong>保存到本机</strong><small>默认选项，无需联网</small></span>
+              </button>
+              <button className={cn(fileDestination === 'cloud' && 'active')} role="radio"
+                aria-checked={fileDestination === 'cloud'} onClick={() => setFileDestination('cloud')}>
+                <Cloud className="w-4 h-4" />
+                <span><strong>加密同步</strong><small>{state?.isFeishuLoggedIn ? '上传到已连接的飞书' : '需要先连接飞书'}</small></span>
+              </button>
+            </div>
+            <button className={cn('vm-file-picker w-full border-2 border-dashed rounded-lg py-8 flex flex-col items-center gap-2 transition-all', selectedFiles.length > 0 && 'selected')}
               onClick={handleChooseFiles}>
-              <FolderOpen className="w-8 h-8" style={{ color: selectedFiles.length > 0 ? 'hsl(190 90% 60%)' : 'hsl(218 24% 32%)' }} />
+              <FolderOpen className="w-8 h-8" />
               <span className="text-sm">
                 {selectedFiles.length > 0
                   ? `已选择 ${selectedFiles.length} 个文件`
-                  : '点击选择文件，或拖拽到此处'}
+                  : '点击选择本地文件'}
               </span>
-              <span className="text-xs text-[hsl(218_16%_38%)]">支持 PDF、Word、Excel、图片等，单文件最大 12 MB</span>
+              <span className="text-xs text-muted-foreground">支持 PDF、Word、Excel、图片等，单文件最大 12 MB</span>
             </button>
 
             {/* Selected files list */}
             {selectedFiles.length > 0 && (
               <div className="space-y-1 max-h-32 overflow-y-auto">
                 {selectedFiles.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded bg-[hsl(218_36%_8%)] border border-[hsl(218_24%_12%)]">
+                  <div key={i} className="vm-surface-card flex items-center gap-2 px-2.5 py-1.5 rounded">
                     <File className="w-3 h-3 text-cyan-400 flex-shrink-0" />
-                    <span className="text-[10px] text-[hsl(210_30%_82%)] truncate flex-1">{f.split('/').pop()}</span>
+                    <span className="text-[10px] text-foreground truncate flex-1">{f.split('/').pop()}</span>
                     <button onClick={() => setSelectedFiles(prev => prev.filter((_, idx) => idx !== i))}
                       className="text-[hsl(218_16%_48%)] hover:text-rose-400">
                       <span className="text-[10px]">✕</span>
@@ -248,7 +262,7 @@ export default function AddContentView() {
             )}
 
             {/* Passphrase input */}
-            <div>
+            {fileDestination === 'cloud' && <div>
               <label className="block text-xs mb-1.5 text-[hsl(218_16%_50%)]">加密口令</label>
               <input className="vm-input w-full" type="password" placeholder="飞书加密口令"
                 value={passphrase} onChange={e => setPassphrase(e.target.value)}
@@ -256,12 +270,14 @@ export default function AddContentView() {
               {settings?.hasFeishuPassphrase && (
                 <p className="text-[10px] mt-1 text-[hsl(218_16%_40%)]">已使用已保存的加密口令</p>
               )}
-            </div>
+              {!state?.isFeishuLoggedIn && (
+                <p className="vm-field-note vm-field-note-warning">请先到“同步中心”连接飞书，再选择加密同步。</p>
+              )}
+            </div>}
 
             {/* Upload Progress */}
-            {progress && uploading && (
-              <div className="rounded-lg p-3 space-y-2"
-                style={{ background: 'hsl(218 36% 8%)', border: '1px solid var(--border)' }}>
+            {fileDestination === 'cloud' && progress && uploading && (
+              <div className="vm-surface-card rounded-lg p-3 space-y-2">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-[hsl(210_30%_82%)]">
                     {progress.phase === 'complete' ? '完成' : `上传中: ${progress.current}`}
@@ -271,7 +287,7 @@ export default function AddContentView() {
                     {progress.failed > 0 && ` (失败 ${progress.failed})`}
                   </span>
                 </div>
-                <div className="h-1.5 rounded-full bg-[hsl(218_24%_14%)] overflow-hidden">
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                   <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-500 transition-all"
                     style={{ width: `${progress.total > 0 ? (progress.completed / progress.total) * 100 : 0}%` }} />
                 </div>
@@ -318,10 +334,10 @@ export default function AddContentView() {
           </div>
         )}
 
-        <Button variant="success" className="w-full mt-4"
+        <Button variant="primary" className="w-full mt-4"
           onClick={handleSave} disabled={!canSave || uploading}>
           <Upload className="w-4 h-4" />
-          {mode === 'file' ? '上传' : '保存'}
+          {mode === 'file' ? (fileDestination === 'local' ? '导入到本机' : '加密上传') : '保存内容'}
         </Button>
       </div>
 
@@ -329,7 +345,7 @@ export default function AddContentView() {
       <div className="glass-card rounded-md overflow-hidden">
         <div className="px-4 py-3"
           style={{ borderBottom: '1px solid var(--border)' }}>
-          <h2 className="text-sm font-semibold text-[hsl(210_30%_90%)]">添加历史</h2>
+          <h2 className="text-sm font-semibold text-foreground">添加历史</h2>
         </div>
 
         <div className="grid grid-cols-2 gap-px p-4 bg-muted"
@@ -348,13 +364,13 @@ export default function AddContentView() {
             {localItems.map(item => {
               const KindIcon = KIND_ICONS[effectiveContentKind(item)] || FileText
               return (
-                <div key={item.id} className="flex items-start gap-2.5 p-2.5 rounded transition-colors cursor-pointer hover:bg-[hsl(218_28%_11%)]">
+                <div key={item.id} className="vm-hover-row flex items-start gap-2.5 p-2.5 rounded cursor-pointer">
                   <div className="w-7 h-7 rounded flex items-center justify-center flex-shrink-0"
                     style={{ background: 'hsl(190 60% 16% / 0.5)', border: '1px solid hsl(190 60% 24% / 0.3)', color: 'hsl(190 90% 68%)' }}>
                     <KindIcon className="w-3 h-3" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate text-[hsl(210_30%_88%)]">{item.title || item.name}</p>
+                    <p className="text-xs font-medium truncate text-foreground">{item.title || item.name}</p>
                     <p className="text-[10px] mt-0.5 text-[hsl(218_16%_44%)]">
                       {formatTime(item.downloadedAt || '')} · {formatSize(item.size)}
                     </p>
@@ -376,13 +392,13 @@ export default function AddContentView() {
               </div>
             )}
             {cloudRecords.map(rec => (
-              <div key={rec.id} className="flex items-start gap-2.5 p-2.5 rounded transition-colors cursor-pointer hover:bg-[hsl(218_28%_11%)]">
+              <div key={rec.id} className="vm-hover-row flex items-start gap-2.5 p-2.5 rounded cursor-pointer">
                 <div className="w-7 h-7 rounded flex items-center justify-center flex-shrink-0"
                   style={{ background: 'hsl(43 60% 18% / 0.5)', border: '1px solid hsl(43 60% 28% / 0.3)', color: 'hsl(43 90% 68%)' }}>
                   <Cloud className="w-3 h-3" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium truncate text-[hsl(210_30%_88%)]">{rec.fileName}</p>
+                  <p className="text-xs font-medium truncate text-foreground">{rec.fileName}</p>
                   <p className="text-[10px] mt-0.5 text-[hsl(218_16%_44%)]">
                     {formatTime(rec.uploadedAt)} · {formatSize(rec.size)}
                   </p>
@@ -391,6 +407,7 @@ export default function AddContentView() {
             ))}
           </div>
         </div>
+      </div>
       </div>
     </div>
   )

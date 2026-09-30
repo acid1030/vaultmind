@@ -325,18 +325,6 @@ function likeSearchFallback(db, queryAll, userId, context, terms) {
   }
 }
 
-function listRecentAssets(db, queryAll, userId, context, limit = 8) {
-  const rows = [];
-  const libScope = scopeSql(context, userId, 'li');
-  rows.push(...queryAll(
-    `SELECT li.id AS asset_id, li.title, li.kind, li.scope, li.group_id, 'library_items' AS source_table
-     FROM library_items li WHERE ${libScope.clause}
-     ORDER BY li.created_at DESC LIMIT ?`,
-    [...libScope.params, limit],
-  ));
-  return rows;
-}
-
 function extractSnippet(content, terms, maxLength = 2000) {
   const text = String(content || '');
   if (!text) return '';
@@ -363,20 +351,13 @@ function extractSnippet(content, terms, maxLength = 2000) {
 function rowsToEvidence(rows, question, terms = []) {
   return rows.map((row, index) => {
     const snippet = extractSnippet(row.content, terms, 2000);
-    const metaParts = [
-      `类型: ${row.kind || 'text'}`,
-      `来源: ${row.source_table || 'library_items'}`,
-      row.title ? `标题: ${row.title}` : '',
-    ].filter(Boolean);
     const content = snippet
-      ? `${metaParts.join(' · ')}\n内容片段：${snippet}`
-      : [
-        ...metaParts,
-        `（与问题「${question.slice(0, 80)}」相关或最近条目）`,
-      ].join(' · ');
+      ? snippet
+      : `该条目与问题「${question.slice(0, 80)}」匹配，但没有可展示的文本摘要。`;
     return {
       source: row.scope === 'group' ? '组内库' : '本地库',
       type: 'local',
+      kind: row.kind || 'text',
       title: row.title || `条目 #${index + 1}`,
       content,
       score: 1 - index * 0.04,
@@ -446,10 +427,6 @@ async function searchLocalAssets(db, queryAll, userId, question, context, vector
     } catch {
       // ignore vector search errors
     }
-  }
-
-  if (merged.length === 0) {
-    addRows(listRecentAssets(db, queryAll, userId, ctx, 10));
   }
 
   // 向量命中的条目排到前面
