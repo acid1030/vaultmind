@@ -297,7 +297,70 @@ export interface DatabaseBackup {
 
 // ── VaultApi Interface ────────────────────────────────────
 
+export interface ChatRoom {
+  scope: 'personal' | 'group'
+  groupId?: string
+}
+export interface ChatAttachment {
+  id: string
+  name: string
+  size: number
+  mime: string
+  sha256: string
+  fileToken?: string
+}
+export interface ChatDraftAttachment extends ChatAttachment { preview?: string }
+export interface ChatMessage {
+  id: string
+  senderId: string
+  senderName: string
+  senderEmail: string
+  deviceId: string
+  createdAt: string
+  text: string
+  attachments?: ChatAttachment[]
+  synced: boolean
+  mine: boolean
+}
+export interface ChatHistory {
+  messages: ChatMessage[]
+  hasMore: boolean
+  writable: boolean
+  pending: number
+  lastSyncAt?: string
+  lastError?: string
+}
+export interface ChatSyncResult {
+  uploaded: number
+  received: number
+  errors: string[]
+}
+
+export interface ScreenshotShortcutState { accelerator: string; registered: boolean; error: string }
+export interface ScreenshotDelivery extends ChatRoom { id: string; attachments: ChatDraftAttachment[] }
 export interface VaultApi {
+  annotateChatDraft: (input: ChatRoom & { attachmentId: string }) => Promise<{ canceled: boolean; attachments: ChatDraftAttachment[] }>
+  getScreenshotShortcut: () => Promise<ScreenshotShortcutState>
+  setScreenshotShortcut: (input: { accelerator: string }) => Promise<ScreenshotShortcutState>
+  getPendingScreenshot: () => Promise<ScreenshotDelivery | null>
+  ackScreenshotDelivery: (input: { id: string; discard?: boolean }) => Promise<{ ok: boolean }>
+  onScreenshotDelivered: (callback: (payload: ScreenshotDelivery) => void) => () => void
+  onScreenshotNotice: (callback: (payload: { message: string }) => void) => () => void
+
+  pickChatAttachments: (input: ChatRoom & { imagesOnly?: boolean }) => Promise<{ canceled: boolean; attachments: ChatDraftAttachment[] }>
+  stageChatData: (input: ChatRoom & { files: { name: string; base64: string }[] }) => Promise<{ attachments: ChatDraftAttachment[] }>
+  discardChatAttachments: (input: { ids: string[] }) => Promise<{ ok: boolean }>
+  captureChatScreenshot: (input: ChatRoom) => Promise<{ canceled: boolean; attachments: ChatDraftAttachment[] }>
+  getChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string; thumbnail?: boolean }) => Promise<{ preview: string }>
+  saveChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string }) => Promise<{ canceled: boolean }>
+
+  listChat: (input: ChatRoom & { before?: { createdAt: string; id: string } }) => Promise<ChatHistory>
+  sendChat: (input: ChatRoom & { text: string; attachmentIds?: string[] }) => Promise<ChatMessage>
+  syncChat: (input: ChatRoom) => Promise<ChatSyncResult>
+  exportChatInvite: (input: { groupId: string; email: string; role: 'member' | 'viewer' }) => Promise<{ code: string; expiresAt: string }>
+  acceptChatInvite: (input: { code: string }) => Promise<{ groupId: string; state: VaultState }>
+  onChatStatus: (callback: (status: { syncing?: boolean }) => void) => () => void
+
   getState: () => Promise<VaultState>
   register: (payload: {
     email: string
@@ -385,6 +448,25 @@ export interface VaultApi {
 // ── Dev-mode mock (when not running in Electron) ──────────
 
 const mockVaultApi: VaultApi = {
+  annotateChatDraft: async () => { throw new Error('Electron 不可用') },
+  getScreenshotShortcut: async () => ({ accelerator: 'CommandOrControl+Alt+A', registered: false, error: 'Electron 不可用' }),
+  setScreenshotShortcut: async () => { throw new Error('Electron 不可用') },
+  getPendingScreenshot: async () => null,
+  ackScreenshotDelivery: async () => ({ ok: true }),
+  onScreenshotDelivered: () => () => {},
+  onScreenshotNotice: () => () => {},
+  pickChatAttachments: async () => { throw new Error('Electron 不可用') },
+  stageChatData: async () => { throw new Error('Electron 不可用') },
+  discardChatAttachments: async () => ({ ok: true }),
+  captureChatScreenshot: async () => { throw new Error('Electron 不可用') },
+  getChatAttachment: async () => { throw new Error('Electron 不可用') },
+  saveChatAttachment: async () => { throw new Error('Electron 不可用') },
+  listChat: async () => { throw new Error('Electron 不可用') },
+  sendChat: async () => { throw new Error('Electron 不可用') },
+  syncChat: async () => { throw new Error('Electron 不可用') },
+  exportChatInvite: async () => { throw new Error('Electron 不可用') },
+  acceptChatInvite: async () => { throw new Error('Electron 不可用') },
+  onChatStatus: () => () => {},
   getState: async () => ({
     auth: { hasUsers: false, isLoggedIn: false, user: null },
     settings: { syncAccessMode: 'managed', managedServiceUrl: '', appId: '', appSecret: '', feishuPassphrase: '', hasFeishuPassphrase: false, folderToken: 'root', redirectPort: 37891, feishuAutoSync: true, syncIntervalSeconds: 30, syncConflictStrategy: 'newest', syncDownloadMode: 'all', syncDeviceName: '' },

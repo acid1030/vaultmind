@@ -20,7 +20,11 @@
     "test:sync": "node scripts/test-sync-multidevice.js",
     "test:package": "node ui/e2e/package-smoke.spec.mjs",
     "test:e2e": "node ui/e2e/auth.spec.mjs && node ui/e2e/content.spec.mjs && node ui/e2e/vault.spec.mjs && node ui/e2e/groups.spec.mjs && node ui/e2e/projects.spec.mjs && node ui/e2e/sync-config.spec.mjs && node ui/e2e/theme-dingtalk.spec.mjs && node ui/e2e/responsive.spec.mjs",
-    "test:vector": "node scripts/test-vector.js"
+    "test:vector": "node scripts/test-vector.js",
+    "test:chat": "node scripts/test-chat.js && node scripts/test-chat-history.mjs && node scripts/test-chat-attachments.js && node scripts/test-chat-screenshot.js",
+    "test:chat:e2e": "node ui/e2e/chat.spec.mjs && node ui/e2e/chat-attachments.spec.mjs",
+    "test:screenshot": "node scripts/test-screenshot-shortcut.js && node scripts/test-screenshot-annotation.mjs && node scripts/test-screenshot-editor.js",
+    "test:screenshot:e2e": "node ui/e2e/screenshot-annotation.spec.mjs"
   },
   "devDependencies": {
     "electron": "^44.1.0",

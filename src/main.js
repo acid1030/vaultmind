@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell, nativeImage, systemPreferences, globalShortcut, screen } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -10,6 +10,11 @@ const { autoUpdater } = require('electron-updater');
 const initSqlJs = require('sql.js');
 const { migrateSchema } = require('./core/schema');
 const groupService = require('./core/groups');
+const { createChatService, rebindPersonalMessages } = require('./core/chat');
+const chatFiles = require('./core/chat-attachments');
+const screenshotCapture = require('./core/chat-screenshot');
+const { createScreenshotEditor } = require('./core/screenshot-editor');
+const { createScreenshotShortcut, DEFAULT_SCREENSHOT_SHORTCUT } = require('./core/screenshot-shortcut');
 const searchService = require('./core/search');
 const extractContent = require('./core/extract-content');
 const manifestService = require('./core/manifest-sync');
@@ -39,6 +44,7 @@ const DEFAULT_SETTINGS = {
   syncConflictStrategy: 'newest',
   syncDownloadMode: 'all',
   syncDeviceName: '',
+  screenshotShortcut: DEFAULT_SCREENSHOT_SHORTCUT,
   localVectorSearch: false,
   localVectorModel: 'Xenova/all-MiniLM-L6-v2',
 };
@@ -93,6 +99,17 @@ let activePassword = '';
 let activeContext = { scope: 'personal', groupId: '' };
 let lastAutomaticBackupAt = 0;
 let autoSyncTimer = null;
+let chatSyncTimer = null;
+let chatCaptureRunning = false;
+let screenshotEditor = null;
+let screenshotShortcutController = null;
+let pendingGlobalScreenshot = null;
+let chatSyncDueAt = 0;
+let chatSyncRunning = false;
+let chatSyncQueued = false;
+let chatSessionEpoch = 0;
+let chatServiceInstance = null;
+let chatServiceDatabase = null;
 let autoSyncRunning = false;
 let autoSyncQueued = false;
 let autoSyncFailureCount = 0;
@@ -476,6 +493,9 @@ function restoreSessionPassword() {
 }
 
 function createLocalSession(userId, password = '') {
+  screenshotEditor?.cancel();
+  pendingGlobalScreenshot = null;
+  chatSessionEpoch += 1;
   const token = crypto.randomBytes(32).toString('base64url');
   const expiresAt = Date.now() + LOCAL_SESSION_TTL_MS;
   db.run('DELETE FROM local_sessions WHERE user_id = ?', [userId]);
@@ -489,6 +509,13 @@ function createLocalSession(userId, password = '') {
 }
 
 function clearLocalSession() {
+  screenshotEditor?.cancel();
+  pendingGlobalScreenshot = null;
+  chatServiceInstance?.clearDrafts();
+  chatSessionEpoch += 1;
+  clearTimeout(chatSyncTimer);
+  chatSyncTimer = null;
+  chatSyncDueAt = 0;
   try {
     const token = fs.readFileSync(sessionTokenPath(), 'utf8').trim();
     if (token) db.run('DELETE FROM local_sessions WHERE token_hash = ?', [hashSessionToken(token)]);
@@ -956,6 +983,7 @@ function sanitizeSettings(input, previousSecret = '', previousFeishuPassphrase =
       : DEFAULT_SETTINGS.syncIntervalSeconds,
     syncConflictStrategy: manifestService.normalizeConflictStrategy(input.syncConflictStrategy),
     syncDownloadMode,
+    screenshotShortcut: String(input.screenshotShortcut || DEFAULT_SCREENSHOT_SHORTCUT),
     syncDeviceName: String(input.syncDeviceName || '').trim().slice(0, 80),
     localVectorSearch: Boolean(input.localVectorSearch),
     localVectorModel: String(input.localVectorModel || DEFAULT_SETTINGS.localVectorModel).trim() || DEFAULT_SETTINGS.localVectorModel,
@@ -1581,13 +1609,16 @@ async function callFeishuWikiRetriever(question) {
 }
 
 async function listFeishuFolderFiles(folderToken) {
-  const token = await refreshFeishuTokenIfNeeded();
-  const response = await requestJson(
-    'GET',
-    `${FEISHU_API}/open-apis/drive/v1/files?folder_token=${encodeURIComponent(folderToken)}&page_size=200`,
-    { headers: { Authorization: `Bearer ${token.accessToken}` } },
-  );
-  return feishuDrive.parseListFilesResponse(ensureFeishuPayload(response, '列出飞书文件失败'));
+  return feishuDrive.listAllFiles(async (pageToken) => {
+    const token = await refreshFeishuTokenIfNeeded();
+    const suffix = pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : '';
+    const response = await requestJson(
+      'GET',
+      `${FEISHU_API}/open-apis/drive/v1/files?folder_token=${encodeURIComponent(folderToken)}&page_size=200${suffix}`,
+      { headers: { Authorization: `Bearer ${token.accessToken}` } },
+    );
+    return ensureFeishuPayload(response, '列出飞书文件失败');
+  });
 }
 
 async function getFeishuRootFolderToken() {
@@ -1816,6 +1847,7 @@ function persistCloudProfile(user, profile, openId, syncedAt = new Date().toISOS
     [profile.vaultId, openIdHash, user.id],
   );
   if (previousVaultId !== profile.vaultId) {
+    rebindPersonalMessages(db, user.id, previousVaultId, profile.vaultId);
     db.run('UPDATE vault_devices SET vault_id = ? WHERE vault_id = ?', [profile.vaultId, previousVaultId]);
     db.run('UPDATE sync_tombstones SET vault_id = ? WHERE user_id = ?', [profile.vaultId, user.id]);
   }
@@ -2212,6 +2244,163 @@ async function pullManifestFromFeishu(payload) {
   };
 }
 
+function getChatService() {
+  if (chatServiceInstance && chatServiceDatabase === db) return chatServiceInstance;
+  chatServiceDatabase = db;
+  chatServiceInstance = createChatService({
+    db, queryOne, queryAll, save: saveDatabase,
+    getSession: () => {
+      const user = requireUser();
+      return { user, password: requireSessionPassword(), vaultId: currentVaultId(user),
+        deviceId: currentDevice(user).id, linked: Boolean(user.cloud_linked), epoch: chatSessionEpoch, cloudIdentity: getFeishuToken()?.user?.openId || '' };
+    },
+    getSettings,
+    resolvePersonalFolder: async (folder) => {
+      const user = requireUser();
+      const openId = requireFeishuOpenId();
+      if (user.feishu_open_id_hash && user.feishu_open_id_hash !== cloudAccount.hashFeishuOpenId(openId)) {
+        throw new Error('当前飞书账号与已绑定的云端账号不一致');
+      }
+      return resolveWritableFeishuFolder(folder);
+    },
+    transport: {
+      list: listFeishuFolderFiles,
+      download: downloadFeishuFileBuffer,
+      upload: (folder, name, bytes) => uploadAllToFeishu({
+        file_name: name, parent_type: 'explorer', parent_node: folder, size: String(bytes.length),
+      }, { name, bytes }, '上传聊天记录失败'),
+    },
+  });
+  return chatServiceInstance;
+}
+
+function chatOperation(input, writable = false) {
+  const user = requireUser();
+  requireSessionPassword();
+  if (!input || !['personal', 'group'].includes(input.scope)) throw new Error('请选择有效的聊天空间');
+  if (input.scope === 'group') groupService.requireGroupAccess(db, queryOne, String(input.groupId || ''), user.id,
+    writable ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
+  const epoch = chatSessionEpoch;
+  return () => {
+    if (epoch !== chatSessionEpoch || activeUser?.id !== user.id) throw new Error('登录状态已变化，请重试');
+    if (input.scope === 'group') groupService.requireGroupAccess(db, queryOne, String(input.groupId || ''), user.id,
+      writable ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
+  };
+}
+
+function chatPreviewData(bytes, mime, thumbnail = false) {
+  if (!chatFiles.imageMime(bytes) || chatFiles.imageMime(bytes) !== mime) return '';
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return '';
+  const size = image.getSize();
+  if (size.width > 20000 || size.height > 20000 || size.width * size.height > 80 * 1000 * 1000) throw new Error('图片尺寸过大，请缩小后重试');
+  if (!thumbnail) return `data:${mime};base64,${bytes.toString('base64')}`;
+  return image.resize({ width: Math.min(320, size.width) }).toDataURL();
+}
+
+function stageChatFiles(input, files) {
+  const staged = getChatService().stageAttachments({ ...input, files });
+  try { return staged.map((file, index) => ({ ...file, preview: chatPreviewData(files[index].bytes, file.mime, true) })); }
+  catch (error) { getChatService().discardAttachments({ ids: staged.map(file => file.id) }); throw error; }
+}
+
+function showChatWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show(); mainWindow.focus();
+}
+
+async function captureEditedChatScreenshot(input, editDraft = false) {
+  const checkSession = chatOperation(input, true);
+  const parentWindow = mainWindow;
+  const check = () => { checkSession(); if (!parentWindow || parentWindow.isDestroyed() || mainWindow !== parentWindow) throw new Error('聊天窗口已关闭，请重新打开'); };
+  if (chatCaptureRunning) throw new Error('截图或标注正在进行，请先完成或取消');
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('请先打开聊天窗口');
+  chatCaptureRunning = true;
+  try {
+    let source;
+    if (editDraft) {
+      const file = getChatService().readDraftAttachment(input);
+      if (!chatFiles.imageMime(file.bytes)) throw new Error('只能标注图片附件');
+      const image = nativeImage.createFromBuffer(file.bytes);
+      if (image.isEmpty()) throw new Error('无法读取该图片');
+      source = { bytes: image.toPNG(), name: `${file.name.replace(/\.[^.]+$/, '')}-标注.png` };
+    } else {
+      source = await screenshotCapture.captureScreenshot({ window: mainWindow, permission: () => systemPreferences.getMediaAccessStatus('screen') });
+    }
+    check();
+    if (source.canceled) return { canceled: true, attachments: [] };
+    const edited = await screenshotEditor.edit({ ...source, check });
+    check();
+    if (edited.canceled) return { canceled: true, attachments: [] };
+    const attachments = stageChatFiles(input, [{ name: edited.name, bytes: edited.bytes }]);
+    if (editDraft) getChatService().discardAttachments({ ids: [input.attachmentId] });
+    showChatWindow();
+    return { canceled: false, attachments };
+  } finally { chatCaptureRunning = false; }
+}
+
+async function captureFromGlobalShortcut() {
+  if (!activeUser || !activePassword || !mainWindow || mainWindow.isDestroyed()) return;
+  if (chatCaptureRunning) return;
+  if (pendingGlobalScreenshot?.epoch !== chatSessionEpoch) pendingGlobalScreenshot = null;
+  if (pendingGlobalScreenshot) {
+    showChatWindow();
+    mainWindow.webContents.send('vault:screenshotDelivered', pendingGlobalScreenshot);
+    return;
+  }
+  const input = { scope: getContext().scope, groupId: getContext().groupId };
+  const epoch = chatSessionEpoch;
+  try {
+    const result = await captureEditedChatScreenshot(input);
+    if (result.canceled || epoch !== chatSessionEpoch) return;
+    pendingGlobalScreenshot = { id: crypto.randomUUID(), ...input, attachments: result.attachments, epoch };
+    mainWindow.webContents.send('vault:screenshotDelivered', pendingGlobalScreenshot);
+  } catch (error) {
+    if (epoch !== chatSessionEpoch) return;
+    showChatWindow();
+    mainWindow.webContents.send('vault:screenshotNotice', { message: String(error.message || error) });
+  }
+}
+
+function notifyChatStatus(patch = {}) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('vault:chatStatus', patch);
+}
+
+function scheduleChatAutoSync(delayMs = autoSyncIntervalMs()) {
+  if (!db || !activeUser || !activePassword || !getSettings().feishuAutoSync || !hasUsableFeishuToken(getFeishuToken())) {
+    clearTimeout(chatSyncTimer);
+    chatSyncTimer = null;
+    chatSyncDueAt = 0;
+    return;
+  }
+  if (chatSyncRunning) { chatSyncQueued = true; return; }
+  const delay = Math.max(500, delayMs);
+  const dueAt = Date.now() + delay;
+  // Frequent state refreshes must not postpone an already scheduled chat sync.
+  if (chatSyncTimer && chatSyncDueAt <= dueAt) return;
+  clearTimeout(chatSyncTimer);
+  chatSyncDueAt = dueAt;
+  chatSyncTimer = setTimeout(async () => {
+    chatSyncTimer = null;
+    chatSyncDueAt = 0;
+    const epoch = chatSessionEpoch;
+    chatSyncRunning = true;
+    notifyChatStatus({ syncing: true });
+    try {
+      await getChatService().syncAll();
+    } catch (error) {
+      if (epoch === chatSessionEpoch) console.error('聊天自动同步失败:', error.message || error);
+    } finally {
+      chatSyncRunning = false;
+      if (epoch === chatSessionEpoch) notifyChatStatus({ syncing: false });
+      const queued = chatSyncQueued;
+      chatSyncQueued = false;
+      scheduleChatAutoSync(queued ? 900 : autoSyncIntervalMs());
+    }
+  }, delay);
+}
+
 async function fullSyncManifest(payload) {
   const result = { pull: null, push: null, account: null, pullError: null, pushError: null, accountError: null };
   try {
@@ -2269,6 +2458,7 @@ function clearAutoSyncTimer() {
 }
 
 function scheduleAutoSync(reason = 'timer', delayMs = autoSyncIntervalMs()) {
+  scheduleChatAutoSync(delayMs);
   clearAutoSyncTimer();
   if (!canAutoSync()) return;
   const delay = Math.max(500, Number(delayMs || autoSyncIntervalMs()));
@@ -2945,6 +3135,14 @@ function changeLocalPassword(input) {
       encrypted: encryptForLocalUser(decryptForLocalUser(secretRow, currentPassword, user), newPassword, nextUser),
     };
   });
+  const chatMessages = queryAll('SELECT * FROM chat_messages WHERE owner_user_id = ?', [user.id]).map(row => ({
+    id: row.id, roomId: row.room_id,
+    encrypted: encryptForLocalUser(decryptForLocalUser(row, currentPassword, user), newPassword, nextUser),
+  }));
+  const chatAttachments = queryAll('SELECT * FROM chat_attachments WHERE owner_user_id = ? AND content_ciphertext IS NOT NULL', [user.id]).map(row => ({
+    id: row.id, roomId: row.room_id,
+    encrypted: encryptForLocalUser(decryptForLocalUser(row, currentPassword, user), newPassword, nextUser),
+  }));
   const wrappedGroupKeys = queryAll('SELECT * FROM group_member_keys WHERE user_id = ?', [user.id])
     .map((row) => {
       const groupKey = groupCrypto.unwrapGroupKey({
@@ -2982,6 +3180,14 @@ function changeLocalPassword(input) {
         'UPDATE project_accounts SET secret_ciphertext = ?, secret_iv = ?, secret_tag = ? WHERE id = ?',
         [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, row.id],
       );
+    }
+    for (const row of chatMessages) {
+      db.run('UPDATE chat_messages SET content_ciphertext = ?, content_iv = ?, content_tag = ? WHERE owner_user_id = ? AND room_id = ? AND id = ?',
+        [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, user.id, row.roomId, row.id]);
+    }
+    for (const row of chatAttachments) {
+      db.run('UPDATE chat_attachments SET content_ciphertext = ?, content_iv = ?, content_tag = ? WHERE owner_user_id = ? AND room_id = ? AND id = ?',
+        [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, user.id, row.roomId, row.id]);
     }
     for (const row of wrappedGroupKeys) {
       db.run(
@@ -3392,6 +3598,8 @@ function createWindow() {
     app.dock.setIcon(iconPath);
   }
 
+  mainWindow.on('closed', () => screenshotEditor?.cancel());
+
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -3703,7 +3911,7 @@ function registerHandlers() {
   ipcMain.handle('vault:getState', async () => {
     await ensureDatabase();
     restoreLocalSession();
-    requestAutoSync('app-start', 1500);
+    if (!autoSyncTimer && !autoSyncRunning) requestAutoSync('app-start', 1500);
     return publicState();
   });
 
@@ -3808,8 +4016,9 @@ function registerHandlers() {
         (SELECT COUNT(*) FROM library_items WHERE user_id = ?) +
         (SELECT COUNT(*) FROM decrypted_items WHERE user_id = ?) +
         (SELECT COUNT(*) FROM project_accounts WHERE user_id = ?) +
-        (SELECT COUNT(*) FROM group_member_keys WHERE user_id = ?) AS total`,
-      [user.id, user.id, user.id, user.id],
+        (SELECT COUNT(*) FROM group_member_keys WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM chat_messages WHERE owner_user_id = ?) AS total`,
+      [user.id, user.id, user.id, user.id, user.id],
     );
     if (Number(encryptedData?.total || 0) > 0) {
       throw new Error('该账号已有加密内容，无法在不知道旧密码的情况下安全重置。请用旧密码登录后在「配置 → 账户恢复」中修改本地密码。');
@@ -3824,7 +4033,7 @@ function registerHandlers() {
     await ensureDatabase();
     requireUser();
     const previous = getSettings();
-    const next = sanitizeSettings({ ...previous, ...(input || {}) }, previous.appSecret, previous.feishuPassphrase);
+    const next = sanitizeSettings({ ...previous, ...(input || {}), screenshotShortcut: previous.screenshotShortcut }, previous.appSecret, previous.feishuPassphrase);
     setStateValue('settings', next);
     const authenticationChanged = next.syncAccessMode !== previous.syncAccessMode
       || next.appId !== previous.appId
@@ -4255,6 +4464,113 @@ function registerHandlers() {
     return queryKnowledgeCenter(payload && payload.question, payload || {});
   });
 
+  ipcMain.handle('vault:pickChatAttachments', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input, true);
+    const result = await dialog.showOpenDialog(mainWindow, { title: input.imagesOnly ? '选择图片' : '选择聊天附件',
+      properties: ['openFile', 'multiSelections'], ...(input.imagesOnly ? { filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }] } : {}) });
+    check();
+    if (result.canceled) return { canceled: true, attachments: [] };
+    if (result.filePaths.length > chatFiles.MAX_ATTACHMENTS) throw new Error('一次最多选择 5 个附件');
+    const files = [];
+    for (const filePath of result.filePaths) {
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile() || stat.size > chatFiles.MAX_ATTACHMENT_BYTES) throw new Error(`「${path.basename(filePath)}」无法发送：单个附件不能超过 12MB`);
+      const bytes = await fs.promises.readFile(filePath);
+      check();
+      files.push({ name: path.basename(filePath), bytes });
+    }
+    return { canceled: false, attachments: stageChatFiles(input, files) };
+  });
+  ipcMain.handle('vault:stageChatData', async (_event, input) => {
+    await ensureDatabase();
+    chatOperation(input, true)();
+    if (!Array.isArray(input.files) || input.files.length > chatFiles.MAX_ATTACHMENTS || !input.files.length) throw new Error('每次最多添加 5 个附件');
+    const files = input.files.map(file => {
+      if (typeof file.base64 !== 'string' || file.base64.length > Math.ceil(chatFiles.MAX_ATTACHMENT_BYTES / 3) * 4 || (file.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64))) throw new Error('附件数据无效或超过 12MB');
+      return { name: chatFiles.safeName(file.name), bytes: Buffer.from(file.base64, 'base64') };
+    });
+    return { attachments: stageChatFiles(input, files) };
+  });
+  ipcMain.handle('vault:discardChatAttachments', async (_event, input) => {
+    await ensureDatabase(); requireUser(); getChatService().discardAttachments(input || {});
+    return { ok: true };
+  });
+  ipcMain.handle('vault:captureChatScreenshot', async (_event, input) => {
+    await ensureDatabase();
+    return captureEditedChatScreenshot(input);
+  });
+  ipcMain.handle('vault:annotateChatDraft', async (_event, input) => {
+    await ensureDatabase();
+    return captureEditedChatScreenshot(input, true);
+  });
+  ipcMain.handle('vault:getScreenshotShortcut', () => screenshotShortcutController.getState());
+  ipcMain.handle('vault:setScreenshotShortcut', async (_event, input) => {
+    await ensureDatabase(); requireUser();
+    const state = screenshotShortcutController.setShortcut(input?.accelerator);
+    setStateValue('settings', { ...getSettings(), screenshotShortcut: state.accelerator });
+    return state;
+  });
+  ipcMain.handle('vault:getPendingScreenshot', () => {
+    requireUser();
+    return pendingGlobalScreenshot?.epoch === chatSessionEpoch ? pendingGlobalScreenshot : null;
+  });
+  ipcMain.handle('vault:ackScreenshotDelivery', (_event, input) => {
+    requireUser();
+    if (pendingGlobalScreenshot?.id === input?.id && pendingGlobalScreenshot.epoch === chatSessionEpoch) {
+      if (input.discard) getChatService().discardAttachments({ ids: pendingGlobalScreenshot.attachments.map(file => file.id) });
+      pendingGlobalScreenshot = null;
+    }
+    return { ok: true };
+  });
+  ipcMain.handle('vault:getChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input);
+    const result = await getChatService().getAttachment(input);
+    check();
+    const preview = chatPreviewData(result.bytes, result.attachment.mime, Boolean(input.thumbnail));
+    if (!preview) throw new Error('该附件无法预览，请保存到本地查看');
+    return { preview };
+  });
+  ipcMain.handle('vault:saveChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input);
+    const result = await getChatService().getAttachment(input);
+    check();
+    const selected = await dialog.showSaveDialog(mainWindow, { title: '保存聊天附件', defaultPath: chatFiles.safeName(result.attachment.name) });
+    check();
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    await fs.promises.writeFile(selected.filePath, result.bytes, { mode: 0o600 });
+    return { canceled: false };
+  });
+
+  ipcMain.handle('vault:listChat', async (_event, input) => {
+    await ensureDatabase();
+    return getChatService().list(input || {});
+  });
+  ipcMain.handle('vault:sendChat', async (_event, input) => {
+    await ensureDatabase();
+    const message = getChatService().send(input || {});
+    scheduleChatAutoSync(500);
+    notifyChatStatus();
+    return message;
+  });
+  ipcMain.handle('vault:syncChat', async (_event, input) => {
+    await ensureDatabase();
+    try { return await getChatService().syncRoom(input || {}); }
+    finally { notifyChatStatus(); }
+  });
+  ipcMain.handle('vault:exportChatInvite', async (_event, input) => {
+    await ensureDatabase();
+    return getChatService().exportInvite(input || {});
+  });
+  ipcMain.handle('vault:acceptChatInvite', async (_event, input) => {
+    await ensureDatabase();
+    const result = getChatService().acceptInvite(input || {});
+    scheduleChatAutoSync(500);
+    return { ...result, state: publicState() };
+  });
+
   ipcMain.handle('vault:setContext', async (_event, input) => {
     await ensureDatabase();
     requireUser();
@@ -4298,7 +4614,20 @@ function registerHandlers() {
     await ensureDatabase();
     const user = requireUser();
     const password = requireSessionPassword();
-    const result = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, user, password, String(groupId || ''));
+    const epoch = chatSessionEpoch;
+    groupService.requireGroupAccess(db, queryOne, String(groupId || ''), user.id, ['owner', 'admin']);
+    const rotate = () => {
+      if (epoch !== chatSessionEpoch || activeUser?.id !== user.id) throw new Error('登录状态已变化，请重试');
+      const result = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, user, password, String(groupId || ''));
+      db.run("UPDATE chat_messages SET synced_at = NULL, outgoing = 1 WHERE owner_user_id = ? AND group_id = ?", [user.id, String(groupId || '')]);
+      saveDatabase();
+      scheduleChatAutoSync(500);
+      return result;
+    };
+    const attachmentCount = queryOne('SELECT COUNT(*) AS count FROM chat_attachments WHERE owner_user_id = ? AND room_id = ?', [user.id, `group:${groupId}`]);
+    const result = Number(attachmentCount?.count || 0)
+      ? await getChatService().prepareGroupRotation(String(groupId), rotate)
+      : rotate();
     return { ...result, state: publicState() };
   });
 
@@ -4487,6 +4816,10 @@ function registerHandlers() {
 
 app.on('before-quit', () => {
   clearAutoSyncTimer();
+  clearTimeout(chatSyncTimer);
+  screenshotEditor?.dispose();
+  screenshotShortcutController?.dispose();
+  chatSessionEpoch += 1;
   cancelPendingFeishuLogin('应用正在退出');
 });
 
@@ -4494,6 +4827,9 @@ app.whenReady().then(async () => {
   if (process.env.AXONMIND_E2E !== '1') migrateLegacyUserData();
   await ensureDatabase();
   configureAutoUpdater();
+  screenshotEditor = createScreenshotEditor({ BrowserWindow, ipcMain, nativeImage, screen });
+  screenshotShortcutController = createScreenshotShortcut(globalShortcut, () => { void captureFromGlobalShortcut(); });
+  screenshotShortcutController.registerInitial(getSettings().screenshotShortcut);
   registerHandlers();
   createWindow();
   if (app.isPackaged) {

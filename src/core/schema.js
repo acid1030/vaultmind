@@ -8,6 +8,47 @@ function ensureColumn(db, table, column, type) {
 
 function migrateSchema(db) {
   db.run(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      owner_user_id TEXT NOT NULL,
+      room_id TEXT NOT NULL,
+      id TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      group_id TEXT,
+      sender_id TEXT NOT NULL,
+      sender_name TEXT NOT NULL,
+      sender_email TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      content_ciphertext TEXT NOT NULL,
+      content_iv TEXT NOT NULL,
+      content_tag TEXT NOT NULL,
+      outgoing INTEGER NOT NULL DEFAULT 0,
+      synced_at TEXT,
+      PRIMARY KEY (owner_user_id, room_id, id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_history ON chat_messages(owner_user_id, room_id, created_at, id);
+    CREATE TABLE IF NOT EXISTS chat_downloads (
+      owner_user_id TEXT NOT NULL,
+      room_id TEXT NOT NULL,
+      file_token TEXT NOT NULL,
+      PRIMARY KEY (owner_user_id, room_id, file_token)
+    );
+  `);
+  ensureColumn(db, 'chat_messages', 'content_format', 'INTEGER NOT NULL DEFAULT 1');
+  db.run(`CREATE TABLE IF NOT EXISTS chat_attachments (
+    owner_user_id TEXT NOT NULL,
+    room_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    content_ciphertext TEXT,
+    content_iv TEXT,
+    content_tag TEXT,
+    file_token TEXT,
+    upload_target TEXT,
+    PRIMARY KEY (owner_user_id, room_id, id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_chat_attachment_message ON chat_attachments(owner_user_id, room_id, message_id);`);
+  db.run(`
     CREATE TABLE IF NOT EXISTS groups (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

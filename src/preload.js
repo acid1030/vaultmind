@@ -1,6 +1,38 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('vaultApi', {
+  annotateChatDraft: (payload) => ipcRenderer.invoke('vault:annotateChatDraft', payload),
+  getScreenshotShortcut: () => ipcRenderer.invoke('vault:getScreenshotShortcut'),
+  setScreenshotShortcut: (payload) => ipcRenderer.invoke('vault:setScreenshotShortcut', payload),
+  getPendingScreenshot: () => ipcRenderer.invoke('vault:getPendingScreenshot'),
+  ackScreenshotDelivery: (payload) => ipcRenderer.invoke('vault:ackScreenshotDelivery', payload),
+  onScreenshotDelivered: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:screenshotDelivered', listener);
+    return () => ipcRenderer.removeListener('vault:screenshotDelivered', listener);
+  },
+  onScreenshotNotice: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:screenshotNotice', listener);
+    return () => ipcRenderer.removeListener('vault:screenshotNotice', listener);
+  },
+  pickChatAttachments: (payload) => ipcRenderer.invoke('vault:pickChatAttachments', payload),
+  stageChatData: (payload) => ipcRenderer.invoke('vault:stageChatData', payload),
+  discardChatAttachments: (payload) => ipcRenderer.invoke('vault:discardChatAttachments', payload),
+  captureChatScreenshot: (payload) => ipcRenderer.invoke('vault:captureChatScreenshot', payload),
+  getChatAttachment: (payload) => ipcRenderer.invoke('vault:getChatAttachment', payload),
+  saveChatAttachment: (payload) => ipcRenderer.invoke('vault:saveChatAttachment', payload),
+  listChat: (payload) => ipcRenderer.invoke('vault:listChat', payload),
+  sendChat: (payload) => ipcRenderer.invoke('vault:sendChat', payload),
+  syncChat: (payload) => ipcRenderer.invoke('vault:syncChat', payload),
+  exportChatInvite: (payload) => ipcRenderer.invoke('vault:exportChatInvite', payload),
+  acceptChatInvite: (payload) => ipcRenderer.invoke('vault:acceptChatInvite', payload),
+  onChatStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:chatStatus', listener);
+    return () => ipcRenderer.removeListener('vault:chatStatus', listener);
+  },
   getState: () => ipcRenderer.invoke('vault:getState'),
   register: (payload) => ipcRenderer.invoke('vault:register', payload),
   loginLocal: (payload) => ipcRenderer.invoke('vault:loginLocal', payload),

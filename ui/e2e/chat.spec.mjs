@@ -1,0 +1,85 @@
+import assert from 'node:assert/strict';
+import { _electron as electron } from 'playwright-core';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'axonmind-chat-e2e-'));
+const env = { ...process.env, NODE_ENV: 'production', AXONMIND_E2E: '1' };
+delete env.ELECTRON_RUN_AS_NODE;
+const app = await electron.launch({ args: [root, `--user-data-dir=${profile}`], env });
+try {
+  const page = await app.firstWindow();
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.waitForLoadState('domcontentloaded');
+  await page.getByRole('button', { name: '注册', exact: true }).click();
+  await page.getByPlaceholder('you@example.com').fill('alice@example.com');
+  await page.getByPlaceholder('你的名字').fill('Alice');
+  await page.getByPlaceholder('至少 8 位').fill('ChatPass123!');
+  await page.getByRole('button', { name: '创建账户', exact: true }).click();
+  const recoveryCode = (await page.locator('.vm-terminal').innerText()).trim();
+  await page.getByRole('button', { name: '我已保存', exact: true }).click();
+  await page.locator('nav').getByRole('button', { name: '聊天', exact: true }).click();
+  await page.getByRole('textbox', { name: '消息内容' }).fill('这是个人跨端留言\n第二行内容');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await page.getByText('这是个人跨端留言', { exact: false }).waitFor();
+  assert.equal((await page.evaluate(() => window.vaultApi.listChat({ scope: 'personal' }))).messages.length, 1);
+  assert.equal(await page.locator('.vm-chat-message').count(), 1);
+  const resetRejected = await page.evaluate(async recoveryCode => {
+    try { await window.vaultApi.resetPassword({ email: 'alice@example.com', recoveryCode, newPassword: 'LostChatPass123!' }); return false; }
+    catch (error) { return String(error).includes('已有加密内容'); }
+  }, recoveryCode);
+  assert.equal(resetRejected, true, 'recovery reset must not orphan encrypted chat history');
+  await page.getByRole('button', { name: '新建群聊', exact: true }).click();
+  await page.getByRole('textbox', { name: '群聊名称' }).fill('研发协作群');
+  await page.getByRole('textbox', { name: '飞书共享文件夹 Token' }).fill('test-shared-folder');
+  await page.getByRole('button', { name: '创建群聊', exact: true }).click();
+  await page.getByRole('textbox', { name: '消息内容' }).fill('群里的第一条消息');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await page.getByText('群里的第一条消息', { exact: true }).waitFor();
+  const state = await page.evaluate(() => window.vaultApi.getState());
+  const groupId = state.groups[0].id;
+  assert.equal((await page.evaluate(g => window.vaultApi.listChat({ scope: 'group', groupId: g }), groupId)).messages.length, 1);
+  await page.getByRole('button', { name: '邀请成员', exact: true }).click();
+  await page.getByRole('textbox', { name: '受邀账号' }).fill('bob@example.com');
+  await page.getByRole('button', { name: '生成邀请', exact: true }).click();
+  const code = await page.getByRole('textbox', { name: '群聊邀请码' }).inputValue();
+  assert.ok(code.startsWith('axonchat1.'));
+  await page.getByRole('button', { name: '关闭对话框', exact: true }).click();
+  await page.getByRole('button', { name: '个人留言', exact: true }).click();
+  await page.getByText('这是个人跨端留言', { exact: false }).waitFor();
+  assert.equal(await page.locator('.vm-chat-message').count(), 1);
+  await page.evaluate(() => window.vaultApi.changeLocalPassword({ currentPassword: 'ChatPass123!', newPassword: 'NewChatPass123!' }));
+  assert.equal((await page.evaluate(() => window.vaultApi.listChat({ scope: 'personal' }))).messages[0].text, '这是个人跨端留言\n第二行内容');
+  await page.screenshot({ path: '/tmp/axonmind-chat-desktop.png' });
+  await page.setViewportSize({ width: 1000, height: 720 });
+  await page.screenshot({ path: '/tmp/axonmind-chat-compact.png' });
+  assert.ok(await page.getByRole('textbox', { name: '消息内容' }).isVisible());
+  await page.evaluate(() => window.vaultApi.logoutLocal());
+  await page.evaluate(() => window.vaultApi.register({ email: 'bob@example.com', username: 'Bob', password: 'BobChatPass123!' }));
+  await page.evaluate(c => window.vaultApi.acceptChatInvite({ code: c }), code);
+  await page.evaluate(g => window.vaultApi.sendChat({ scope: 'group', groupId: g, text: 'Bob 已加入' }), groupId);
+  assert.equal((await page.evaluate(() => window.vaultApi.listChat({ scope: 'personal' }))).messages.length, 0);
+  assert.equal((await page.evaluate(g => window.vaultApi.listChat({ scope: 'group', groupId: g }), groupId)).messages[0].text, 'Bob 已加入');
+  await page.evaluate(() => window.vaultApi.logoutLocal());
+  await page.evaluate(() => window.vaultApi.loginLocal({ email: 'alice@example.com', password: 'NewChatPass123!' }));
+  assert.equal((await page.evaluate(() => window.vaultApi.listChat({ scope: 'personal' }))).messages.length, 1);
+  const viewerInvite = await page.evaluate(groupId => window.vaultApi.exportChatInvite({ groupId, email: 'viewer@example.com', role: 'viewer' }), groupId);
+  await page.evaluate(() => window.vaultApi.logoutLocal());
+  await page.evaluate(() => window.vaultApi.register({ email: 'viewer@example.com', username: 'Viewer', password: 'ViewerPass123!' }));
+  await page.evaluate(code => window.vaultApi.acceptChatInvite({ code }), viewerInvite.code);
+  await page.reload();
+  await page.locator('nav').getByRole('button', { name: '聊天', exact: true }).click();
+  await page.getByRole('button', { name: '研发协作群', exact: true }).click();
+  await page.getByPlaceholder('你是只读成员，可以查看群聊记录').waitFor();
+  assert.equal(await page.getByRole('textbox', { name: '消息内容' }).isDisabled(), true);
+  for (const name of ['截图', '发送图片', '发送文件']) assert.equal(await page.getByRole('button', { name, exact: true }).isDisabled(), true);
+  assert.deepEqual(errors, []);
+  console.log('Chat Electron E2E passed: personal/group UI, invitation, account isolation, password change and responsive layout.');
+} finally {
+  await app.close();
+  fs.rmSync(profile, { recursive: true, force: true });
+}

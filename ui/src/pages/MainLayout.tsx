@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell, BookOpen, Check, ChevronDown, Cloud, FolderGit2, Home, KeyRound,
-  LogOut, Plus, Search, Settings, Users, X,
+  LogOut, Plus, Search, Settings, Users, X, MessageSquare,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
-import { vaultApi } from '@/lib/ipc'
+import { vaultApi, type ScreenshotDelivery } from '@/lib/ipc'
 import HomeView from './HomeView'
 import LibraryView from './LibraryView'
 import GroupsView from './GroupsView'
@@ -16,10 +16,11 @@ import ProjectsView from './ProjectsView'
 import ConfigView from './ConfigView'
 import PasswordVaultView from './PasswordVaultView'
 import SyncCenterView from './SyncCenterView'
+import ChatView from './ChatView'
 import ThemeToggle from '../components/shared/ThemeToggle'
 import BrandMark from '../components/shared/BrandMark'
 
-type NavView = 'home' | 'library' | 'vault' | 'groups' | 'projects' | 'add' | 'sync' | 'config'
+type NavView = 'chat' | 'home' | 'library' | 'vault' | 'groups' | 'projects' | 'add' | 'sync' | 'config'
 
 const NAV_GROUPS = [
   {
@@ -34,6 +35,7 @@ const NAV_GROUPS = [
   {
     label: '组织与连接',
     items: [
+      { id: 'chat' as NavView, label: '聊天', icon: MessageSquare, description: '个人多端留言与用户组群聊' },
       { id: 'groups' as NavView, label: '用户组', icon: Users, description: '成员与共享空间' },
       { id: 'sync' as NavView, label: '同步中心', icon: Cloud, description: '飞书加密同步' },
     ],
@@ -48,6 +50,7 @@ const NAV_GROUPS = [
 ]
 
 const VIEW_META: Record<NavView, { title: string; subtitle: string }> = {
+  chat: { title: '聊天', subtitle: '个人跨端留言与群内共享，消息和附件加密保存到飞书' },
   home: { title: '工作台概览', subtitle: '从一个清晰入口掌握知识、密钥、协作与同步状态' },
   library: { title: '知识库', subtitle: '浏览内容、查找线索，并基于可信资料进行问答' },
   vault: { title: '密码库', subtitle: '集中管理本地加密的密码、Token 与密钥' },
@@ -62,6 +65,7 @@ export default function MainLayout() {
   const { state, logout, setContext, pendingInvites } = useAppStore()
   const toast = useToast()
   const [activeView, setActiveView] = useState<NavView>('home')
+  const [screenshotDelivery, setScreenshotDelivery] = useState<ScreenshotDelivery | null>(null)
   const [contextOpen, setContextOpen] = useState(false)
   const [showGlobalSearch, setShowGlobalSearch] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
@@ -88,6 +92,25 @@ export default function MainLayout() {
     else await setContext('group', value)
     setContextOpen(false)
     toast(`已切换到 ${contexts.find(item => item.value === value)?.label}`, 'info', 2000)
+  }
+
+  useEffect(() => {
+    let active = true
+    const receive = async (delivery: ScreenshotDelivery) => {
+      if (!active) return
+      await setContext(delivery.scope, delivery.groupId)
+      if (!active) return
+      setActiveView('chat')
+      setScreenshotDelivery(delivery)
+    }
+    const offDelivery = vaultApi.onScreenshotDelivered(delivery => { void receive(delivery) })
+    const offNotice = vaultApi.onScreenshotNotice(value => toast(value.message, 'warning'))
+    vaultApi.getPendingScreenshot().then(delivery => { if (delivery) void receive(delivery) }).catch(() => {})
+    return () => { active = false; offDelivery(); offNotice() }
+  }, [setContext, toast])
+  const consumeScreenshot = async (id: string, discard = false) => {
+    await vaultApi.ackScreenshotDelivery({ id, discard })
+    setScreenshotDelivery(previous => previous?.id === id ? null : previous)
   }
 
   useEffect(() => {
@@ -135,6 +158,7 @@ export default function MainLayout() {
                   <button
                     key={item.id}
                     title={item.description}
+                    aria-label={item.label}
                     aria-current={activeView === item.id ? 'page' : undefined}
                     onClick={() => navigate(item.id)}
                     className={cn('vm-side-link', activeView === item.id && 'active')}
@@ -215,6 +239,7 @@ export default function MainLayout() {
           {activeView === 'home' && <HomeView onNavigate={navigate} onSearch={() => setShowGlobalSearch(true)} />}
           {activeView === 'library' && <LibraryView context={context.scope === 'group' ? context.groupId : 'personal'} />}
           {activeView === 'vault' && <PasswordVaultView />}
+          {activeView === 'chat' && <ChatView onOpenSync={() => navigate('sync')} screenshotDelivery={screenshotDelivery} onScreenshotConsumed={consumeScreenshot} />}
           {activeView === 'groups' && <GroupsView />}
           {activeView === 'add' && <AddContentView />}
           {activeView === 'projects' && <ProjectsView />}

@@ -47,7 +47,7 @@ function decryptWithGroupKey(item, groupKey) {
   const decipher = crypto.createDecipheriv('aes-256-gcm', groupKey, Buffer.from(item.content_iv || item.iv, 'base64'));
   decipher.setAuthTag(Buffer.from(item.content_tag || item.tag, 'base64'));
   return Buffer.concat([
-    decipher.update(Buffer.from(item.content_ciphertext || item.ciphertext, 'base64')),
+    decipher.update(Buffer.from(item.content_ciphertext ?? item.ciphertext, 'base64')),
     decipher.final(),
   ]);
 }
