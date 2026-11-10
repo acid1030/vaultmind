@@ -45,16 +45,23 @@ try {
   await page.getByRole('button', { name: '移除附件 项目说明.txt', exact: true }).waitFor();
   await page.getByRole('textbox', { name: '消息内容' }).fill('图片和文件都可以发送，其他设备同步后可查看。');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
-  await page.getByRole('button', { name: '预览图片 设计截图.png', exact: true }).waitFor();
+  await page.getByRole('log', { name: '聊天记录' }).getByRole('button', { name: '预览图片 设计截图.png', exact: true }).waitFor();
   const first = (await page.evaluate(() => window.vaultApi.listChat({ scope: 'personal' }))).messages[0];
   assert.equal(first.attachments.length, 2);
-  await page.getByRole('button', { name: '预览图片 设计截图.png', exact: true }).click();
+  await page.getByRole('log', { name: '聊天记录' }).getByRole('button', { name: '预览图片 设计截图.png', exact: true }).click();
   await page.getByRole('dialog', { name: '图片预览 设计截图.png', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   await app.evaluate(({ dialog }, filePath) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath }); }, savedPath);
-  await page.getByRole('button', { name: '保存 项目说明.txt', exact: true }).click();
+  await page.getByRole('log', { name: '聊天记录' }).getByRole('button', { name: '保存 项目说明.txt', exact: true }).click();
   await page.getByText('附件已保存', { exact: true }).waitFor();
   assert.equal(fs.readFileSync(savedPath, 'utf8'), fs.readFileSync(filePath, 'utf8'));
+
+  if (await page.getByRole('button', { name: '会话资料', exact: true }).getAttribute('aria-expanded') === 'false') await page.getByRole('button', { name: '会话资料', exact: true }).click();
+  const details = page.getByRole('complementary', { name: '会话资料', exact: true });
+  await details.getByRole('textbox', { name: '搜索共享附件' }).fill('项目说明');
+  assert.equal(await details.locator('.vm-chat-attachment').count(), 1);
+  await details.getByRole('button', { name: '保存 项目说明.txt', exact: true }).click();
+  await page.getByRole('button', { name: '关闭会话资料', exact: true }).click();
 
   // Synthetic clipboard/drop events exercise FileReader + IPC without changing the user's clipboard.
   await page.getByRole('textbox', { name: '消息内容' }).evaluate((element, png) => {

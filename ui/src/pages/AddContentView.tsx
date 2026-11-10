@@ -176,7 +176,7 @@ export default function AddContentView() {
   }
 
   const canSave = mode === 'file'
-    ? selectedFiles.length > 0 && (fileDestination === 'local' || Boolean(state?.isFeishuLoggedIn))
+    ? selectedFiles.length > 0 && (fileDestination === 'local' || Boolean(state?.isFeishuLoggedIn && (settings?.hasFeishuPassphrase || passphrase.length >= 8)))
     : title.trim().length > 0 && (
       (mode === 'text' || mode === 'secret') ? content.trim().length > 0 : url.trim().length > 0
     )
@@ -189,7 +189,7 @@ export default function AddContentView() {
     <div className="vm-page-stack animate-fade-in">
       <PageHero
         eyebrow="安全导入"
-        title="添加到 AxonMind"
+        title="添加到秘栈"
         description="保存文件、笔记、密钥和链接；文件可仅导入本机，也可选择加密同步到飞书。"
         details={['五类内容', isPersonal ? '个人空间' : '团队空间', '自动索引']}
         tone="emerald"
@@ -341,17 +341,32 @@ export default function AddContentView() {
         </Button>
       </div>
 
-      {/* Right: History */}
+      {/* Save review and recent additions */}
+      <div className="vm-add-side">
+      <section className="glass-card vm-import-guide" aria-label="导入说明">
+        <div className="vm-section-heading"><h2>导入说明</h2><span>IMPORT GUIDE</span></div>
+        <div className="p-4 space-y-4">
+          <div><h3>支持的内容</h3><p>文件、文本笔记、密码与密钥、网页及视频链接。点击文件区域选择本地文件，单文件最大 12 MB。</p></div>
+          <div><h3>保存位置</h3><p>先确认右侧目标空间。个人空间内容不会自动共享；需要协作时，先切换到对应用户组。</p></div>
+          <div><h3>加密同步</h3><p>本机保存可离线使用。上传飞书前先完成授权并设置加密口令，其他设备使用相同口令获取记录。</p></div>
+        </div>
+      </section>
+      <section className="glass-card" aria-label="保存前确认">
+        <div className="vm-section-heading"><h2>保存前确认</h2></div>
+        <dl className="vm-review-list"><div><dt>内容类型</dt><dd>{MODES.find(m => m.id === mode)?.label}</dd></div><div><dt>目标空间</dt><dd>{isPersonal ? '个人空间' : context.groupName || '用户组共享'}</dd></div><div><dt>保存方式</dt><dd>{mode === 'file' && fileDestination === 'cloud' ? '加密上传飞书' : '本机加密保存'}</dd></div><div><dt>{mode === 'file' ? '选择文件' : '标题'}</dt><dd>{mode === 'file' ? `${selectedFiles.length} 个` : title.trim() || '尚未填写'}</dd></div>{mode !== 'file' && <div><dt>标签</dt><dd>{tags.trim() || '无'}</dd></div>}</dl>
+        <p className="vm-module-note">{mode === 'secret' ? '凭据内容不会在此预览，保存后按需解锁。' : isPersonal ? '当前内容属于个人空间，不自动共享给用户组。' : '当前内容将归属所选用户组，请确认共享范围。'}</p>
+        {mode === 'file' && fileDestination === 'cloud' && <p className="vm-module-note">{!state?.isFeishuLoggedIn ? '尚未连接飞书，请先完成授权。' : !settings?.hasFeishuPassphrase && passphrase.length < 8 ? '请先设置至少 8 位加密口令。' : '飞书已连接；文件加密后上传。'}</p>}
+      </section>
       <div className="glass-card rounded-md overflow-hidden">
         <div className="px-4 py-3"
-          style={{ borderBottom: '1px solid var(--border)' }}>
+          style={{ borderBottom: '1px solid hsl(var(--border))' }}>
           <h2 className="text-sm font-semibold text-foreground">添加历史</h2>
         </div>
 
         <div className="grid grid-cols-2 gap-px p-4 bg-muted"
           >
           {/* Local Content Column */}
-          <div className="space-y-2 pr-3" style={{ borderRight: '1px solid var(--border)' }}>
+          <div className="space-y-2 pr-3" style={{ borderRight: '1px solid hsl(var(--border))' }}>
             <p className="text-[10px] font-semibold uppercase tracking-wide mb-3 text-[hsl(218_16%_44%)]">
               本地内容 ({localItems.length})
             </p>
@@ -407,6 +422,7 @@ export default function AddContentView() {
             ))}
           </div>
         </div>
+      </div>
       </div>
       </div>
     </div>

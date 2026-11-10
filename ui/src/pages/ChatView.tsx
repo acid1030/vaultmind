@@ -25,6 +25,8 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   const room: ChatRoom = { scope, groupId }
   const group = state?.groups.find(g => g.id === groupId)
   const [history, setHistory] = useState<ChatHistory>({ messages: [], hasMore: false, writable: false, pending: 0 })
+  const [showDetails, setShowDetails] = useState(() => window.matchMedia('(min-width: 1450px)').matches)
+  const [attachmentSearch, setAttachmentSearch] = useState('')
   const [draft, setDraft] = useState('')
   const [draftFiles, setDraftFiles] = useState<ChatDraftAttachment[]>([])
   const draftFilesRef = useRef<ChatDraftAttachment[]>([])
@@ -270,7 +272,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   const title = scope === 'group' ? group?.name || '用户组群聊' : '个人留言'
 
   return (
-    <div className="vm-chat-layout animate-fade-in">
+    <div className={cn("vm-chat-layout animate-fade-in", showDetails && "vm-chat-with-details")}>
       <aside className="vm-chat-rooms glass-panel" aria-label="聊天空间">
         <div className="vm-chat-room-heading"><MessageSquare className="w-4 h-4 text-primary" /><h2>聊天空间</h2><LockKeyhole className="w-3.5 h-3.5 ml-auto text-muted-foreground" /></div>
         <button aria-label="个人留言" className={cn('vm-chat-room', scope === 'personal' && 'active')} onClick={() => setContext('personal')}>
@@ -299,6 +301,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
         <header className="vm-chat-header">
           <div className="min-w-0"><h2 className="truncate">{title}</h2><p>{scope === 'personal' ? '同一云端账号，多设备接续查看' : '不同用户，共享用户组的消息与附件'}</p></div>
           <div className="flex gap-2 flex-shrink-0">
+            <Button size="sm" aria-expanded={showDetails} onClick={() => setShowDetails(value => !value)}>会话资料</Button>
             {admin && <Button size="sm" variant="ghost" onClick={() => openDialog('invite')}><UserPlus className="w-3.5 h-3.5" />邀请成员</Button>}
             <Button size="sm" onClick={sync} disabled={syncing}><RefreshCw className={cn('w-3.5 h-3.5', syncing && 'animate-spin')} />{syncing ? '同步中' : '立即同步'}</Button>
           </div>
@@ -346,6 +349,17 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
           <div className="vm-chat-composer-footer"><span><LockKeyhole className="w-3 h-3" />消息与附件加密存储 <small>{draft.length}/20000</small></span><Button type="submit" variant="primary" size="sm" aria-label="发送消息" disabled={(!draft.trim() && !draftFiles.length) || !history.writable || sending || attaching || loading}><Send className="w-3.5 h-3.5" />{sending ? '保存中…' : '发送'}</Button></div>
         </form>
       </section>
+
+      {showDetails && <aside className="glass-panel vm-chat-details" aria-label="会话资料">
+        <div className="vm-section-heading"><h2>会话资料</h2><Button size="icon-sm" variant="ghost" aria-label="关闭会话资料" onClick={() => setShowDetails(false)}><X className="w-4 h-4" /></Button></div>
+        <div className="vm-chat-details-body"><h3>{title}</h3><dl><div><dt>空间</dt><dd>{scope === 'personal' ? '个人多端留言' : '用户组共享'}</dd></div><div><dt>权限</dt><dd>{history.writable ? '可发送消息' : '只读'}</dd></div><div><dt>本次已加载</dt><dd>{history.messages.length} 条消息{history.hasMore ? ' · 可继续加载历史' : ''}</dd></div><div><dt>等待同步</dt><dd>{history.pending} 条</dd></div>{group && <div><dt>当前角色</dt><dd>{group.role}</dd></div>}</dl>
+        <Button size="sm" className="w-full" onClick={onOpenSync}>管理云端同步</Button>
+        <h3 className="mt-6">共享图片与文件</h3><p className="vm-chat-help">仅显示本次已加载消息中的附件，加载更早记录可查看更多。</p>
+        <input className="vm-input my-3" aria-label="搜索共享附件" placeholder="按文件名筛选" value={attachmentSearch} onChange={e => setAttachmentSearch(e.target.value)} />
+        <div className="vm-shared-attachments">{history.messages.flatMap(message => (message.attachments || []).filter(file => file.name.toLowerCase().includes(attachmentSearch.toLowerCase())).map(file => <ChatAttachmentView key={`${roomKey}:${message.id}:${file.id}`} attachment={file} messageId={message.id} room={room} />))}</div>
+        {!history.messages.some(message => message.attachments?.length) && <p className="vm-chat-help">当前已加载记录中暂无附件。</p>}
+        </div>
+      </aside>}
 
       {dialog && <ChatDialog title={dialog === 'create' ? '新建群聊' : dialog === 'join' ? '加入群聊' : dialog === 'screenshot' ? '截图快捷键' : '邀请成员'} busy={busy} onClose={() => setDialog(null)}>
         {dialog === 'screenshot' ? <ScreenshotSettings onSaved={value => { setScreenshotShortcut(value.accelerator); toast('截图快捷键已保存', 'success') }} /> : <form className="space-y-4" onSubmit={event => { event.preventDefault(); void dialogAction() }}>

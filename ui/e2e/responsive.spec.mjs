@@ -37,7 +37,7 @@ const appPath = path.resolve(__dirname, '..', '..');
 
   const visualPages = ['知识库', '密码库', '添加内容', '用户组', '开发连接', '同步中心', '设置']
   for (const pageName of visualPages) {
-    await window.click(`nav button:has-text("${pageName}")`)
+    await window.locator('.vm-sidebar').getByRole('button', { name: pageName, exact: true }).click()
     const hero = window.locator('.vm-page-hero')
     await hero.waitFor({ state: 'visible' })
     await window.waitForTimeout(350)

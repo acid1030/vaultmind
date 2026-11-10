@@ -70,9 +70,9 @@ async function register(window) {
   console.log('Theme toggle: dark -> light passed');
 
   // Audit every primary page for accidental near-black panels in light mode.
-  const pageNames = ['概览', '知识库', '密码库', '添加内容', '用户组', '同步中心', '开发连接', '设置'];
+  const pageNames = ['概览', '知识库', '密码库', '添加内容', '用户组', '聊天', '同步中心', '开发连接', '设置'];
   for (const pageName of pageNames) {
-    const navButton = window.locator(`nav button:has-text("${pageName}")`).first();
+    const navButton = window.getByRole('button', { name: pageName, exact: true }).first();
     if (!await navButton.isVisible().catch(() => false)) continue;
     await navButton.click();
     await window.waitForTimeout(250);
@@ -105,7 +105,7 @@ async function register(window) {
 
   // Audit the same routes for accidental light surfaces in dark mode.
   for (const pageName of pageNames) {
-    const navButton = window.locator(`nav button:has-text("${pageName}")`).first();
+    const navButton = window.getByRole('button', { name: pageName, exact: true }).first();
     if (!await navButton.isVisible().catch(() => false)) continue;
     await navButton.click();
     await window.waitForTimeout(250);
@@ -120,6 +120,7 @@ async function register(window) {
       .slice(0, 5)
       .map(element => ({ tag: element.tagName, className: element.className, text: (element.textContent || '').trim().slice(0, 60), background: getComputedStyle(element).backgroundColor })));
     if (lightPanels.length) throw new Error(`${pageName} 暗色模式存在近白色面板: ${JSON.stringify(lightPanels)}`);
+    await window.screenshot({ path: `/tmp/mizhan-a-${pageNames.indexOf(pageName)}.png` });
   }
   console.log('Dark theme page audit passed');
 

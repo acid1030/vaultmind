@@ -61,6 +61,8 @@ async function register(window) {
   const tokenValue = 'ghp_1234567890abcdef1234567890abcdef1234';
   await window.fill('textarea[placeholder="文本、笔记或备注"]', `This is an end-to-end test note. password: ${sensitiveValue} token: ${tokenValue}`);
   await window.fill('input[placeholder="api, config, important"]', 'e2e, test');
+  const review = window.getByRole('region', { name: '保存前确认' });
+  await review.getByText(title, { exact: true }).waitFor();
   await window.click('button:has-text("保存")');
   await window.waitForTimeout(1500);
 
@@ -68,6 +70,7 @@ async function register(window) {
 
   // 工作台最近内容可直接打开具体条目，而不是只跳转到知识库。
   await window.click('nav button:has-text("概览")');
+  await window.locator('.vm-activity-list', { hasText: title }).waitFor();
   await window.locator('.vm-recent-row', { hasText: title }).click();
   await window.locator('.vm-content-preview').waitFor({ state: 'visible' });
   await window.getByRole('button', { name: '关闭预览' }).click();
@@ -104,6 +107,9 @@ async function register(window) {
   if (await itemRow.getByRole('button', { name: '取回' }).count()) {
     throw new Error('Local text item incorrectly requires download');
   }
+  await itemRow.click();
+  await window.getByRole('region', { name: '选中内容详情' }).waitFor();
+  await window.getByLabel('内容排序', { exact: true }).selectOption('name');
   await itemRow.getByRole('button', { name: '查看' }).click();
   await window.waitForSelector(`text=${sensitiveValue}`);
   await window.getByRole('button', { name: '关闭', exact: true }).click();

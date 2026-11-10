@@ -24,6 +24,7 @@ const FILTERS = [
   { id: 'file', label: '文件', kind: 'file' },
   { id: 'text', label: '文本', kind: 'text' },
   { id: 'link', label: '链接', kind: 'web' },
+  { id: 'video', label: '视频', kind: 'video' },
 ]
 
 type KindColor = 'gold' | 'cyan' | 'emerald' | 'violet' | 'rose'
@@ -104,6 +105,9 @@ export default function LibraryView({ context }: LibraryViewProps) {
   const aiReady = Boolean(state?.knowledgeCenter?.aiProfile?.baseUrl && state?.knowledgeCenter?.aiProfile?.model)
   const remoteCount = items.filter(item => item.remoteOnly).length + records.filter(record => !record.localPath).length
 
+  const [selectedId, setSelectedId] = useState('')
+  const [sort, setSort] = useState('newest')
+  const selectedItem = items.find(item => item.id === selectedId)
   const [search, setSearch] = useState('')
   const [question, setQuestion] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE])
@@ -125,7 +129,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
       if (!item.title.toLowerCase().includes(q) && !tags.toLowerCase().includes(q)) return false
     }
     return true
-  })
+  }).sort((a, b) => sort === 'name' ? a.title.localeCompare(b.title, 'zh-CN') : (Date.parse(b.downloadedAt) || 0) - (Date.parse(a.downloadedAt) || 0))
 
   const handleUnlock = async (item: LibraryItem) => {
     setPreview({ open: true, item, loading: true })
@@ -266,12 +270,14 @@ export default function LibraryView({ context }: LibraryViewProps) {
                     ? "bg-cyan/10 text-cyan border-cyan/30"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted border-transparent"
                 )}>
-                {f.label}
+                <span>{f.label}</span><span className="vm-filter-count">{f.kind ? items.filter(item => effectiveContentKind(item) === f.kind).length : items.length}</span>
               </button>
             ))}
           </div>
         </div>
 
+      </div>
+      <div className="vm-library-list flex flex-col gap-4">
         {/* 条目列表 */}
         <div className="glass-card rounded-md overflow-hidden">
           <div className="px-4 py-3 flex items-center justify-between border-b border-border">
@@ -285,6 +291,8 @@ export default function LibraryView({ context }: LibraryViewProps) {
             </Button>
           </div>
 
+          <div className="vm-library-list-toolbar"><span>文档列表 · {filteredItems.length} 项</span><select className="vm-input" aria-label="内容排序" value={sort} onChange={e => setSort(e.target.value)}><option value="newest">最近入库</option><option value="name">名称排序</option></select></div>
+          <div className="vm-library-table-heading" aria-hidden="true"><span>名称 / 标签</span><span>类型</span><span>入库时间</span><span>状态 / 操作</span></div>
           <div className="divide-y divide-border">
             {filteredItems.length === 0 ? (
               <div className="vm-empty">
@@ -298,8 +306,9 @@ export default function LibraryView({ context }: LibraryViewProps) {
               const Icon = kc.icon
               return (
                 <div key={item.id}
-                  onClick={() => !item.remoteOnly && effectiveContentKind(item) !== 'secret' && handleOpen(item)}
-                  className={cn("px-4 py-3 flex items-center gap-3 group transition-colors hover:bg-muted border-b border-border last:border-b-0", !item.remoteOnly && effectiveContentKind(item) !== 'secret' && 'cursor-pointer')}>
+                  onClick={() => setSelectedId(item.id)}
+                  data-selected={selectedId === item.id || undefined}
+                  className={cn("vm-library-item-row px-4 py-3 flex items-center gap-3 group transition-colors hover:bg-muted border-b border-border last:border-b-0", !item.remoteOnly && effectiveContentKind(item) !== 'secret' && 'cursor-pointer')}>
                   {/* 图标 */}
                   <div className={cn(
                     "w-9 h-9 rounded flex items-center justify-center flex-shrink-0",
@@ -309,8 +318,9 @@ export default function LibraryView({ context }: LibraryViewProps) {
                     <Icon className="w-3.5 h-3.5" />
                   </div>
 
+                  <span className={cn("vm-badge vm-library-kind-badge", `vm-badge-${kc.color}`)}>{kc.label}</span>
                   {/* 信息 */}
-                  <div className="flex-1 min-w-0">
+                  <div className="vm-library-name min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-medium truncate text-foreground">
                         {item.title}
@@ -320,7 +330,6 @@ export default function LibraryView({ context }: LibraryViewProps) {
                       )}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs text-muted-foreground">{formatTime(item.downloadedAt)}</span>
                       {parseTags(item.tags).map(tag => (
                         <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded-sm bg-muted text-muted-foreground">
                           {tag}
@@ -329,8 +338,9 @@ export default function LibraryView({ context }: LibraryViewProps) {
                     </div>
                   </div>
 
+                  <time className="vm-library-time" title={item.downloadedAt}>{formatTime(item.downloadedAt)}</time>
                   {/* 操作 */}
-                  <div className="flex items-center gap-1 flex-shrink-0" onClick={event => event.stopPropagation()}>
+                  <div className="vm-library-actions flex items-center gap-1 flex-shrink-0" onClick={event => event.stopPropagation()}>
                     {item.remoteOnly ? (
                       <Button variant="cyan" size="sm" title="从云端下载并解密到本机" onClick={() => handleDownloadItem(item)}>
                         <Download className="w-3 h-3" />取回
@@ -361,8 +371,14 @@ export default function LibraryView({ context }: LibraryViewProps) {
           </div>
         </div>
 
-        {/* 飞书同步记录 */}
-        <div className="glass-card rounded-md overflow-hidden">
+        {selectedItem && <section className="glass-card vm-library-selection" aria-label="选中内容详情">
+          <div className="vm-section-heading"><h2>选中内容详情</h2><Button size="sm" variant="ghost" onClick={() => setSelectedId('')}>收起</Button></div>
+          <div className="p-4"><h3>{selectedItem.title}</h3><dl><div><dt>类型</dt><dd>{kindConfig(effectiveContentKind(selectedItem)).label}</dd></div><div><dt>存储状态</dt><dd>{selectedItem.remoteOnly ? '云端待取回' : selectedItem.localOnly ? '仅本机保存' : '本机可用'}</dd></div><div><dt>空间</dt><dd>{selectedItem.scope === 'group' ? '用户组共享' : '个人空间'}</dd></div><div><dt>大小</dt><dd>{formatSize(selectedItem.size)}</dd></div><div><dt>入库时间</dt><dd>{formatTime(selectedItem.downloadedAt) || '暂无记录'}</dd></div></dl>
+          <div className="vm-selection-actions">{selectedItem.remoteOnly ? <span className="text-xs text-muted-foreground">请使用条目上的「取回」下载并解密到本机。</span> : <Button size="sm" onClick={() => effectiveContentKind(selectedItem) === 'secret' ? handleUnlock(selectedItem) : handleOpen(selectedItem)}>{effectiveContentKind(selectedItem) === 'secret' ? '解锁查看' : '打开内容'}</Button>}</div></div>
+        </section>}
+
+        {/* 没有同步记录时保持文档列表紧凑 */}
+        {records.length > 0 && <div className="glass-card rounded-md overflow-hidden">
           <div className="px-4 py-3 flex items-center justify-between border-b border-border">
             <h2 className="text-sm font-semibold text-foreground">飞书同步记录 <span className="ml-1 text-xs font-normal text-muted-foreground">{records.length} 项</span></h2>
           </div>
@@ -397,7 +413,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* 右栏：AI 知识库对话 */}

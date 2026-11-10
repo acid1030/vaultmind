@@ -47,7 +47,7 @@ async function register(window) {
   await window.waitForTimeout(800);
 
   // Add account
-  await window.click('button:has-text("账号")');
+  await window.getByRole('button', { name: '账号', exact: true }).click();
   await window.waitForTimeout(300);
   // Click plus button in the account panel header
   await window.locator('h2:has-text("Git/SVN 账号")').locator('xpath=..').locator('button').first().click();
@@ -90,6 +90,7 @@ async function register(window) {
   if (!isVisible) {
     throw new Error(`Created repo "${repoName}" not found in list`);
   }
+  await window.getByRole('textbox', { name: '搜索仓库' }).fill(repoName);
   await repoLocator.click();
   await window.waitForTimeout(500);
 
@@ -98,6 +99,8 @@ async function register(window) {
   await window.waitForTimeout(1500);
 
   await window.screenshot({ path: '/tmp/electron-project-status.png' });
+  await window.getByRole('region', { name: '本次仓库操作记录' }).waitFor();
+  await window.getByRole('region', { name: '仓库概况' }).waitFor();
   const output = await window.locator('pre').textContent().catch(() => '');
   console.log('Project action output:', output);
   if (!output || output.includes('等待操作')) {

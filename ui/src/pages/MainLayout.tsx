@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell, BookOpen, Check, ChevronDown, Cloud, FolderGit2, Home, KeyRound,
-  LogOut, Plus, Search, Settings, Users, X, MessageSquare,
+  LogOut, Plus, Search, Settings, Users, X, MessageSquare, Layers,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -18,7 +18,6 @@ import PasswordVaultView from './PasswordVaultView'
 import SyncCenterView from './SyncCenterView'
 import ChatView from './ChatView'
 import ThemeToggle from '../components/shared/ThemeToggle'
-import BrandMark from '../components/shared/BrandMark'
 
 type NavView = 'chat' | 'home' | 'library' | 'vault' | 'groups' | 'projects' | 'add' | 'sync' | 'config'
 
@@ -35,7 +34,7 @@ const NAV_GROUPS = [
   {
     label: '组织与连接',
     items: [
-      { id: 'chat' as NavView, label: '聊天', icon: MessageSquare, description: '个人多端留言与用户组群聊' },
+      { id: 'chat' as NavView, label: '聊天', icon: MessageSquare, Layers, description: '个人多端留言与用户组群聊' },
       { id: 'groups' as NavView, label: '用户组', icon: Users, description: '成员与共享空间' },
       { id: 'sync' as NavView, label: '同步中心', icon: Cloud, description: '飞书加密同步' },
     ],
@@ -44,7 +43,6 @@ const NAV_GROUPS = [
     label: '高级工具',
     items: [
       { id: 'projects' as NavView, label: '开发连接', icon: FolderGit2, description: 'Git / SVN 辅助入口' },
-      { id: 'config' as NavView, label: '设置', icon: Settings, description: '模型、数据源与账户' },
     ],
   },
 ]
@@ -64,6 +62,7 @@ const VIEW_META: Record<NavView, { title: string; subtitle: string }> = {
 export default function MainLayout() {
   const { state, logout, setContext, pendingInvites } = useAppStore()
   const toast = useToast()
+  const [configSection, setConfigSection] = useState<'llm' | 'feishu'>('llm')
   const [activeView, setActiveView] = useState<NavView>('home')
   const [screenshotDelivery, setScreenshotDelivery] = useState<ScreenshotDelivery | null>(null)
   const [contextOpen, setContextOpen] = useState(false)
@@ -83,6 +82,7 @@ export default function MainLayout() {
   const meta = VIEW_META[activeView]
 
   const navigate = (view: NavView) => {
+    if (view === 'config') setConfigSection('llm')
     setActiveView(view)
     setContextOpen(false)
   }
@@ -141,10 +141,10 @@ export default function MainLayout() {
     <div className="vm-shell">
       <aside className="vm-sidebar">
         <button className="vm-brand" onClick={() => navigate('home')} aria-label="返回工作台概览">
-          <BrandMark size="sm" decorative />
+          <span className="vm-console-logo" aria-hidden="true"><Layers /></span>
           <span className="vm-sidebar-copy">
-            <strong>AxonMind</strong>
-            <small>SECURE KNOWLEDGE WORKSPACE</small>
+            <strong>秘栈 <em>CONTROL</em></strong>
+            <small>PRIVATE KNOWLEDGE NETWORK</small>
           </span>
         </button>
 
@@ -157,6 +157,7 @@ export default function MainLayout() {
                 return (
                   <button
                     key={item.id}
+                    data-module={item.id}
                     title={item.description}
                     aria-label={item.label}
                     aria-current={activeView === item.id ? 'page' : undefined}
@@ -174,6 +175,10 @@ export default function MainLayout() {
         </nav>
 
         <div className="vm-sidebar-footer">
+          <button className={cn('vm-side-link', activeView === 'config' && 'active')} data-module="config" aria-label="设置" aria-current={activeView === 'config' ? 'page' : undefined} onClick={() => navigate('config')}>
+            <Settings className="w-[18px] h-[18px]" />
+            <span className="vm-sidebar-copy flex-1 text-left">设置</span>
+          </button>
           <button className={cn('vm-connection-card', isFeishuLoggedIn && 'connected')} onClick={() => navigate('sync')}>
             <span className="vm-connection-icon"><Cloud className="w-4 h-4" /></span>
             <span className="vm-sidebar-copy min-w-0 text-left">
@@ -187,7 +192,7 @@ export default function MainLayout() {
       <section className="vm-workspace">
         <header className="vm-topbar">
           <div className="vm-topbar-heading min-w-0">
-            <span className="vm-topbar-breadcrumb">AxonMind / {currentContext.label}</span>
+            <span className="vm-topbar-breadcrumb">秘栈 / {currentContext.label}</span>
             <h1 className="truncate text-base font-semibold text-foreground">{meta.title}</h1>
             <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{meta.subtitle}</p>
           </div>
@@ -235,7 +240,7 @@ export default function MainLayout() {
           </div>
         </header>
 
-        <main className="vm-page">
+        <main className="vm-page" data-view={activeView}>
           {activeView === 'home' && <HomeView onNavigate={navigate} onSearch={() => setShowGlobalSearch(true)} />}
           {activeView === 'library' && <LibraryView context={context.scope === 'group' ? context.groupId : 'personal'} />}
           {activeView === 'vault' && <PasswordVaultView />}
@@ -243,8 +248,8 @@ export default function MainLayout() {
           {activeView === 'groups' && <GroupsView />}
           {activeView === 'add' && <AddContentView />}
           {activeView === 'projects' && <ProjectsView />}
-          {activeView === 'sync' && <SyncCenterView />}
-          {activeView === 'config' && <ConfigView />}
+          {activeView === 'sync' && <SyncCenterView onConfigureFeishu={() => { setConfigSection('feishu'); setActiveView('config') }} />}
+          {activeView === 'config' && <ConfigView initialSection={configSection} />}
         </main>
       </section>
 

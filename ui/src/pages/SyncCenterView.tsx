@@ -29,10 +29,13 @@ function formatTime(iso: string): string {
 
 type Tab = 'records' | 'manifest' | 'conflicts'
 
-export default function SyncCenterView() {
+export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeishu: () => void }) {
   const { state, refresh, fullSync, syncManifest, pullManifest, downloadRecord, openAsset, linkCloudAccount, refreshCloudAccount } = useAppStore()
   const toast = useToast()
 
+  const [recordSearch, setRecordSearch] = useState('')
+  const [recordFilter, setRecordFilter] = useState('all')
+  const materializedRecord = (id: string, localPath: string) => Boolean(localPath || state?.items.some(item => item.recordId === id && !item.remoteOnly))
   const [tab, setTab] = useState<Tab>('records')
   const [syncing, setSyncing] = useState(false)
   const [pulling, setPulling] = useState(false)
@@ -52,6 +55,8 @@ export default function SyncCenterView() {
   const syncModeLabel = syncAccess?.mode === 'personal' ? '个人自建' : syncAccess?.mode === 'enterprise' ? '企业自建' : 'AxonMind 托管'
   const conflicts = state?.syncConflicts || []
   const pendingConflicts = conflicts.filter(conflict => !conflict.resolvedAt && conflict.resolution === 'pending')
+
+  const visibleRecords = records.filter(r => r.fileName.toLowerCase().includes(recordSearch.toLowerCase()) && (recordFilter === 'all' || (recordFilter === 'local') === materializedRecord(r.id, r.localPath))).sort((a, b) => (Date.parse(b.uploadedAt) || 0) - (Date.parse(a.uploadedAt) || 0))
 
   const handleAccountAction = async (mode: 'create' | 'join' | 'refresh') => {
     if (!isFeishuLoggedIn || !hasPassphrase) {
@@ -156,19 +161,42 @@ export default function SyncCenterView() {
   }
 
   return (
-    <div className="vm-page-stack animate-fade-in">
+    <div className="vm-page-stack vm-sync-page animate-fade-in">
       <PageHero
         eyebrow="多端协同"
         title="多设备同步"
         description="连接飞书云盘，在授权设备间同步加密内容、目录清单和删除状态。"
         details={[syncModeLabel, `${records.length} 条同步记录`, `${accountSync?.devices.filter(device => device.status === 'active').length || 1} 台活跃设备`, accountSync?.linked ? '账号已协同' : '等待绑定']}
         tone="emerald"
+        actions={<>
+          <Button variant={isFeishuLoggedIn ? 'outline' : 'primary'} onClick={onConfigureFeishu}>
+            <Link2 className="w-4 h-4" />{isFeishuLoggedIn ? '飞书连接设置' : '连接飞书'}
+          </Button>
+          {isFeishuLoggedIn && <>
+            <Button variant="outline" onClick={handlePull} disabled={pulling}>
+              <Download className="w-4 h-4" />拉取清单
+            </Button>
+            <Button variant="outline" onClick={handlePush} disabled={pushing}>
+              <Upload className="w-4 h-4" />上传清单
+            </Button>
+            <Button variant="primary" onClick={handleFullSync} disabled={syncing} aria-busy={syncing}>
+              <RefreshCw className={cn('w-4 h-4', syncing && 'animate-spin')} />{syncing ? '同步中...' : '完整同步'}
+            </Button>
+          </>}
+        </>}
       />
-      <div className="vm-sidebar-grid">
+      <section className="vm-module-summary" aria-label="同步概况">
+        <div><span>本机可用</span><strong>{records.filter(r => materializedRecord(r.id, r.localPath)).length}</strong></div>
+        <div><span>待取回</span><strong>{records.filter(r => !materializedRecord(r.id, r.localPath)).length}</strong></div>
+        <div><span>待处理冲突</span><strong>{pendingConflicts.length}</strong></div>
+        <div><span>最近同步结果</span><strong>{!isFeishuLoggedIn ? '等待连接' : autoSyncState?.status === 'offline' ? '断网重试' : autoSyncState?.lastError ? '需要处理' : autoSyncState?.lastSuccessAt ? '已成功' : '尚未完成'}</strong></div>
+      </section>
+      {autoSyncState?.lastError && <div className="vm-notice vm-notice-attention vm-sync-recovery" role="status"><div><strong>同步需要处理</strong><p>{autoSyncState.lastError}</p></div><Button size="sm" onClick={onConfigureFeishu}>检查连接配置</Button><Button size="sm" variant="primary" disabled={syncing || !isFeishuLoggedIn} onClick={handleFullSync}>重试同步</Button></div>}
+      <div className="vm-sync-grid">
       {/* 左栏：飞书状态 */}
-      <div className="flex flex-col gap-4">
+      <div className="vm-sync-overview">
         <div className="glass-card rounded-lg overflow-hidden">
-          <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="px-4 py-3" style={{ borderBottom: '1px solid hsl(var(--border))' }}>
             <h2 className="text-sm font-semibold flex items-center gap-2 text-foreground">
               <MonitorSmartphone className="w-4 h-4 text-cyan-400" />
               多端协同账号
@@ -179,11 +207,6 @@ export default function SyncCenterView() {
               <span className="text-muted-foreground">同步接入方式</span>
               <span className="vm-badge vm-badge-emerald">{syncModeLabel}</span>
             </div>
-            {syncAccess?.mode === 'managed' && !syncAccess.ready && (
-              <p className="vm-notice vm-notice-attention text-[10px] leading-relaxed">
-                托管接入尚未配置，请在设置中切换为个人自建或企业自建后连接飞书。
-              </p>
-            )}
             <div className="vm-surface-card rounded-lg p-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -199,36 +222,33 @@ export default function SyncCenterView() {
                 </span>
               </div>
             </div>
-            {accountSync?.linked && (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <Users className="w-3.5 h-3.5" />
-                  {accountSync.devices.filter(device => device.status === 'active').length} 台授权设备
-                  {accountSync.cloudEmail ? ` · ${accountSync.cloudEmail}` : ''}
-                </div>
-                <div className="space-y-1">
-                  {accountSync.devices.filter(device => device.status === 'active').map(device => (
-                    <div key={device.id} className="vm-surface-card flex items-center justify-between rounded-md px-2.5 py-2 text-[10px]">
-                      <span className="truncate text-foreground">{device.name}{device.current ? ' · 本机' : ''}</span>
-                      <span className={device.online ? 'text-emerald-400' : 'text-muted-foreground'}>{device.online ? '在线' : formatTime(device.lastSeenAt)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
             {accountSync?.linked && !accountSync.feishuAccountMatches && (
               <p className="text-[10px] leading-relaxed text-amber-400">当前登录的飞书账号与已绑定账号不一致，已暂停账号资料刷新。</p>
+            )}
+            {(!isFeishuLoggedIn || !hasPassphrase) && (
+              <div className="vm-notice vm-notice-attention vm-sync-setup-notice" role="status">
+                <p className="text-xs font-medium text-foreground">
+                  {!isFeishuLoggedIn ? '先连接飞书，再绑定云端账号' : '请先设置飞书加密口令'}
+                </p>
+                <p className="text-xs text-foreground leading-relaxed">
+                  {!isFeishuLoggedIn ? '在飞书设置中选择接入方式、登录授权并保存加密口令，然后返回这里绑定。' : '所有设备需使用同一加密口令，保存后即可创建或加入云端账号。'}
+                </p>
+                <Button variant="primary" className="w-full" onClick={onConfigureFeishu}>
+                  <Link2 className="w-4 h-4" />
+                  {!isFeishuLoggedIn ? '开始配置飞书' : '设置加密口令'}
+                </Button>
+              </div>
             )}
             <div className="grid grid-cols-2 gap-2">
               {!accountSync?.linked ? (
                 <>
-                  <Button variant="outline" size="sm" onClick={() => handleAccountAction('create')} disabled={accountBusy || !isFeishuLoggedIn}>
+                  <Button variant="primary" size="sm" className="disabled:opacity-100 disabled:bg-muted disabled:text-muted-foreground disabled:border-border" onClick={() => handleAccountAction('create')} disabled={accountBusy || !isFeishuLoggedIn || !hasPassphrase}>
                     {accountBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
-                    创建账号
+                    创建云端账号
                   </Button>
-                  <Button variant="outline" size="sm" onClick={() => handleAccountAction('join')} disabled={accountBusy || !isFeishuLoggedIn}>
+                  <Button variant="outline" size="sm" className="disabled:opacity-100 disabled:bg-muted disabled:text-muted-foreground disabled:border-border" onClick={() => handleAccountAction('join')} disabled={accountBusy || !isFeishuLoggedIn || !hasPassphrase}>
                     <Users className="w-3.5 h-3.5" />
-                    加入已有
+                    加入已有账号
                   </Button>
                 </>
               ) : (
@@ -241,24 +261,12 @@ export default function SyncCenterView() {
             <p className="text-[10px] leading-relaxed text-muted-foreground">
               同一飞书账号与同一加密口令用于发现账号；每台电脑仍使用自己的本地解锁密码。
             </p>
-            {!accountSync?.linked && (
-              <div className="vm-guidance-card" aria-label="多端协同设置步骤">
-                <div className="vm-guidance-heading">
-                  <span>首次设置</span>
-                  <small>约 2 分钟</small>
-                </div>
-                <ol className="vm-guidance-steps">
-                  <li className={isFeishuLoggedIn ? 'done' : ''}><span>1</span><div><strong>连接飞书</strong><small>在设置中选择接入方式并授权</small></div></li>
-                  <li className={hasPassphrase ? 'done' : ''}><span>2</span><div><strong>设置加密口令</strong><small>所有协同设备保持一致</small></div></li>
-                  <li><span>3</span><div><strong>创建或加入账号</strong><small>主设备创建，其他电脑加入</small></div></li>
-                </ol>
-              </div>
-            )}
+
           </div>
         </div>
 
         <div className="glass-card rounded-lg overflow-hidden">
-          <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="px-4 py-3" style={{ borderBottom: '1px solid hsl(var(--border))' }}>
             <h2 className="text-sm font-semibold flex items-center gap-2 text-foreground" >
               <Cloud className="w-4 h-4" style={{ color: 'hsl(190 90% 60%)' }} />
               飞书云同步
@@ -303,29 +311,11 @@ export default function SyncCenterView() {
               <div className="flex items-center justify-between gap-3">
                 <span className="text-xs font-medium text-foreground">自动双向同步</span>
                 <span className={cn('vm-badge', autoSyncState?.status === 'offline' || autoSyncState?.status === 'attention' ? 'vm-badge-gold' : 'vm-badge-emerald')}>
-                  {!state?.settings.feishuAutoSync ? '已关闭' : autoSyncState?.status === 'syncing' ? '同步中' : autoSyncState?.status === 'offline' ? '离线重试' : autoSyncState?.status === 'attention' ? '需要处理' : '运行中'}
+                  {!isFeishuLoggedIn ? '等待连接' : !state?.settings.feishuAutoSync ? '已关闭' : autoSyncState?.status === 'syncing' ? '同步中' : autoSyncState?.status === 'offline' ? '离线重试' : autoSyncState?.status === 'attention' ? '需要处理' : '运行中'}
                 </span>
               </div>
               <p className="mt-1.5 text-[10px] text-muted-foreground">上次成功：{formatTime(autoSyncState?.lastSuccessAt || '')}{autoSyncState?.nextSyncAt ? ` · 下次：${formatTime(autoSyncState.nextSyncAt)}` : ''}</p>
               {autoSyncState?.lastError && <p className="mt-1 text-[10px] leading-relaxed text-amber-400">{autoSyncState.lastError}</p>}
-            </div>
-
-            {/* 同步操作 */}
-            <div className="space-y-2">
-              <Button variant="primary" className="w-full" onClick={handleFullSync} disabled={syncing || !isFeishuLoggedIn} aria-busy={syncing}>
-                {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                {syncing ? '同步中...' : '完整同步'}
-              </Button>
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" onClick={handlePull} disabled={pulling || !isFeishuLoggedIn}>
-                  {pulling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-                  拉取清单
-                </Button>
-                <Button variant="outline" onClick={handlePush} disabled={pushing || !isFeishuLoggedIn}>
-                  {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                  上传清单
-                </Button>
-              </div>
             </div>
 
             {/* Manifest 状态 */}
@@ -352,6 +342,15 @@ export default function SyncCenterView() {
         </div>
       </div>
 
+      <section className="glass-card vm-device-strip" aria-label="设备同步状态">
+        <div className="vm-section-heading"><h2>设备同步状态</h2><span className="text-xs text-muted-foreground">{accountSync?.linked ? '已授权设备 · 在线状态不代表内容已同步' : '绑定云端账号后查看其他设备'}</span></div>
+        <div className="vm-device-strip-list">
+          {accountSync?.linked ? accountSync.devices.filter(device => device.status === 'active').map(device => (
+            <div className="vm-device-tile" key={device.id}><MonitorSmartphone className="w-5 h-5" /><div><strong>{device.name}{device.current ? ' · 本机' : ''}</strong><small>最近活动：{formatTime(device.lastSeenAt)}</small></div><span className={device.online ? 'vm-badge vm-badge-emerald' : 'vm-badge'}>{device.online ? '在线' : '离线'}</span></div>
+          )) : <div className="vm-device-tile"><MonitorSmartphone className="w-5 h-5" /><div><strong>{accountSync?.deviceName || '当前设备'}</strong><small>仅本机 · 尚未绑定云端账号</small></div><span className="vm-badge vm-badge-gold">未绑定</span></div>}
+        </div>
+      </section>
+
       {/* 右栏：记录详情 */}
       <div className="glass-card rounded-lg overflow-hidden flex flex-col vm-full-height-panel">
         {/* Tab 导航 */}
@@ -377,19 +376,21 @@ export default function SyncCenterView() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-5">
+          {tab === 'records' && <div className="vm-module-toolbar"><input className="vm-input" aria-label="搜索同步记录" placeholder="搜索文件名称" value={recordSearch} onChange={e => setRecordSearch(e.target.value)} /><select className="vm-input" aria-label="同步记录状态" value={recordFilter} onChange={e => setRecordFilter(e.target.value)}><option value="all">全部状态</option><option value="local">本机可用</option><option value="remote">待取回</option></select></div>}
           {tab === 'records' && (
-            records.length === 0 ? (
+            visibleRecords.length === 0 ? (
               <div className="vm-empty py-16">
                 <Cloud className="w-10 h-10 text-muted-foreground"  />
-                <p className="vm-empty-title">暂无同步记录</p>
+                <p className="vm-empty-title">{records.length ? '没有匹配的记录' : '暂无同步记录'}</p>
                 <p className="vm-empty-description">先从“添加内容”录入资料，再执行完整同步；加密记录会显示在这里。</p>
               </div>
             ) : (
-              <div className="space-y-2">
-                {records.map(r => {
+              <div className="vm-sync-record-table">
+                <div className="vm-sync-record-heading" aria-hidden="true"><span>内容 / 大小</span><span>上传时间</span><span>可用状态</span><span>操作</span></div>
+                {visibleRecords.map(r => {
                   const materialized = Boolean(r.localPath || state?.items.some(item => item.recordId === r.id && !item.remoteOnly))
                   return (
-                  <div key={r.id} className="vm-surface-card vm-hover-row flex items-center gap-3 p-3 rounded-lg">
+                  <div key={r.id} className="vm-sync-record-row vm-hover-row">
                     <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
                       style={{ background: 'hsl(190 60% 16% / 0.4)', border: '1px solid hsl(190 60% 24% / 0.3)' }}>
                       <FileText className="w-4 h-4" style={{ color: 'hsl(190 90% 60%)' }} />
@@ -398,16 +399,17 @@ export default function SyncCenterView() {
                       <p className="text-xs font-medium truncate text-foreground" >{r.fileName}</p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[10px] text-muted-foreground" >{formatSize(r.size)}</span>
-                        <span className="text-[10px] text-muted-foreground" >·</span>
-                        <span className="text-[10px] text-muted-foreground" >{formatTime(r.uploadedAt)}</span>
+
                         {r.scope === 'group' && (
                           <span className="vm-badge vm-badge-violet text-[9px]">组</span>
                         )}
+
+                      </div>
+                    </div>
+                    <time className="text-[10px] text-muted-foreground">{formatTime(r.uploadedAt)}</time>
                         <span className={cn('vm-badge text-[9px]', materialized ? 'vm-badge-emerald' : 'vm-badge-gold')}>
                           {materialized ? '本机可用' : state?.settings.syncDownloadMode === 'manual' ? '等待手动取回' : '等待自动落地'}
                         </span>
-                      </div>
-                    </div>
                     <div className="flex gap-1">
                       {materialized ? (
                         <Button variant="ghost" size="sm" onClick={() => handleOpen(r)} title="打开本地文件">

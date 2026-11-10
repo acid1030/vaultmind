@@ -1336,3 +1336,15 @@ html.light .glass-card, html.light .glass-panel {
 .vm-chat-image-close { position: absolute; right: 22px; top: 18px; }
 @media (max-width: 1150px) { .vm-chat-tools small { font-size: 9px; } .vm-chat-attachment { width: 250px; } }
 .vm-chat-pending-capture { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; padding: 6px 8px; border-radius: 6px; color: hsl(var(--primary)); background: hsl(var(--primary) / .08); font-size: 11px; }
+
+/* Sync: setup and health first, history below; primary actions stay at the top right. */
+.vm-sync-grid { display: grid; gap: 16px; min-width: 0; }
+.vm-sync-overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.vm-sync-overview > * { min-width: 0; }
+.vm-sync-page .vm-page-hero-footer { align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.vm-sync-page .vm-page-hero-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.vm-sidebar-footer .vm-side-link { width: 100%; margin-bottom: 10px; }
+@media (max-width: 1000px) {
+  .vm-sync-overview { grid-template-columns: minmax(0, 1fr); }
+  .vm-sync-page .vm-page-hero-actions { margin-left: 0; justify-content: flex-start; }
+}

@@ -61,6 +61,11 @@ async function register(window) {
     throw new Error(`Created group "${groupName}" not found in list`);
   }
 
+  await window.getByRole('region', { name: '用户组概况' }).waitFor();
+  await window.getByRole('textbox', { name: '搜索用户组', exact: true }).fill(groupName);
+  await window.getByRole('textbox', { name: '搜索成员或共享内容' }).fill('not-found-test');
+  await window.getByRole('textbox', { name: '搜索成员或共享内容' }).fill('');
+
   // Invite a member
   await window.fill('input[placeholder="成员邮箱"]', 'member@example.com');
   await window.click('button:has-text("邀请")');

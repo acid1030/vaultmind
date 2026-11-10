@@ -42,9 +42,19 @@ async function register(window) {
   await window.waitForLoadState('networkidle');
   await register(window);
 
+  await window.screenshot({ path: '/tmp/mizhan-console-home.png' });
+  await window.getByRole('button', { name: '切换亮色模式' }).click();
+  await window.waitForTimeout(400);
+  await window.screenshot({ path: '/tmp/mizhan-console-light.png' });
+  await window.getByRole('button', { name: '切换暗色模式' }).click();
+
   // Navigate to Sync
   await window.click('nav button:has-text("同步")');
   await window.waitForTimeout(800);
+
+  await window.getByRole('region', { name: '同步概况' }).waitFor();
+  await window.getByRole('textbox', { name: '搜索同步记录' }).fill('no-match');
+  await window.getByLabel('同步记录状态').selectOption('remote');
 
   // Verify sync center loads (shows Feishu status)
   const syncStatus = await window.locator('text=飞书未连接').isVisible().catch(() => false);
@@ -53,10 +63,27 @@ async function register(window) {
   }
 
   await window.screenshot({ path: '/tmp/electron-sync.png' });
+  const settings = window.getByRole('button', { name: '设置', exact: true });
+  if (!await settings.locator('..').evaluate(el => el.classList.contains('vm-sidebar-footer'))) throw new Error('Settings must be anchored in sidebar footer');
+  await window.setViewportSize({ width: 900, height: 760 });
+  if (await window.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error('Compact layout overflows');
+  await window.screenshot({ path: '/tmp/electron-sync-compact.png' });
 
-  // Navigate to Config
-  await window.click('nav button:has-text("设置")');
+  // Disconnected accounts have a visible, actionable route directly to Feishu settings.
+  const connect = window.getByRole('button', { name: '连接飞书', exact: true });
+  if (!await connect.isEnabled()) throw new Error('Feishu setup entry must remain actionable');
+  if (!await window.getByRole('button', { name: '创建云端账号', exact: true }).isDisabled()) throw new Error('Binding must require Feishu authorization');
+  await connect.click();
+  await window.getByText('选择同步接入方式', { exact: true }).waitFor();
+  // Navigate to Config through its standard entry as well.
+  await window.click('nav button:has-text("同步")');
+  await window.getByRole('button', { name: '设置', exact: true }).click();
   await window.waitForTimeout(800);
+
+  await window.getByRole('region', { name: '设置连接概况' }).waitFor();
+  await window.getByRole('textbox', { name: '搜索设置项' }).fill('数据安全');
+  await window.getByRole('button', { name: '数据安全 自动备份 / 完整性恢复', exact: true }).waitFor();
+  await window.getByRole('textbox', { name: '搜索设置项' }).fill('');
 
   // Verify config center loads
   const configHeader = await window.getByRole('heading', { name: '配置中心', exact: true }).isVisible().catch(() => false);

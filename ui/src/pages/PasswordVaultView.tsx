@@ -46,6 +46,8 @@ export default function PasswordVaultView() {
   const { confirm, confirmDialog } = useConfirmDialog()
 
   const [category, setCategory] = useState<Category>('all')
+  const [availability, setAvailability] = useState('all')
+  const [sort, setSort] = useState('recent')
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [unlockedText, setUnlockedText] = useState<{ id: string; name: string; text: string } | null>(null)
@@ -64,6 +66,7 @@ export default function PasswordVaultView() {
   const remoteSecretCount = secretItems.filter(item => item.remoteOnly).length
 
   const filteredSecrets = secretItems.filter(item => {
+    if (availability !== 'all' && (availability === 'remote') !== Boolean(item.remoteOnly)) return false
     const title = item.title || ''
     if (category === 'api' && !/(?:api\s*[-_]?\s*key|access\s*[-_]?\s*key|token|secret)/i.test(title)) return false
     if (category === 'ssh' && !/(?:ssh|私钥|公钥|private\s*[-_]?\s*key)/i.test(title)) return false
@@ -73,11 +76,14 @@ export default function PasswordVaultView() {
   })
 
   const filteredAccounts = projectAccounts.filter(acc => {
+    if (availability === 'remote') return false
     if (category === 'all' || category === 'git') return true
     if (category === 'api' && acc.provider !== 'git' && acc.provider !== 'svn') return true
     if (category === 'ssh' && acc.provider === 'ssh') return true
     return false
   })
+  filteredSecrets.sort((a, b) => sort === 'name' ? a.title.localeCompare(b.title, 'zh-CN') : (Date.parse(b.downloadedAt) || 0) - (Date.parse(a.downloadedAt) || 0))
+  filteredAccounts.sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'))
   const selectedItem = filteredSecrets.find(item => item.id === selectedId) || filteredSecrets[0]
 
   const copy = async (id: string, val: string) => {
@@ -146,10 +152,15 @@ export default function PasswordVaultView() {
         details={[`${secretItems.length + projectAccounts.length} 项凭据`, remoteSecretCount ? `${remoteSecretCount} 项待取回` : '本机可用', '按需解锁']}
         tone="cyan"
       />
+      <section className="vm-vault-overview" aria-label="凭据状态摘要">
+        <div><span>本机可用凭据</span><strong>{secretItems.filter(item => !item.remoteOnly).length + projectAccounts.length}</strong></div>
+        <div><span>云端待取回</span><strong>{remoteSecretCount}</strong></div>
+        <div><span>项目连接账号</span><strong>{projectAccounts.length}</strong></div>
+      </section>
       <div className="vm-sidebar-grid vm-vault-grid">
       {/* 左侧分类 */}
       <div className="glass-card rounded-md overflow-hidden">
-        <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="px-4 py-3" style={{ borderBottom: '1px solid hsl(var(--border))' }}>
           <h2 className="text-sm font-semibold flex items-center gap-2 text-foreground" >
             <Key className="w-4 h-4 text-primary" />
             密码库
@@ -167,7 +178,7 @@ export default function PasswordVaultView() {
         </div>
 
         {/* 分类树 */}
-        <div className="px-3 py-2" style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="px-3 py-2" style={{ borderTop: '1px solid hsl(var(--border))' }}>
           <p className="text-[10px] uppercase tracking-wide mb-2 text-muted-foreground" >分类</p>
           <div className="space-y-0.5">
             {CATEGORIES.map(c => (
@@ -212,6 +223,7 @@ export default function PasswordVaultView() {
           </Button>
         </div>
 
+        <div className="vm-module-toolbar" aria-label="凭据筛选"><select className="vm-input" aria-label="凭据可用状态" value={availability} onChange={e => setAvailability(e.target.value)}><option value="all">全部状态</option><option value="local">本机可用</option><option value="remote">云端待取回</option></select><select className="vm-input" aria-label="凭据排序" value={sort} onChange={e => setSort(e.target.value)}><option value="recent">最近入库</option><option value="name">名称排序</option></select><span>{filteredSecrets.length + filteredAccounts.length} 项匹配</span></div>
         {/* 添加表单 */}
         {showAdd && (
           <div className="glass-card rounded-md p-4 space-y-3 animate-fade-in">
@@ -239,16 +251,17 @@ export default function PasswordVaultView() {
         {/* 本地密码/密钥列表 */}
         {filteredSecrets.length > 0 && (
           <div className="glass-card rounded-md overflow-hidden">
-            <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border)' }}>
+            <div className="px-4 py-2.5" style={{ borderBottom: '1px solid hsl(var(--border))' }}>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" >
                 本地加密库
               </h3>
             </div>
+            <div className="vm-vault-table-heading" aria-hidden="true"><span>凭据名称 / 内容</span><span>入库时间</span><span>状态 / 操作</span></div>
             <div className="divide-y">
               {filteredSecrets.map(item => (
                 <div key={item.id}
-                  className={cn('vm-hover-row px-4 py-3 flex items-center gap-3 group', selectedItem?.id === item.id && 'vm-vault-row-selected')}
-                  style={{ borderBottom: '1px solid var(--border)' }}>
+                  className={cn('vm-vault-table-row vm-hover-row group', selectedItem?.id === item.id && 'vm-vault-row-selected')}
+                  style={{ borderBottom: '1px solid hsl(var(--border))' }}>
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-primary bg-primary/10 border border-primary/20">
                     <Key className="w-3.5 h-3.5" />
                   </div>
@@ -258,11 +271,10 @@ export default function PasswordVaultView() {
                       <span className="text-xs truncate max-w-[200px] text-muted-foreground" >
                         {item.maskedText || '••••••••••••'}
                       </span>
-                      <span className="text-[10px] text-muted-foreground" >
-                        {formatTime(item.downloadedAt)}
-                      </span>
+
                     </div>
                   </div>
+                  <time className="text-[10px] text-muted-foreground">{formatTime(item.downloadedAt)}</time>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {item.remoteOnly ? (
                       <Button variant="cyan" size="sm" onClick={() => handleDownload(item)} title="从云端取回并解密">
@@ -287,7 +299,7 @@ export default function PasswordVaultView() {
         {/* Git/项目账号 Token 列表 */}
         {filteredAccounts.length > 0 && (
           <div className="glass-card rounded-md overflow-hidden">
-            <div className="px-4 py-2.5" style={{ borderBottom: '1px solid var(--border)' }}>
+            <div className="px-4 py-2.5" style={{ borderBottom: '1px solid hsl(var(--border))' }}>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground" >
                 项目账号 Token
               </h3>
@@ -296,7 +308,7 @@ export default function PasswordVaultView() {
               {filteredAccounts.map(acc => (
                 <div key={acc.id}
                   className="vm-hover-row px-4 py-3 flex items-center gap-3 group"
-                  style={{ borderBottom: '1px solid var(--border)' }}>
+                  style={{ borderBottom: '1px solid hsl(var(--border))' }}>
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-primary bg-primary/10 border border-primary/20">
                     {PROVIDER_ICONS[acc.provider] || <Globe className="w-3.5 h-3.5" />}
                   </div>
@@ -367,7 +379,7 @@ export default function PasswordVaultView() {
           <div className="w-full max-w-lg glass-panel rounded-xl overflow-hidden animate-scale-in"
             onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 flex items-center justify-between"
-              style={{ borderBottom: '1px solid var(--border)' }}>
+              style={{ borderBottom: '1px solid hsl(var(--border))' }}>
               <h3 className="text-sm font-semibold flex items-center gap-2 text-foreground" >
                 <Unlock className="w-4 h-4" style={{ color: 'hsl(152 72% 55%)' }} />
                 {unlockedText.name}
