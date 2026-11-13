@@ -1,5 +1,6 @@
 'use strict';
 const http=require('node:http'), crypto=require('node:crypto');
+const { createChatLive } = require('./chat-live');
 const API='https://open.feishu.cn';
 function createAuthServer({publicUrl,appId,appSecret,tokenKey,scope='drive:drive drive:drive:readonly auth:user.id:read wiki:wiki:readonly offline_access',fetcher=fetch,now=Date.now}) {
  const base=new URL(publicUrl);if(base.protocol!=='https:'||base.search||base.hash)throw Error('PUBLIC_URL must be HTTPS');
@@ -39,9 +40,17 @@ function createAuthServer({publicUrl,appId,appSecret,tokenKey,scope='drive:drive
    if(req.method==='POST'&&route===prefix+'/v1/feishu/oauth/refresh'){
     const b=await body(req),t=unwrap(b.refreshToken);if(!t.refresh||t.expires<=now())throw Error();const v=await remote('/open-apis/authen/v2/oauth/token',{grant_type:'refresh_token',client_id:appId,client_secret:appSecret,refresh_token:t.refresh});const result=await payload(v);if(result.user.openId!==t.openId)throw Error();return json(res,200,result);
    }
+   if(req.method==='POST'&&route===prefix+'/v1/chat/live-ticket'){
+    const b=await body(req), match=/^Bearer ([^\s]+)$/.exec(req.headers.authorization||'');
+    if(!match||!(/^[0-9a-f-]{36}$/i.test(b.vaultId)))return json(res,400,{message:'Invalid live request'});
+    const user=(await remote('/open-apis/authen/v1/user_info',null,match[1])).data;
+    if(!user?.open_id)return json(res,403,{message:'Invalid Feishu identity'});
+    return json(res,200,{ticket:chatLive.issue(user.open_id,b.vaultId)});
+   }
    return json(res,404,{message:'Not found'});
   }catch{return json(res,400,{message:'登录未完成或授权已失效，请重新发起飞书登录'})}
  });
+ const chatLive=createChatLive(server,prefix+'/v1/chat/live',now);
  return server;
 }
 if(require.main===module){const server=createAuthServer({publicUrl:process.env.PUBLIC_URL,appId:process.env.FEISHU_APP_ID,appSecret:process.env.FEISHU_APP_SECRET,tokenKey:Buffer.from(process.env.TOKEN_KEY||'','hex')});server.listen(Number(process.env.PORT||3492),'127.0.0.1',()=>console.log('Mizhan auth listening on loopback'));}

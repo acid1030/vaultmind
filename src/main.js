@@ -516,6 +516,7 @@ function clearLocalSession() {
   pendingGlobalScreenshot = null;
   chatServiceInstance?.clearDrafts();
   chatSessionEpoch += 1;
+  chatLiveClient.stop();
   clearTimeout(chatSyncTimer);
   chatSyncTimer = null;
   chatSyncDueAt = 0;
@@ -1059,6 +1060,7 @@ function requestJson(method, urlText, options = {}) {
         }
       });
     });
+    if (options.timeout) req.setTimeout(options.timeout, () => req.destroy(new Error('请求超时')));
     req.on('error', reject);
     if (body) req.write(body);
     req.end();
@@ -1882,7 +1884,11 @@ function persistCloudProfile(user, profile, openId, syncedAt = new Date().toISOS
 }
 
 async function uploadCloudAccountProfile(profile, passphrase, context) {
-  const encrypted = cloudAccount.encryptProfile(profile, passphrase, encryptVaultPayload);
+  const liveUrl = managedServiceUrl();
+  const profileWithChannel = getFeishuToken()?.provider === 'axonmind-managed' && liveUrl
+    ? { ...profile, chatLive: { version: 1, endpoint: liveUrl.replace(/^https:/, 'wss:') + '/v1/chat/live', channelId: profile.vaultId } }
+    : profile;
+  const encrypted = cloudAccount.encryptProfile(profileWithChannel, passphrase, encryptVaultPayload);
   const data = await uploadAllToFeishu({
     file_name: context.fileName,
     parent_type: 'explorer',
@@ -2268,6 +2274,7 @@ function getChatService() {
         deviceId: currentDevice(user).id, linked: Boolean(user.cloud_linked), epoch: chatSessionEpoch, cloudIdentity: getFeishuToken()?.user?.openId || '' };
     },
     getSettings,
+    onUploaded: () => chatLiveClient.publish(),
     resolvePersonalFolder: async (folder) => {
       const user = requireUser();
       const openId = requireFeishuOpenId();
@@ -2380,7 +2387,31 @@ function notifyChatStatus(patch = {}) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('vault:chatStatus', patch);
 }
 
+const chatLiveClient = require('./core/chat-live').createChatLiveClient({
+  getContext: () => {
+    if (!db || !activeUser?.cloud_linked || !activePassword) return null;
+    const settings = getSettings(), token = getFeishuToken();
+    const url = managedServiceUrl(settings), vaultId = activeUser.vault_id, openId = token?.user?.openId;
+    if (!settings.feishuAutoSync || !settings.feishuPassphrase || token?.provider !== 'axonmind-managed' ||
+        !hasUsableFeishuToken(token) || !url || !vaultId || !openId ||
+        activeUser.feishu_open_id_hash !== cloudAccount.hashFeishuOpenId(openId)) return null;
+    return { url, vaultId, openId, key: JSON.stringify([url, vaultId, openId, chatSessionEpoch]) };
+  },
+  issueTicket: async ({ url, vaultId, openId }) => {
+    // The existing cloud sync owns token refresh; do not race rotating refresh tokens.
+    const token = getFeishuToken();
+    if (token?.user?.openId !== openId || token.expiresAt <= Date.now()) throw new Error('等待飞书授权刷新');
+    const reply = await requestJson('POST', url + '/v1/chat/live-ticket', {
+      body: { vaultId }, headers: { Authorization: `Bearer ${token.accessToken}` }, timeout: 25000,
+    });
+    if (typeof reply.ticket !== 'string') throw new Error('实时通道不可用');
+    return reply.ticket;
+  },
+  onChange: () => scheduleChatAutoSync(500),
+});
+
 function scheduleChatAutoSync(delayMs = autoSyncIntervalMs()) {
+  chatLiveClient.reconcile();
   if (!db || !activeUser || !activePassword || !getSettings().feishuAutoSync || !hasUsableFeishuToken(getFeishuToken())) {
     clearTimeout(chatSyncTimer);
     chatSyncTimer = null;
@@ -4835,6 +4866,7 @@ function registerHandlers() {
 }
 
 app.on('before-quit', () => {
+  chatLiveClient.stop();
   clearAutoSyncTimer();
   clearTimeout(chatSyncTimer);
   screenshotEditor?.dispose();

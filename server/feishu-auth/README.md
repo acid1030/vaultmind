@@ -1,6 +1,6 @@
 # 秘栈飞书扫码登录服务
 
-Node.js 22+，无额外运行时依赖。默认只监听 127.0.0.1:3492，由 Nginx 提供 HTTPS。
+Node.js 22+。在服务目录执行 `npm ci --omit=dev` 安装锁定的 WebSocket 依赖。默认只监听 127.0.0.1:3492，由 Nginx 提供 HTTPS。
 
 环境配置放在服务器 `/etc/mizhan-auth.env`（root:root，0600），不要提交到仓库：
 
@@ -31,3 +31,11 @@ TOKEN_KEY=64-hex-characters-generated-from-32-random-bytes
 部署实例（2026-11-10）：`https://axonclawx.cn/mizhan-auth`；服务名 mizhan-auth。Nginx 原文件备份在 `/var/backups/mizhan`。回滚可停用该服务并移除新增的专用 include，再 nginx -t 后 reload，保留环境文件以免丢失刷新密钥。
 
 验证：`node scripts/test-managed-signin.js`。真实扫码、跨物理设备及企业外用户范围须另外验收。
+
+同一账号的个人留言实时同步：
+
+- 飞书云盘的加密账号资料包含 `chatLive`（协议版本、WSS 地址和资料库 ID）。旧账号资料在下一次正常上传时补写。桌面端使用本机配置的托管服务地址，不向云盘资料指定的任意地址发送飞书令牌。
+- 托管客户端使用飞书用户令牌换取 30 秒内有效、仅可用一次的连接票据。服务端核验飞书身份，按身份和资料库 ID 分隔通道。
+- 消息成功上传飞书后，只广播 `changed`。接收端立即安排同步；重连会补拉，轮询继续兜底。群聊和好友私聊仍使用轮询。
+- 更新部署时，替换 `server.js`、`chat-live.js` 和两个 npm 清单，在部署目录安装锁定依赖；将仓库中的 Nginx 配置同步到专用 include，验证 `nginx -t` 后重载，再重启 mizhan-auth。保留既有环境文件和 TOKEN_KEY。确认 HTTPS 健康检查后，用同一飞书账号的两台设备互发测试。
+- 本地验证：`npm ci --prefix server/feishu-auth` 后运行 `node scripts/test-chat-live.js`。

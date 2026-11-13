@@ -271,6 +271,23 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   }
 
   const cloudReady = state?.isFeishuLoggedIn && (scope === 'group' ? Boolean(friend?.folderToken || (group?.feishuFolderToken && group.feishuFolderToken !== 'root')) : state?.accountSync?.linked && state.settings.hasFeishuPassphrase)
+  const liveSync = Boolean(cloudReady && state?.settings.feishuAutoSync)
+  useEffect(() => {
+    if (!liveSync) return
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      if (disposed) return
+      if (document.visibilityState === 'visible') {
+        try { await vaultApi.syncChat({ scope, groupId }) }
+        catch { /* The sync handler persists the room error and refreshes the view. */ }
+      }
+      if (!disposed) timer = setTimeout(poll, 5000)
+    }
+    void poll()
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [liveSync, scope, groupId])
+
   const admin = scope === 'group' && ['owner', 'admin'].includes(group?.role || '')
   const title = friend ? friend.remark || friend.name || friend.email : scope === 'group' ? group?.name || '用户组群聊' : '个人留言'
 
@@ -312,7 +329,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
         </header>
         <div className="vm-chat-storage">
           <Cloud className="w-3.5 h-3.5 shrink-0" />
-          <span>{cloudReady ? (state?.settings.feishuAutoSync ? `自动同步 · 约每 ${state.settings.syncIntervalSeconds || 30} 秒更新` : '自动同步已关闭，可手动同步') : '当前消息先存本机；配置飞书后可同步历史记录'}{history.pending > 0 ? ` · ${history.pending} 条待上传` : ''}</span>
+          <span>{cloudReady ? (state?.settings.feishuAutoSync ? '自动同步 · 当前会话约每 5 秒检查' : '自动同步已关闭，可手动同步') : '当前消息先存本机；配置飞书后可同步历史记录'}{history.pending > 0 ? ` · ${history.pending} 条待上传` : ''}</span>
           {!cloudReady && <button onClick={onOpenSync}>前往同步中心</button>}
         </div>
         {(error || history.lastError) && <div className="vm-chat-error" role="alert">{error || history.lastError}<span>本机已保存的消息仍可查看。</span></div>}

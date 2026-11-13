@@ -18,7 +18,7 @@ function rebindPersonalMessages(db, userId, previousVaultId, nextVaultId) {
   db.run('DELETE FROM app_state WHERE key = ?', [`chatSync:${userId}:personal`]);
 }
 
-function createChatService({ db, queryOne, queryAll, save, getSession, getSettings, resolvePersonalFolder, transport }) {
+function createChatService({ db, queryOne, queryAll, save, getSession, getSettings, resolvePersonalFolder, transport, onUploaded = () => {} }) {
   const running = new Map();
   function session() {
     const value = getSession();
@@ -270,6 +270,7 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
         for (const row of rows) db.run('UPDATE chat_messages SET synced_at = ? WHERE owner_user_id = ? AND room_id = ? AND id = ?', [now, s.user.id, r.localId, row.id]);
         db.run('INSERT OR IGNORE INTO chat_downloads VALUES (?, ?, ?)', [s.user.id, r.localId, uploadedFile.file_token]);
         save();
+        if (r.scope === 'personal') onUploaded();
         uploaded += rows.length;
         offset += rows.length;
       }

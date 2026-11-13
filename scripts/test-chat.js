@@ -54,12 +54,13 @@ async function main() {
       if (!loggedIn) throw new Error('not logged in');
       return { user, password, vaultId, deviceId, linked: true };
     };
-    const service = createChatService({ db, queryAll, queryOne, save: () => {}, getSession,
+    let notices = 0;
+    const service = createChatService({ onUploaded: () => notices++, db, queryAll, queryOne, save: () => {}, getSession,
       getSettings: () => ({ folderToken: 'personal-folder', feishuPassphrase: 'cloud-passphrase' }),
       resolvePersonalFolder: async f => f,
       transport,
     });
-    return { db, user, service, queryAll, queryOne, rebind: next => { rebindPersonalMessages(db, user.id, vaultId, next); vaultId = next; }, logout: () => { loggedIn = false; } };
+    return { db, user, service, queryAll, queryOne, notices: () => notices, rebind: next => { rebindPersonalMessages(db, user.id, vaultId, next); vaultId = next; }, logout: () => { loggedIn = false; } };
   }
   const pages = [];
   const listed = await listAllFiles(async cursor => {
@@ -80,7 +81,9 @@ async function main() {
   assert.equal(a.service.list(personal).messages[0].text, '跨设备文本\n第二行');
   assert.equal(a.service.list(personal).pending, 1);
   assert.ok(!Buffer.from(a.db.export()).includes(Buffer.from('跨设备文本')), 'SQLite must not contain plaintext message bodies');
+  assert.equal(a.notices(), 0, 'local save alone must not notify peers');
   await a.service.syncRoom(personal);
+  assert.equal(a.notices(), 1, 'notify peers once the upload succeeds');
   assert.equal(a.service.list(personal).pending, 0);
   assert.ok([...files.values()].every(f => !f.bytes.includes(Buffer.from('跨设备文本'))), 'cloud must be encrypted');
   b.service.send({ ...personal, text: '从 B 发送' });
@@ -98,7 +101,9 @@ async function main() {
   assert.ok(reopened.service.list(personal).messages.some(message => message.text === '跨设备文本\n第二行'));
   failUpload = true;
   a.service.send({ ...personal, text: '离线消息' });
+  const beforeFailure = a.notices();
   await assert.rejects(a.service.syncRoom(personal), /offline/);
+  assert.equal(a.notices(), beforeFailure, 'failed uploads must not notify peers');
   assert.equal(a.service.list(personal).pending, 1);
   failUpload = false;
   await a.service.syncRoom(personal);
