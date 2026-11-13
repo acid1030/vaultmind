@@ -55,6 +55,21 @@ try {
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'dashboard must not overflow');
   }
   await page.screenshot({ path: '/tmp/mizhan-orb-dashboard-compact.png', fullPage: true });
+  await page.setViewportSize({ width: 2560, height: 1310 });
+  const wide = await page.evaluate(() => {
+    const page = document.querySelector('.vm-page[data-view="home"]');
+    const dashboard = page.querySelector('.vm-home-console');
+    const bounds = page.getBoundingClientRect();
+    const panel = dashboard.getBoundingClientRect();
+    const style = getComputedStyle(page);
+    return {
+      left: Math.abs(panel.left - bounds.left - parseFloat(style.paddingLeft)),
+      right: Math.abs(bounds.right - panel.right - parseFloat(style.paddingRight)),
+      overflow: page.scrollHeight > page.clientHeight + 1 || document.documentElement.scrollWidth > innerWidth + 1,
+    };
+  });
+  assert.ok(wide.left <= 1 && wide.right <= 1, 'wide dashboard must fill the workspace inside its padding');
+  assert.equal(wide.overflow, false, 'wide dashboard must fit without page scrolling');
   assert.deepEqual(errors, []);
   console.log('Dashboard E2E passed: real counts, animated orb, reduced motion, tag view, recent filters, secret masking, themes and compact layouts.');
 } finally { await app.close(); fs.rmSync(profile, { recursive: true, force: true }); }

@@ -34,8 +34,10 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
   function room(input, s, writable = false) {
     if (input?.scope === 'personal') return { scope: 'personal', groupId: '', localId: 'personal', cloudId: s.vaultId, writable: true };
     if (input?.scope !== 'group' || !input.groupId) throw new Error('请选择有效的聊天空间');
+    const direct = queryOne('SELECT * FROM friend_rooms WHERE group_id=?', [String(input.groupId)]);
+    if (direct && (!queryOne("SELECT 1 FROM friend_contacts WHERE user_id=? AND group_id=? AND status='accepted'", [s.user.id,String(input.groupId)]) || ![direct.inviter_email,direct.invitee_email].includes(s.user.email.toLowerCase()))) throw new Error('请先完成好友确认，或该好友已移除');
     const membership = groups.requireGroupAccess(db, queryOne, String(input.groupId), s.user.id,
-      writable ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
+      writable && !direct ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
     return { scope: 'group', groupId: String(input.groupId), localId: `group:${input.groupId}`, cloudId: String(input.groupId), writable: membership.role !== 'viewer' };
   }
   function stateKey(s, r) { return `chatSync:${s.user.id}:${r.localId}`; }
@@ -291,7 +293,7 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
   }
   async function syncAll() {
     const s = session();
-    const rooms = [{ scope: 'personal' }, ...groups.getUserGroups(db, queryAll, s.user.id).map(g => ({ scope: 'group', groupId: g.id }))];
+    const rooms = [{ scope: 'personal' }, ...groups.getUserGroups(db, queryAll, s.user.id).filter(g => !queryOne('SELECT 1 FROM friend_rooms WHERE group_id=?',[g.id]) || queryOne("SELECT 1 FROM friend_contacts WHERE user_id=? AND group_id=? AND status='accepted'",[s.user.id,g.id])).map(g => ({ scope: 'group', groupId: g.id }))];
     const results = [];
     for (const input of rooms) {
       fence(s);

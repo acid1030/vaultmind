@@ -1,0 +1,17 @@
+[Unit]
+Description=Mizhan Feishu sign-in broker
+After=network.target
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+EnvironmentFile=/etc/mizhan-auth.env
+ExecStart=/usr/bin/node /opt/mizhan-auth/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target

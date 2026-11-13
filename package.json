@@ -26,7 +26,11 @@
     "test:screenshot": "node scripts/test-screenshot-shortcut.js && node scripts/test-screenshot-annotation.mjs && node scripts/test-screenshot-editor.js",
     "test:screenshot:e2e": "node ui/e2e/screenshot-annotation.spec.mjs",
     "test:dashboard": "node scripts/test-dashboard.mjs",
-    "test:dashboard:e2e": "node ui/e2e/dashboard.spec.mjs"
+    "test:dashboard:e2e": "node ui/e2e/dashboard.spec.mjs",
+    "test:friends": "node scripts/test-friends.js",
+    "test:friends:e2e": "node ui/e2e/friends.spec.mjs",
+    "test:managed-signin": "node scripts/test-managed-signin.js",
+    "test:managed-signin:e2e": "node ui/e2e/cloud-signin.spec.mjs"
   },
   "devDependencies": {
     "electron": "^44.1.0",

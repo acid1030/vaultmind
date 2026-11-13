@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
+import CloudSignin from '@/components/shared/CloudSignin'
 import PageHero from '@/components/shared/PageHero'
 import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { vaultApi, type AppUpdateState, type DatabaseBackup } from '@/lib/ipc'
@@ -506,6 +507,7 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
 
           {active === 'feishu' && (
             <div className="space-y-4 max-w-2xl">
+                <CloudSignin binding />
               <div>
                 <p className="text-xs font-medium text-foreground mb-2">选择同步接入方式</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2" role="radiogroup" aria-label="同步接入方式">

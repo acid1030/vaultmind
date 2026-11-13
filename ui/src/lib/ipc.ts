@@ -224,6 +224,8 @@ export interface ProjectsData {
   repositories: ProjectRepository[]
 }
 
+export interface FriendContact { groupId: string; email: string; name: string; remark: string; status: 'pending' | 'accepted'; folderToken: string }
+
 export interface VaultState {
   auth: {
     hasUsers: boolean
@@ -234,6 +236,8 @@ export interface VaultState {
   isFeishuLoggedIn: boolean
   feishuUser: { name: string; openId: string; avatarUrl: string } | null
   context: VaultContext
+  managedSignin?: {available:boolean}
+  friends?: FriendContact[]
   groups: VaultGroup[]
   pendingInvites: PendingInvite[]
   manifestMeta: ManifestMeta | null
@@ -354,6 +358,11 @@ export interface VaultApi {
   getChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string; thumbnail?: boolean }) => Promise<{ preview: string }>
   saveChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string }) => Promise<{ canceled: boolean }>
 
+  exportFriendDevice: (input:{groupId:string}) => Promise<{code:string}>
+  inviteFriend: (input: {email:string;folderToken:string}) => Promise<{code:string;groupId:string}>
+  inspectFriendInvite: (input:{code:string}) => Promise<{kind:'request'|'accepted'|'device';email:string;name:string}>
+  acceptFriendInvite: (input:{code:string}) => Promise<{code:string;groupId:string}>
+  updateFriend: (input:{groupId:string;remark?:string;remove?:boolean}) => Promise<FriendContact[]>
   listChat: (input: ChatRoom & { before?: { createdAt: string; id: string } }) => Promise<ChatHistory>
   sendChat: (input: ChatRoom & { text: string; attachmentIds?: string[] }) => Promise<ChatMessage>
   syncChat: (input: ChatRoom) => Promise<ChatSyncResult>
@@ -369,6 +378,8 @@ export interface VaultApi {
     phone?: string
     recoveryEmail?: string
   }) => Promise<VaultState & { recoveryCode: string; acceptedInvites: any[] }>
+  beginCloudSignin: () => Promise<{name:string;binding:boolean}>
+  finishCloudSignin: (input:{passphrase:string}) => Promise<{state?:VaultState;needsLocalPassword?:boolean}>
   loginLocal: (payload: { email: string; password: string }) => Promise<VaultState & { acceptedInvites: any[] }>
   logoutLocal: () => Promise<VaultState>
   updateRecovery: (payload: { phone?: string; recoveryEmail?: string }) => Promise<VaultState>
@@ -448,6 +459,13 @@ export interface VaultApi {
 // ── Dev-mode mock (when not running in Electron) ──────────
 
 const mockVaultApi: VaultApi = {
+  beginCloudSignin: async () => { throw new Error('Electron unavailable') },
+  finishCloudSignin: async () => { throw new Error('Electron unavailable') },
+  exportFriendDevice: async () => { throw new Error('Electron unavailable') },
+  inviteFriend: async () => { throw new Error('Electron unavailable') },
+  inspectFriendInvite: async () => { throw new Error('Electron unavailable') },
+  acceptFriendInvite: async () => { throw new Error('Electron unavailable') },
+  updateFriend: async () => { throw new Error('Electron unavailable') },
   annotateChatDraft: async () => { throw new Error('Electron 不可用') },
   getScreenshotShortcut: async () => ({ accelerator: 'CommandOrControl+Alt+A', registered: false, error: 'Electron 不可用' }),
   setScreenshotShortcut: async () => { throw new Error('Electron 不可用') },

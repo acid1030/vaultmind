@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/shared/Toast'
 import { useAppStore } from '@/store/app'
 import { vaultApi, type ChatHistory, type ChatMessage, type ChatRoom, type ChatDraftAttachment, type ScreenshotDelivery } from '@/lib/ipc'
+import FriendsPanel from '@/components/shared/FriendsPanel'
 import { cn } from '@/lib/utils'
 import { mergeChatHistory, sortMessages } from '@/lib/chat-history'
 import ChatAttachmentView, { chatFileSize } from '@/components/shared/ChatAttachmentView'
@@ -17,8 +18,10 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   const { state, setContext, refresh } = useAppStore()
   const toast = useToast()
   const context = state?.context
-  const scope = context?.scope || 'personal'
-  const groupId = scope === 'group' ? context?.groupId || '' : ''
+  const [friendRoom,setFriendRoom] = useState('')
+  const friend = state?.friends?.find(f=>f.groupId===friendRoom && f.status==='accepted')
+  const scope = friend ? 'group' : context?.scope || 'personal'
+  const groupId = friend?.groupId || (scope === 'group' ? context?.groupId || '' : '')
   const roomKey = `${state?.auth.user?.id}:${scope}:${groupId}`
   const activeRoom = useRef(roomKey)
   activeRoom.current = roomKey
@@ -267,21 +270,22 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
     finally { setBusy(false) }
   }
 
-  const cloudReady = state?.isFeishuLoggedIn && (scope === 'group' ? Boolean(group?.feishuFolderToken && group.feishuFolderToken !== 'root') : state?.accountSync?.linked && state.settings.hasFeishuPassphrase)
+  const cloudReady = state?.isFeishuLoggedIn && (scope === 'group' ? Boolean(friend?.folderToken || (group?.feishuFolderToken && group.feishuFolderToken !== 'root')) : state?.accountSync?.linked && state.settings.hasFeishuPassphrase)
   const admin = scope === 'group' && ['owner', 'admin'].includes(group?.role || '')
-  const title = scope === 'group' ? group?.name || '用户组群聊' : '个人留言'
+  const title = friend ? friend.remark || friend.name || friend.email : scope === 'group' ? group?.name || '用户组群聊' : '个人留言'
 
   return (
     <div className={cn("vm-chat-layout animate-fade-in", showDetails && "vm-chat-with-details")}>
       <aside className="vm-chat-rooms glass-panel" aria-label="聊天空间">
         <div className="vm-chat-room-heading"><MessageSquare className="w-4 h-4 text-primary" /><h2>聊天空间</h2><LockKeyhole className="w-3.5 h-3.5 ml-auto text-muted-foreground" /></div>
-        <button aria-label="个人留言" className={cn('vm-chat-room', scope === 'personal' && 'active')} onClick={() => setContext('personal')}>
+        <button aria-label="个人留言" className={cn('vm-chat-room', scope === 'personal' && 'active')} onClick={() => {setFriendRoom('');void setContext('personal')}}>
           <span className="vm-chat-room-icon"><MessageSquare className="w-4 h-4" /></span>
           <span><strong>个人留言</strong><small>自己的设备之间共享文字</small></span>
         </button>
+        <FriendsPanel selected={friendRoom} onOpen={setFriendRoom} />
         <p className="vm-chat-section-label">用户组群聊 <span>{state?.groups.length || 0}</span></p>
         <div className="vm-chat-group-list">
-          {state?.groups.map(g => <button key={g.id} aria-label={g.name} className={cn('vm-chat-room', groupId === g.id && 'active')} onClick={() => setContext('group', g.id)}>
+          {state?.groups.map(g => <button key={g.id} aria-label={g.name} className={cn('vm-chat-room', groupId === g.id && 'active')} onClick={() => {setFriendRoom('');void setContext('group', g.id)}}>
             <span className="vm-chat-room-icon"><Users className="w-4 h-4" /></span><span><strong>{g.name}</strong><small>{g.role === 'viewer' ? '只读成员' : '组内共享消息'}</small></span>
           </button>)}
           {!state?.groups.length && <p className="vm-chat-room-hint">创建用户组，或用邀请加入群聊。</p>}
@@ -299,7 +303,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
         onDrop={event => { event.preventDefault(); setDragging(false); if (history.writable) void addBrowserFiles(Array.from(event.dataTransfer.files)) }}>
         {dragging && <div className="vm-chat-drop-hint"><Paperclip className="w-7 h-7" />松开发送到草稿 · 单个附件不超过 12MB</div>}
         <header className="vm-chat-header">
-          <div className="min-w-0"><h2 className="truncate">{title}</h2><p>{scope === 'personal' ? '同一云端账号，多设备接续查看' : '不同用户，共享用户组的消息与附件'}</p></div>
+          <div className="min-w-0"><h2 className="truncate">{title}</h2><p>{friend ? '好友私聊 · 消息与附件加密保存' : scope === 'personal' ? '同一云端账号，多设备接续查看' : '不同用户，共享用户组的消息与附件'}</p></div>
           <div className="flex gap-2 flex-shrink-0">
             <Button size="sm" aria-expanded={showDetails} onClick={() => setShowDetails(value => !value)}>会话资料</Button>
             {admin && <Button size="sm" variant="ghost" onClick={() => openDialog('invite')}><UserPlus className="w-3.5 h-3.5" />邀请成员</Button>}
@@ -352,7 +356,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
 
       {showDetails && <aside className="glass-panel vm-chat-details" aria-label="会话资料">
         <div className="vm-section-heading"><h2>会话资料</h2><Button size="icon-sm" variant="ghost" aria-label="关闭会话资料" onClick={() => setShowDetails(false)}><X className="w-4 h-4" /></Button></div>
-        <div className="vm-chat-details-body"><h3>{title}</h3><dl><div><dt>空间</dt><dd>{scope === 'personal' ? '个人多端留言' : '用户组共享'}</dd></div><div><dt>权限</dt><dd>{history.writable ? '可发送消息' : '只读'}</dd></div><div><dt>本次已加载</dt><dd>{history.messages.length} 条消息{history.hasMore ? ' · 可继续加载历史' : ''}</dd></div><div><dt>等待同步</dt><dd>{history.pending} 条</dd></div>{group && <div><dt>当前角色</dt><dd>{group.role}</dd></div>}</dl>
+        <div className="vm-chat-details-body"><h3>{title}</h3><dl><div><dt>空间</dt><dd>{friend ? '好友一对一私聊' : scope === 'personal' ? '个人多端留言' : '用户组共享'}</dd></div><div><dt>权限</dt><dd>{history.writable ? '可发送消息' : '只读'}</dd></div><div><dt>本次已加载</dt><dd>{history.messages.length} 条消息{history.hasMore ? ' · 可继续加载历史' : ''}</dd></div><div><dt>等待同步</dt><dd>{history.pending} 条</dd></div>{group && <div><dt>当前角色</dt><dd>{group.role}</dd></div>}</dl>
         <Button size="sm" className="w-full" onClick={onOpenSync}>管理云端同步</Button>
         <h3 className="mt-6">共享图片与文件</h3><p className="vm-chat-help">仅显示本次已加载消息中的附件，加载更早记录可查看更多。</p>
         <input className="vm-input my-3" aria-label="搜索共享附件" placeholder="按文件名筛选" value={attachmentSearch} onChange={e => setAttachmentSearch(e.target.value)} />

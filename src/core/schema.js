@@ -7,6 +7,9 @@ function ensureColumn(db, table, column, type) {
 }
 
 function migrateSchema(db) {
+  db.run(`CREATE TABLE IF NOT EXISTS friend_rooms (group_id TEXT PRIMARY KEY, inviter_email TEXT NOT NULL, invitee_email TEXT NOT NULL, nonce TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS friend_contacts (user_id TEXT NOT NULL, group_id TEXT NOT NULL, peer_email TEXT NOT NULL, peer_name TEXT NOT NULL, remark TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(user_id,group_id));`);
+
   db.run(`
     CREATE TABLE IF NOT EXISTS chat_messages (
       owner_user_id TEXT NOT NULL,

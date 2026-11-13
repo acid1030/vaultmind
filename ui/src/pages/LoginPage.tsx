@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import { vaultApi } from '@/lib/ipc'
+import CloudSignin from '@/components/shared/CloudSignin'
 import BrandMark from '@/components/shared/BrandMark'
 import loginVisual from '@/assets/brand-login-v2.jpg'
 
@@ -172,12 +173,14 @@ export default function LoginPage() {
               </div>
               <div className="mt-8">
                 <h2>{mode === 'login' ? '欢迎回来' : '建立你的本地保险库'}</h2>
-                <p>{mode === 'login' ? '使用本地密码解锁此设备。' : '先创建本机账号，之后可连接飞书开启多端协同。'}</p>
+                <p>{mode === 'login' ? '使用本地密码解锁此设备。' : '推荐飞书扫码登录，自动连接云端账号与资料。'}</p>
               </div>
             </div>
 
           {/* 登录卡片 */}
           <div className="vm-auth-card">
+            <CloudSignin />
+            <p className="vm-local-login-label">或使用本机账号 · 离线解锁 / 高级注册</p>
             {/* 模式切换 */}
             <div className="flex gap-1 p-1 rounded-lg mb-5 bg-muted"
               >
