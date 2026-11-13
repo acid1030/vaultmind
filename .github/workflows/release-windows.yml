@@ -1,0 +1,51 @@
+name: Release AxonMind for Windows
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [feat/shared-chat]
+    paths: [.github/workflows/release-windows.yml]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || 'v0.5.0' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm ci --prefix ui
+      - run: npm test
+      - run: npm run build:ui
+      - run: npx electron-builder --win nsis --x64 --publish never -c.win.icon=assets/app-icon-axonmind.png
+      - name: Upload Windows installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=(release/*.exe release/*.exe.blockmap release/latest.yml)
+          for attempt in {1..30}; do
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+              gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "GitHub Release $RELEASE_TAG did not become available." >&2
+          exit 1
