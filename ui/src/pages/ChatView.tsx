@@ -342,7 +342,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
             <div className="vm-chat-message-meta"><strong title={message.senderEmail}>{message.mine ? '我' : message.senderName}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></div>
             {message.text && <div className="vm-chat-bubble">{message.text}</div>}
             {Boolean(message.attachments?.length) && <div className="vm-chat-attachments">{message.attachments!.map(attachment => <ChatAttachmentView key={attachment.id} attachment={attachment} messageId={message.id} room={room} onImageLoad={() => { if (stickToBottom.current && timeline.current) timeline.current.scrollTop = timeline.current.scrollHeight }} />)}</div>}
-            {message.mine && <small className="vm-chat-message-status">{message.synced ? <><CheckCheck className="w-3 h-3" />已存云端</> : '已存本机 · 待同步'}</small>}
+            {message.mine && <small className="vm-chat-message-status">{message.synced ? <><CheckCheck className="w-3 h-3" />已存云端</> : '已存本机 · 待云端归档'}</small>}
           </article>)}
         </div>
         <form className="vm-chat-composer" onSubmit={event => { event.preventDefault(); void send() }}>

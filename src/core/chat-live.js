@@ -1,12 +1,13 @@
 'use strict';
 
-function createChatLiveClient({ getContext, issueTicket, onChange, Socket = globalThis.WebSocket }) {
-  let key, socket, timer, generation = 0, retry = 1000;
+function createChatLiveClient({ getContext, issueTicket, onChange, onText, Socket = globalThis.WebSocket }) {
+  let key, socket, relayReady = false, timer, generation = 0, retry = 1000;
   function stop() {
     generation++;
     clearTimeout(timer);
     socket?.close();
     socket = undefined;
+    relayReady = false;
     key = undefined;
     retry = 1000;
   }
@@ -34,10 +35,16 @@ function createChatLiveClient({ getContext, issueTicket, onChange, Socket = glob
         onChange();
       };
       ws.onmessage = event => {
-        if (current === generation && getContext()?.key === context.key && event.data === 'changed') onChange();
+        if (current !== generation || getContext()?.key !== context.key) return;
+        if (event.data === 'live-v1') relayReady = true;
+        else if (event.data === 'changed') onChange();
+        else if (typeof event.data === 'string' && event.data.startsWith('text-v1:')) onText?.(event.data.slice(8));
       };
       ws.onerror = () => ws.close();
-      ws.onclose = () => reconnect(context, current);
+      ws.onclose = () => {
+        if (socket === ws) relayReady = false;
+        reconnect(context, current);
+      };
     } catch { reconnect(context, current); }
   }
   function reconnect(context, current) {
@@ -52,6 +59,13 @@ function createChatLiveClient({ getContext, issueTicket, onChange, Socket = glob
       try { socket.send('changed'); } catch { /* Periodic sync still catches up. */ }
     }
   }
-  return { reconcile, publish, stop };
+  function canRelay() {
+    return relayReady && socket?.readyState === Socket.OPEN && getContext()?.key === key && socket.bufferedAmount < 192 * 1024;
+  }
+  function publishText(envelope) {
+    if (!canRelay() || Buffer.byteLength(envelope) > 192 * 1024 - 8) return false;
+    try { socket.send('text-v1:' + envelope); return true; } catch { return false; }
+  }
+  return { reconcile, publish, publishText, canRelay, stop };
 }
 module.exports = { createChatLiveClient };

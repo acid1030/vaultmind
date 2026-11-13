@@ -4,7 +4,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 function createChatLive(server, path, now = Date.now) {
   const tickets = new Map(), rooms = new Map();
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 256, perMessageDeflate: false });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 192 * 1024, perMessageDeflate: false });
   function issue(openId, vaultId) {
     for (const [id, grant] of tickets) if (grant.until <= now()) tickets.delete(id);
     if (tickets.size >= 1000 || !/^[0-9a-f-]{36}$/i.test(vaultId)) throw new Error('Invalid live channel');
@@ -27,14 +27,22 @@ function createChatLive(server, path, now = Date.now) {
       const peers = rooms.get(grant.room) || new Set();
       rooms.set(grant.room, peers);
       peers.add(ws);
-      let last = -Infinity, alive = true;
+      let last = -Infinity, windowStart = now(), sent = 0, alive = true;
+      ws.send('live-v1');
       ws.on('pong', () => { alive = true; });
       ws.on('error', () => ws.terminate());
       ws.on('message', (data, binary) => {
-        if (binary || data.toString() !== 'changed' || now() - last < 500) return;
-        last = now();
+        if (binary) return;
+        const frame = data.toString(), time = now();
+        if (frame === 'changed') {
+          if (time - last < 500) return;
+          last = time;
+        } else if (frame.startsWith('text-v1:')) {
+          if (time - windowStart >= 1000) { windowStart = time; sent = 0; }
+          if (++sent > 8) return;
+        } else return;
         for (const peer of peers) {
-          if (peer !== ws && peer.readyState === WebSocket.OPEN && peer.bufferedAmount < 1024) peer.send('changed');
+          if (peer !== ws && peer.readyState === WebSocket.OPEN && peer.bufferedAmount < 192 * 1024) peer.send(frame);
         }
       });
       const heartbeat = setInterval(() => {

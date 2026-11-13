@@ -132,6 +132,29 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
       }
     }
   }
+  function encodeLiveText(message) {
+    const s = session(), passphrase = getSettings().feishuPassphrase;
+    if (!s.linked || !passphrase || message.attachments?.length) return null;
+    const { synced, mine, ...body } = message;
+    return localCrypto.encryptVaultPayload({
+      kind: 'chat-batch', version: 1, scope: 'personal', roomId: s.vaultId, messages: [body],
+    }, passphrase).toString('utf8');
+  }
+  function receiveLiveText(envelope) {
+    const s = session(), passphrase = getSettings().feishuPassphrase;
+    if (!s.linked || !passphrase || Buffer.byteLength(envelope) > 192 * 1024 - 8) return false;
+    const header = JSON.parse(envelope);
+    if (header.version !== localCrypto.VAULT_VERSION || header.kdf?.iterations !== localCrypto.KEY_ITERATIONS) return false;
+    const r = room({ scope: 'personal' }, s);
+    const batch = localCrypto.decryptVaultPayload(Buffer.from(envelope), passphrase);
+    validateBatch(batch, r);
+    if (batch.version !== 1 || batch.messages.length !== 1) return false;
+    const [message] = batch.messages;
+    if (queryOne('SELECT 1 FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND id = ?', [s.user.id, r.localId, message.id])) return false;
+    insertMessage(message, s, r, false);
+    save();
+    return true;
+  }
   async function resolveCloud(input, s, r) {
     const settings = getSettings();
     let groupVersion;
@@ -213,6 +236,10 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
                 const previous = decode(existing, s);
                 if (previous.text !== message.text || chatFiles.fingerprint(previous.attachments) !== chatFiles.fingerprint(message.attachments)) throw new Error('重复消息的内容不一致');
                 persistBody(message, s, r);
+              }
+              if (existing && !existing.outgoing && !existing.synced_at) {
+                db.run('UPDATE chat_messages SET synced_at = ? WHERE owner_user_id = ? AND room_id = ? AND id = ?',
+                  [new Date().toISOString(), s.user.id, r.localId, message.id]);
               }
               attachmentStore.registerRemote(message, s, r, context);
             }
@@ -367,7 +394,7 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
     save();
     return { groupId: g.id };
   }
-  return { list, send, syncRoom, syncAll, exportInvite, acceptInvite,
+  return { list, send, encodeLiveText, receiveLiveText, syncRoom, syncAll, exportInvite, acceptInvite,
     stageAttachments: attachmentStore.stageAttachments, discardAttachments: attachmentStore.discardAttachments,
     getAttachment: attachmentStore.getAttachment, prepareGroupRotation: attachmentStore.prepareGroupRotation,
     clearDrafts: attachmentStore.clearDrafts, readDraftAttachment: attachmentStore.readDraftAttachment };

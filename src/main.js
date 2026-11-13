@@ -2408,6 +2408,10 @@ const chatLiveClient = require('./core/chat-live').createChatLiveClient({
     return reply.ticket;
   },
   onChange: () => scheduleChatAutoSync(500),
+  onText: envelope => {
+    try { if (getChatService().receiveLiveText(envelope)) notifyChatStatus(); }
+    catch { /* Invalid ciphertext is ignored; cloud sync can still recover history. */ }
+  },
 });
 
 function scheduleChatAutoSync(delayMs = autoSyncIntervalMs()) {
@@ -4601,8 +4605,17 @@ function registerHandlers() {
   });
   ipcMain.handle('vault:sendChat', async (_event, input) => {
     await ensureDatabase();
-    const message = getChatService().send(input || {});
-    scheduleChatAutoSync(500);
+    const service = getChatService();
+    const message = service.send(input || {});
+    let relayed = false;
+    if (input?.scope === 'personal' && chatLiveClient.canRelay()) {
+      try {
+        const envelope = service.encodeLiveText(message);
+        if (envelope) relayed = chatLiveClient.publishText(envelope);
+      } catch { /* Local outbox still archives the message. */ }
+    }
+    if (!relayed) scheduleChatAutoSync(500);
+    else scheduleChatAutoSync(5000);
     notifyChatStatus();
     return message;
   });
