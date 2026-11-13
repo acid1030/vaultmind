@@ -71,6 +71,9 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
       newestLoaded.current = next.messages[next.messages.length - 1]?.id || ''
       setHistory(previous => mergeChatHistory(previous, next, anchor))
       setError('')
+      if (next.readThrough && document.hasFocus() && document.visibilityState === 'visible') {
+        void vaultApi.markChatRead({ scope, groupId, readThrough: next.readThrough }).catch(() => {})
+      }
     } catch (e) {
       if (activeRoom.current === key) setError(messageError(e))
     } finally {
@@ -94,8 +97,16 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
     stickToBottom.current = true
     activeRoom.current = roomKey
     void load()
-    const unsubscribe = vaultApi.onChatStatus(() => { void load() })
-    return () => { activeRoom.current = ''; discardFiles(draftFilesRef.current); draftFilesRef.current = []; unsubscribe() }
+    const onFocus = () => { void load() }
+    window.addEventListener('focus', onFocus)
+    const unsubscribe = vaultApi.onChatStatus(status => { if (!status.readChanged) void load() })
+    return () => {
+      activeRoom.current = ''
+      discardFiles(draftFilesRef.current)
+      draftFilesRef.current = []
+      window.removeEventListener('focus', onFocus)
+      unsubscribe()
+    }
   }, [load])
 
   useEffect(() => { vaultApi.getScreenshotShortcut().then(value => setScreenshotShortcut(value.accelerator)).catch(() => {}) }, [])

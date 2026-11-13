@@ -88,16 +88,42 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
     const hasMore = rows.length > 100;
     const messages = rows.slice(0, 100).reverse().map(row => decode(row, s));
     return { messages, hasMore, writable: r.writable,
+      readThrough: Number(queryOne('SELECT MAX(rowid) AS latest FROM chat_messages WHERE owner_user_id = ? AND room_id = ?', args.slice(0, 2)).latest),
       pending: Number(queryOne('SELECT COUNT(*) AS count FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND outgoing = 1 AND synced_at IS NULL', [s.user.id, r.localId]).count),
       ...syncState(s, r) };
+  }
+  function unreadCounts() {
+    const s = session();
+    const counts = { personal: 0, groups: {}, total: 0 };
+    for (const row of queryAll(
+      'SELECT scope, group_id, COUNT(*) AS count FROM chat_messages WHERE owner_user_id = ? AND unread = 1 GROUP BY room_id',
+      [s.user.id],
+    )) {
+      try { room({ scope: row.scope, groupId: row.group_id }, s); } catch { continue; }
+      if (row.scope === 'personal') counts.personal = row.count;
+      else counts.groups[row.group_id] = row.count;
+      counts.total += row.count;
+    }
+    return counts;
+  }
+  function markRead(input) {
+    const s = session();
+    const r = room(input, s);
+    if (!Number.isSafeInteger(input.readThrough) || input.readThrough < 1) return false;
+    const params = [s.user.id, r.localId, input.readThrough];
+    db.run('UPDATE chat_messages SET unread = 0 WHERE owner_user_id = ? AND room_id = ? AND rowid <= ? AND unread = 1', params);
+    if (!db.getRowsModified()) return false;
+    save();
+    return true;
   }
   function insertMessage(message, s, r, outgoing, syncedAt = null) {
     const encrypted = groupCrypto.encryptWithGroupKey(bodyBytes(message), contentKey(s));
     db.run(`INSERT OR IGNORE INTO chat_messages
       (owner_user_id, room_id, id, scope, group_id, sender_id, sender_name, sender_email, device_id, created_at,
-       content_ciphertext, content_iv, content_tag, outgoing, synced_at, content_format) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       content_ciphertext, content_iv, content_tag, outgoing, synced_at, content_format, unread) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [s.user.id, r.localId, message.id, r.scope, r.groupId || null, message.senderId, message.senderName, message.senderEmail,
-      message.deviceId, message.createdAt, encrypted.ciphertext, encrypted.iv, encrypted.tag, outgoing ? 1 : 0, syncedAt, message.attachments?.length ? 2 : 1]);
+      message.deviceId, message.createdAt, encrypted.ciphertext, encrypted.iv, encrypted.tag, outgoing ? 1 : 0, syncedAt, message.attachments?.length ? 2 : 1,
+      !outgoing && message.deviceId !== s.deviceId && (r.scope === 'personal' || (message.senderId !== s.vaultId && message.senderEmail !== s.user.email)) ? 1 : 0]);
   }
   function send(input) {
     const s = session();
@@ -319,13 +345,18 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
     running.set(id, promise);
     return promise;
   }
-  async function syncAll() {
+  async function syncAll(onReceived = () => {}) {
     const s = session();
     const rooms = [{ scope: 'personal' }, ...groups.getUserGroups(db, queryAll, s.user.id).filter(g => !queryOne('SELECT 1 FROM friend_rooms WHERE group_id=?',[g.id]) || queryOne("SELECT 1 FROM friend_contacts WHERE user_id=? AND group_id=? AND status='accepted'",[s.user.id,g.id])).map(g => ({ scope: 'group', groupId: g.id }))];
     const results = [];
     for (const input of rooms) {
       fence(s);
-      try { results.push({ ...input, ...await syncRoom(input) }); }
+      try {
+        const result = await syncRoom(input);
+        fence(s);
+        results.push({ ...input, ...result });
+        if (result.received) onReceived();
+      }
       catch (error) { fence(s); results.push({ ...input, errors: [String(error.message || error)] }); }
     }
     return results;
@@ -394,7 +425,7 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
     save();
     return { groupId: g.id };
   }
-  return { list, send, encodeLiveText, receiveLiveText, syncRoom, syncAll, exportInvite, acceptInvite,
+  return { list, unreadCounts, markRead, send, encodeLiveText, receiveLiveText, syncRoom, syncAll, exportInvite, acceptInvite,
     stageAttachments: attachmentStore.stageAttachments, discardAttachments: attachmentStore.discardAttachments,
     getAttachment: attachmentStore.getAttachment, prepareGroupRotation: attachmentStore.prepareGroupRotation,
     clearDrafts: attachmentStore.clearDrafts, readDraftAttachment: attachmentStore.readDraftAttachment };

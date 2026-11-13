@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
-import { vaultApi, type ScreenshotDelivery } from '@/lib/ipc'
+import { vaultApi, type ChatUnread, type ScreenshotDelivery } from '@/lib/ipc'
 import HomeView from './HomeView'
 import LibraryView from './LibraryView'
 import GroupsView from './GroupsView'
@@ -68,6 +68,24 @@ export default function MainLayout() {
   const [contextOpen, setContextOpen] = useState(false)
   const [showGlobalSearch, setShowGlobalSearch] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+
+  const [chatUnread, setChatUnread] = useState<ChatUnread | null>(null)
+  const userId = state?.auth.user?.id
+  useEffect(() => {
+    let current = true
+    let updated = false
+    setChatUnread(null)
+    const unsubscribe = vaultApi.onChatStatus(status => {
+      if (status.unread !== undefined) {
+        updated = true
+        setChatUnread(status.unread)
+      }
+    })
+    void vaultApi.getChatUnread().then(counts => {
+      if (current && !updated) setChatUnread(counts)
+    }).catch(() => {})
+    return () => { current = false; unsubscribe() }
+  }, [userId])
 
   const context = state?.context || { scope: 'personal' as const, groupId: '', groupName: '' }
   const groups = state?.groups || []
@@ -159,13 +177,16 @@ export default function MainLayout() {
                     key={item.id}
                     data-module={item.id}
                     title={item.description}
-                    aria-label={item.label}
+                    aria-label={item.id === 'chat' && chatUnread?.total ? `聊天，${chatUnread.total} 条未读消息` : item.label}
                     aria-current={activeView === item.id ? 'page' : undefined}
                     onClick={() => navigate(item.id)}
                     className={cn('vm-side-link', activeView === item.id && 'active')}
                   >
                     <Icon className="w-[18px] h-[18px]" />
                     <span className="vm-sidebar-copy flex-1 text-left">{item.label}</span>
+                    {item.id === 'chat' && Boolean(chatUnread?.total) && (
+                      <span className="vm-chat-unread" aria-hidden="true">{chatUnread!.total > 99 ? '99+' : chatUnread!.total}</span>
+                    )}
                     {item.id === 'groups' && pendingInvites.length > 0 && <span className="vm-nav-dot" />}
                   </button>
                 )

@@ -1,3 +1,5 @@
+export type ChatUnread = { personal: number; groups: Record<string, number>; total: number }
+
 export interface KnowledgeProgress {
   requestId: string
   stage: 'sync' | 'match' | 'download' | 'search' | 'answer' | 'results'
@@ -335,6 +337,7 @@ export interface ChatMessage {
   mine: boolean
 }
 export interface ChatHistory {
+  readThrough?: number
   messages: ChatMessage[]
   hasMore: boolean
   writable: boolean
@@ -371,12 +374,14 @@ export interface VaultApi {
   inspectFriendInvite: (input:{code:string}) => Promise<{kind:'request'|'accepted'|'device';email:string;name:string}>
   acceptFriendInvite: (input:{code:string}) => Promise<{code:string;groupId:string}>
   updateFriend: (input:{groupId:string;remark?:string;remove?:boolean}) => Promise<FriendContact[]>
+  getChatUnread: () => Promise<ChatUnread>
+  markChatRead: (input: ChatRoom & { readThrough: number }) => Promise<void>
   listChat: (input: ChatRoom & { before?: { createdAt: string; id: string } }) => Promise<ChatHistory>
   sendChat: (input: ChatRoom & { text: string; attachmentIds?: string[] }) => Promise<ChatMessage>
   syncChat: (input: ChatRoom) => Promise<ChatSyncResult>
   exportChatInvite: (input: { groupId: string; email: string; role: 'member' | 'viewer' }) => Promise<{ code: string; expiresAt: string }>
   acceptChatInvite: (input: { code: string }) => Promise<{ groupId: string; state: VaultState }>
-  onChatStatus: (callback: (status: { syncing?: boolean }) => void) => () => void
+  onChatStatus: (callback: (status: { syncing?: boolean; unread?: ChatUnread | null; readChanged?: boolean }) => void) => () => void
 
   getState: () => Promise<VaultState>
   register: (payload: {
@@ -488,6 +493,8 @@ const mockVaultApi: VaultApi = {
   captureChatScreenshot: async () => { throw new Error('Electron 不可用') },
   getChatAttachment: async () => { throw new Error('Electron 不可用') },
   saveChatAttachment: async () => { throw new Error('Electron 不可用') },
+  getChatUnread: async () => ({ personal: 0, groups: {}, total: 0 }),
+  markChatRead: async () => {},
   listChat: async () => { throw new Error('Electron 不可用') },
   sendChat: async () => { throw new Error('Electron 不可用') },
   syncChat: async () => { throw new Error('Electron 不可用') },

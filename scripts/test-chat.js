@@ -86,6 +86,11 @@ async function main() {
   assert.ok(!live.includes(first.text));
   assert.equal(b.service.receiveLiveText(live), true);
   assert.equal(b.service.receiveLiveText(live), false);
+  assert.equal(a.service.unreadCounts().total, 0);
+  assert.equal(b.service.unreadCounts().total, 1);
+  const readThrough = b.service.list(personal).readThrough;
+  assert.equal(b.service.markRead({ ...personal, readThrough }), true);
+  assert.equal(b.service.unreadCounts().total, 0);
   assert.equal(b.service.list(personal).messages[0].text, first.text);
   assert.equal(b.service.list(personal).messages[0].synced, false);
   assert.equal(b.service.list(personal).pending, 0);
@@ -97,6 +102,7 @@ async function main() {
   await b.service.syncRoom(personal);
   assert.equal(b.service.list(personal).messages.length, 1);
   assert.equal(b.service.list(personal).messages[0].synced, true);
+  assert.equal(b.service.unreadCounts().total, 0, 'archive download must not mark a read live message unread again');
   b.service.send({ ...personal, text: '从 B 发送' });
   await b.service.syncRoom(personal);
   await a.service.syncRoom(personal);

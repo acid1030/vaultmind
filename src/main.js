@@ -2213,7 +2213,14 @@ async function pullManifestFromFeishu(payload) {
   check();
   const resolved = await resolveManifestFiles(scope, groupId, vaultId, scope === 'personal' ? user.id : '');
   check();
-  if (!resolved.manifests.length) throw new Error('云端未找到目录清单，请先执行一次同步');
+  if (!resolved.manifests.length) {
+    if (!payload.automatic) throw new Error('云端未找到目录清单，请先执行一次同步');
+    const hydrated = await hydratePulledContent({
+      scope, groupId, passphrase, mode: payload.downloadMode || getSettings().syncDownloadMode, check,
+    });
+    check();
+    return { stats: { hydrated: hydrated.downloaded, hydrateFailures: hydrated.failures, manifests: 0 } };
+  }
   const remoteManifests = [];
   for (const file of resolved.manifests) {
     const buffer = await downloadFeishuFileBuffer(file.token);
@@ -2249,6 +2256,7 @@ async function pullManifestFromFeishu(payload) {
     groupId,
     passphrase,
     mode: payload.downloadMode || getSettings().syncDownloadMode,
+    check,
   });
   check();
   const newestRemote = remoteManifests[remoteManifests.length - 1];
@@ -2400,7 +2408,10 @@ async function captureFromGlobalShortcut() {
 }
 
 function notifyChatStatus(patch = {}) {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('vault:chatStatus', patch);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const unread = db && activeUser && activePassword ? getChatService().unreadCounts() : null;
+    mainWindow.webContents.send('vault:chatStatus', { ...patch, unread });
+  }
 }
 
 const chatLiveClient = require('./core/chat-live').createChatLiveClient({
@@ -2452,7 +2463,7 @@ function scheduleChatAutoSync(delayMs = autoSyncIntervalMs()) {
     chatSyncRunning = true;
     notifyChatStatus({ syncing: true });
     try {
-      await getChatService().syncAll();
+      await getChatService().syncAll(() => notifyChatStatus());
     } catch (error) {
       if (epoch === chatSessionEpoch) console.error('聊天自动同步失败:', error.message || error);
     } finally {
@@ -2500,10 +2511,12 @@ function autoSyncIntervalMs() {
 }
 
 function canAutoSync() {
-  if (!db || !activeUser) return false;
+  if (!db || !activeUser || !activePassword) return false;
   const settings = getSettings();
-  if (!settings.feishuAutoSync || !settings.feishuPassphrase || !activeUser.cloud_linked) return false;
-  return hasUsableFeishuToken(getFeishuToken());
+  const token = getFeishuToken();
+  const linkedIdentity = activeUser.feishu_open_id_hash;
+  if (!settings.feishuAutoSync || !settings.feishuPassphrase || !hasUsableFeishuToken(token)) return false;
+  return !linkedIdentity || Boolean(token.user?.openId && cloudAccount.hashFeishuOpenId(token.user.openId) === linkedIdentity);
 }
 
 function writeAutoSyncState(patch) {
@@ -2544,25 +2557,46 @@ async function runAutoSync(reason = 'timer') {
   if (!canAutoSync() || autoSyncRunning) return null;
   autoSyncRunning = true;
   const context = getContext();
+  const check = sessionGuard(requireUser());
   const attemptAt = new Date().toISOString();
   writeAutoSyncState({ status: 'syncing', reason, lastAttemptAt: attemptAt, nextSyncAt: '', lastError: '' });
   try {
-    const result = await fullSyncManifest({
+    const options = {
       scope: context.scope,
       groupId: context.groupId,
       conflictStrategy: getSettings().syncConflictStrategy,
       downloadMode: getSettings().syncDownloadMode,
       automatic: true,
-    });
+    };
+    let personalPullError = '';
+    if (context.scope === 'group') {
+      try {
+        const personal = await pullManifestFromFeishu({ ...options, scope: 'personal', groupId: '' });
+        if (personal.stats.hydrateFailures.length) personalPullError = '部分个人资料未能取回，将在下次同步时重试';
+      } catch (error) {
+        personalPullError = String(error.message || error);
+      }
+      check();
+    }
+    // An unlinked local account can recover its existing files using Feishu authorization.
+    const result = activeUser.cloud_linked
+      ? await fullSyncManifest(options)
+      : { pull: await pullManifestFromFeishu(options) };
+    check();
+    const downloadError = result.pull?.stats?.hydrateFailures?.length
+      ? '部分资料未能取回，将在下次同步时重试'
+      : '';
+    const lastError = result.pullError || result.pushError || downloadError || personalPullError || result.accountError || '';
     autoSyncFailureCount = 0;
     writeAutoSyncState({
-      status: result.pushError ? 'attention' : 'success',
+      status: lastError ? 'attention' : 'success',
       lastSuccessAt: new Date().toISOString(),
-      lastError: result.pushError || result.pullError || result.accountError || '',
+      lastError,
       reason,
     });
     return result;
   } catch (error) {
+    try { check(); } catch { return null; }
     autoSyncFailureCount += 1;
     writeAutoSyncState({ status: 'offline', lastError: String(error.message || error), reason });
     return null;
@@ -2897,7 +2931,8 @@ async function downloadRecordToLocal(recordId, feishuPassphrase, { returnState =
   return returnState ? publicState() : undefined;
 }
 
-async function hydratePulledContent({ scope, groupId, passphrase, mode }) {
+async function hydratePulledContent({ scope, groupId, passphrase, mode, check }) {
+  const user = requireUser();
   const downloadMode = ['all', 'content', 'manual'].includes(mode) ? mode : 'all';
   if (downloadMode === 'manual') return { downloaded: 0, failures: [] };
   const records = scope === 'group'
@@ -2907,6 +2942,7 @@ async function hydratePulledContent({ scope, groupId, passphrase, mode }) {
   let downloaded = 0;
   const failures = [];
   for (const record of records) {
+    check();
     if (record.asset_id && seenAssets.has(record.asset_id)) continue;
     if (record.asset_id) seenAssets.add(record.asset_id);
     if (downloadMode === 'content' && record.kind !== 'library-item') continue;
@@ -2914,10 +2950,11 @@ async function hydratePulledContent({ scope, groupId, passphrase, mode }) {
       ? Boolean(queryOne('SELECT id FROM library_items WHERE id = ? AND remote_only = 1', [record.asset_id]))
       : false;
     const needsFileContent = record.kind !== 'library-item'
-      && !queryOne('SELECT id FROM decrypted_items WHERE record_id = ?', [record.id]);
+      && !queryOne('SELECT id FROM decrypted_items WHERE record_id = ? AND user_id = ? AND downloaded_at >= ?',
+        [record.id, user.id, record.uploaded_at]);
     if (!needsLibraryContent && !needsFileContent) continue;
     try {
-      await downloadRecordToLocal(record.id, passphrase);
+      await downloadRecordToLocal(record.id, passphrase, { returnState: false });
       downloaded += 1;
     } catch (error) {
       failures.push({ recordId: record.id, message: String(error.message || error) });
@@ -4761,6 +4798,16 @@ function registerHandlers() {
     ipcMain.handle(`vault:${channel}`,async (_event,input)=> { await ensureDatabase(); const result=getFriendService()[method](input || {}); scheduleChatAutoSync(500); return result; });
   }
 
+  ipcMain.handle('vault:getChatUnread', async () => {
+    await ensureDatabase();
+    scheduleChatAutoSync(500);
+    return getChatService().unreadCounts();
+  });
+  ipcMain.handle('vault:markChatRead', async (event, input) => {
+    await ensureDatabase();
+    if (!mainWindow?.isFocused() || event.sender !== mainWindow.webContents) return;
+    if (getChatService().markRead(input || {})) notifyChatStatus({ readChanged: true });
+  });
   ipcMain.handle('vault:listChat', async (_event, input) => {
     await ensureDatabase();
     return getChatService().list(input || {});

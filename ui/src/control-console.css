@@ -961,3 +961,18 @@ html .vm-page[data-view="library"] .vm-library-chat-input .vm-library-chat-send:
   .vm-library-page .vm-library-grid > .vm-library-chat { height: clamp(330px, 56dvh, 550px); }
   .vm-library-page .vm-library-grid > .vm-library-list { grid-area: 3 / 1; max-height: 420px; }
 }
+
+
+.vm-side-link .vm-chat-unread {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding-inline: 4px;
+  border-radius: 999px;
+  flex: none;
+  background: #d92736;
+  color: #fff;
+  font: 700 11px/1 system-ui, sans-serif;
+}
