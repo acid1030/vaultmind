@@ -31,7 +31,8 @@ jobs:
       - run: npm ci --prefix ui
       - run: npm test
       - run: npm run build:ui
-      - run: npx electron-builder --win nsis --x64 --publish never -c.win.icon=assets/app-icon-axonmind.png
+      - run: npm pkg set build.win.icon=assets/app-icon-axonmind.png
+      - run: npx electron-builder --win nsis --x64 --publish never
       - name: Upload Windows installer
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
