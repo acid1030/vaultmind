@@ -84,12 +84,12 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
       clause = ' AND (created_at < ? OR (created_at = ? AND id < ?))';
       args.push(cursor.createdAt, cursor.createdAt, cursor.id);
     }
-    const rows = queryAll(`SELECT * FROM chat_messages WHERE owner_user_id = ? AND room_id = ?${clause} ORDER BY created_at DESC, id DESC LIMIT 101`, args);
+    const rows = queryAll(`SELECT * FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND hidden_locally = 0${clause} ORDER BY created_at DESC, id DESC LIMIT 101`, args);
     const hasMore = rows.length > 100;
     const messages = rows.slice(0, 100).reverse().map(row => decode(row, s));
     return { messages, hasMore, writable: r.writable,
       readThrough: Number(queryOne('SELECT MAX(rowid) AS latest FROM chat_messages WHERE owner_user_id = ? AND room_id = ?', args.slice(0, 2)).latest),
-      pending: Number(queryOne('SELECT COUNT(*) AS count FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND outgoing = 1 AND synced_at IS NULL', [s.user.id, r.localId]).count),
+      pending: Number(queryOne('SELECT COUNT(*) AS count FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND hidden_locally = 0 AND outgoing = 1 AND synced_at IS NULL', [s.user.id, r.localId]).count),
       ...syncState(s, r) };
   }
   function unreadCounts() {
@@ -141,6 +141,78 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
     save();
     attachmentStore.commitDrafts(files);
     return { ...message, synced: false, mine: true };
+  }
+
+  function selectedRows(input, s, r) {
+    const ids = input.ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 100 ||
+        ids.some(id => typeof id !== 'string' || !uuid.test(id)) || new Set(ids).size !== ids.length) {
+      throw new Error('请选择 1 至 100 条消息');
+    }
+    const rows = queryAll(
+      `SELECT * FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND hidden_locally = 0
+       AND id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at, id`,
+      [s.user.id, r.localId, ...ids],
+    );
+    if (rows.length !== ids.length) throw new Error('部分消息已不存在，请重新选择');
+    return rows;
+  }
+
+  function deleteMessages(input) {
+    const s = session();
+    const r = room(input, s);
+    const rows = selectedRows(input, s, r);
+    db.run(`UPDATE chat_messages SET hidden_locally = 1, unread = 0 WHERE owner_user_id = ? AND room_id = ?
+      AND id IN (${rows.map(() => '?').join(',')})`, [s.user.id, r.localId, ...rows.map(row => row.id)]);
+    save();
+    return rows.length;
+  }
+
+  async function forwardMessages(input) {
+    const s = session();
+    const source = room(input, s);
+    const target = room(input.target, s, true);
+    if (!target.writable) throw new Error('目标会话为只读');
+    const rows = selectedRows(input, s, source);
+    const prepared = [];
+    let totalBytes = 0;
+    try {
+      for (const row of rows) {
+        const original = decode(row, s);
+        const files = [];
+        prepared.push({ original, files });
+        for (const attachment of original.attachments || []) {
+          const result = await attachmentStore.getAttachment({ ...input, messageId: row.id, attachmentId: attachment.id });
+          const { fileToken, ...metadata } = result.attachment;
+          files.push({ ...metadata, id: crypto.randomUUID(), bytes: result.bytes });
+          totalBytes += result.bytes.length;
+          if (totalBytes > 60 * 1024 * 1024) throw new Error('所选附件合计超过 60MB，请分批转发');
+          fence(s);
+        }
+      }
+      fence(s);
+      room(input, s);
+      room(input.target, s, true);
+      selectedRows(input, s, source);
+      const now = Date.now();
+      db.run('BEGIN');
+      try {
+        for (const [index, { original, files }] of prepared.entries()) {
+          const message = {
+            id: crypto.randomUUID(), senderId: s.vaultId, senderName: (s.user.username || s.user.email).slice(0, 200),
+            senderEmail: s.user.email, deviceId: s.deviceId, createdAt: new Date(now + index).toISOString(), text: original.text,
+            attachments: files.map(file => chatFiles.metadata(file)),
+          };
+          insertMessage(message, s, target, true);
+          attachmentStore.attachDrafts(message, files, s, target);
+        }
+        db.run('COMMIT');
+      } catch (error) { db.run('ROLLBACK'); throw error; }
+      save();
+      return rows.length;
+    } finally {
+      for (const { files } of prepared) for (const file of files) file.bytes.fill(0);
+    }
   }
 
   function validateBatch(batch, r) {
@@ -280,7 +352,7 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
       }
       check();
       // Only locally queued messages are uploaded; never republish received history.
-      const pending = r.writable ? queryAll('SELECT * FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND outgoing = 1 AND synced_at IS NULL ORDER BY created_at, id', [s.user.id, r.localId]) : [];
+      const pending = r.writable ? queryAll('SELECT * FROM chat_messages WHERE owner_user_id = ? AND room_id = ? AND hidden_locally = 0 AND outgoing = 1 AND synced_at IS NULL ORDER BY created_at, id', [s.user.id, r.localId]) : [];
       let uploaded = 0;
       for (let offset = 0; offset < pending.length;) {
         check();
@@ -425,7 +497,7 @@ function createChatService({ db, queryOne, queryAll, save, getSession, getSettin
     save();
     return { groupId: g.id };
   }
-  return { list, unreadCounts, markRead, send, encodeLiveText, receiveLiveText, syncRoom, syncAll, exportInvite, acceptInvite,
+  return { list, unreadCounts, markRead, deleteMessages, forwardMessages, send, encodeLiveText, receiveLiveText, syncRoom, syncAll, exportInvite, acceptInvite,
     stageAttachments: attachmentStore.stageAttachments, discardAttachments: attachmentStore.discardAttachments,
     getAttachment: attachmentStore.getAttachment, prepareGroupRotation: attachmentStore.prepareGroupRotation,
     clearDrafts: attachmentStore.clearDrafts, readDraftAttachment: attachmentStore.readDraftAttachment };

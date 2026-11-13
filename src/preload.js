@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('vaultApi', {
   updateFriend: payload => ipcRenderer.invoke('vault:updateFriend',payload),
   getChatUnread: () => ipcRenderer.invoke('vault:getChatUnread'),
   markChatRead: (payload) => ipcRenderer.invoke('vault:markChatRead', payload),
+  deleteChatMessages: payload => ipcRenderer.invoke('vault:deleteChatMessages', payload),
+  forwardChatMessages: payload => ipcRenderer.invoke('vault:forwardChatMessages', payload),
   listChat: (payload) => ipcRenderer.invoke('vault:listChat', payload),
   sendChat: (payload) => ipcRenderer.invoke('vault:sendChat', payload),
   syncChat: (payload) => ipcRenderer.invoke('vault:syncChat', payload),

@@ -376,6 +376,8 @@ export interface VaultApi {
   updateFriend: (input:{groupId:string;remark?:string;remove?:boolean}) => Promise<FriendContact[]>
   getChatUnread: () => Promise<ChatUnread>
   markChatRead: (input: ChatRoom & { readThrough: number }) => Promise<void>
+  deleteChatMessages: (input: ChatRoom & { ids: string[] }) => Promise<number>
+  forwardChatMessages: (input: ChatRoom & { ids: string[]; target: ChatRoom }) => Promise<number>
   listChat: (input: ChatRoom & { before?: { createdAt: string; id: string } }) => Promise<ChatHistory>
   sendChat: (input: ChatRoom & { text: string; attachmentIds?: string[] }) => Promise<ChatMessage>
   syncChat: (input: ChatRoom) => Promise<ChatSyncResult>
@@ -495,6 +497,8 @@ const mockVaultApi: VaultApi = {
   saveChatAttachment: async () => { throw new Error('Electron 不可用') },
   getChatUnread: async () => ({ personal: 0, groups: {}, total: 0 }),
   markChatRead: async () => {},
+  deleteChatMessages: async () => { throw new Error('Electron 不可用') },
+  forwardChatMessages: async () => { throw new Error('Electron 不可用') },
   listChat: async () => { throw new Error('Electron 不可用') },
   sendChat: async () => { throw new Error('Electron 不可用') },
   syncChat: async () => { throw new Error('Electron 不可用') },

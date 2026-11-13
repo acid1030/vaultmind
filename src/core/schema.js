@@ -37,6 +37,7 @@ function migrateSchema(db) {
       PRIMARY KEY (owner_user_id, room_id, file_token)
     );
   `);
+  ensureColumn(db, 'chat_messages', 'hidden_locally', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'chat_messages', 'unread', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'chat_messages', 'content_format', 'INTEGER NOT NULL DEFAULT 1');
   db.run(`CREATE TABLE IF NOT EXISTS chat_attachments (

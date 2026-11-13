@@ -116,6 +116,12 @@ async function main() {
   const reopened = device('alice@example.com', 'alice-vault', 'reopened-device', 'local-password', a.db.export());
   assert.equal(reopened.service.list(personal).messages.length, 2, 'encrypted history survives reopening SQLite');
   assert.ok(reopened.service.list(personal).messages.some(message => message.text === '跨设备文本\n第二行'));
+  assert.equal(await reopened.service.forwardMessages({ ...personal, target: personal, ids: [first.id] }), 1);
+  const copied = reopened.service.list(personal).messages.find(m => m.id !== first.id && m.text === first.text);
+  assert.ok(copied, 'forwarding creates a new message');
+  assert.equal(reopened.service.deleteMessages({ ...personal, ids: [first.id, copied.id] }), 2);
+  await reopened.service.syncRoom(personal);
+  assert.ok(!reopened.service.list(personal).messages.some(m => m.text === first.text), 'cloud sync must not restore a local deletion');
   failUpload = true;
   a.service.send({ ...personal, text: '离线消息' });
   const beforeFailure = a.notices();

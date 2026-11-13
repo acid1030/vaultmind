@@ -4808,6 +4808,19 @@ function registerHandlers() {
     if (!mainWindow?.isFocused() || event.sender !== mainWindow.webContents) return;
     if (getChatService().markRead(input || {})) notifyChatStatus({ readChanged: true });
   });
+  ipcMain.handle('vault:deleteChatMessages', async (_event, input) => {
+    await ensureDatabase();
+    const count = getChatService().deleteMessages(input || {});
+    notifyChatStatus();
+    return count;
+  });
+  ipcMain.handle('vault:forwardChatMessages', async (_event, input) => {
+    await ensureDatabase();
+    const count = await getChatService().forwardMessages(input || {});
+    scheduleChatAutoSync(500);
+    notifyChatStatus();
+    return count;
+  });
   ipcMain.handle('vault:listChat', async (_event, input) => {
     await ensureDatabase();
     return getChatService().list(input || {});

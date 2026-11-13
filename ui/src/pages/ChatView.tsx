@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CheckCheck, Cloud, Copy, LockKeyhole, MessageSquare, Plus, RefreshCw, Send, UserPlus, Users, X, Camera, Image as ImageIcon, Paperclip, FileText, SlidersHorizontal, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { useToast } from '@/components/shared/Toast'
 import { useAppStore } from '@/store/app'
 import { vaultApi, type ChatHistory, type ChatMessage, type ChatRoom, type ChatDraftAttachment, type ScreenshotDelivery } from '@/lib/ipc'
@@ -17,6 +18,11 @@ const messageError = (error: unknown) => error instanceof Error ? error.message.
 export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotConsumed }: { onOpenSync: () => void; screenshotDelivery?: ScreenshotDelivery | null; onScreenshotConsumed?: (id: string, discard?: boolean) => Promise<void> }) {
   const { state, setContext, refresh } = useAppStore()
   const toast = useToast()
+  const { confirm, confirmDialog } = useConfirmDialog()
+  const [selecting, setSelecting] = useState(false)
+  const [selected, setSelected] = useState<string[]>([])
+  const [destination, setDestination] = useState('')
+  const [acting, setActing] = useState(false)
   const context = state?.context
   const [friendRoom,setFriendRoom] = useState('')
   const friend = state?.friends?.find(f=>f.groupId===friendRoom && f.status==='accepted')
@@ -84,6 +90,10 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   useEffect(() => {
     setHistory({ messages: [], hasMore: false, writable: false, pending: 0 })
     setDraft('')
+    setSelecting(false)
+    setSelected([])
+    setDestination('')
+    setActing(false)
     replaceDraftFiles([])
     setAttaching(false)
     setDragging(false)
@@ -302,15 +312,65 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   const admin = scope === 'group' && ['owner', 'admin'].includes(group?.role || '')
   const title = friend ? friend.remark || friend.name || friend.email : scope === 'group' ? group?.name || '用户组群聊' : '个人留言'
 
+  const destinations = [
+    { value: 'personal', label: '个人留言' },
+    ...(state?.friends || []).filter(f => f.status === 'accepted').map(f => ({
+      value: f.groupId, label: f.remark || f.name || f.email,
+    })),
+    ...(state?.groups || []).filter(g => g.role !== 'viewer').map(g => ({ value: g.id, label: g.name })),
+  ].filter((entry, index, all) => all.findIndex(other => other.value === entry.value) === index)
+
+  const resetSelection = () => {
+    setSelecting(false)
+    setSelected([])
+    setDestination('')
+  }
+
+  const actOnSelection = async (action: 'delete' | 'forward') => {
+    if (!selected.length || acting || (action === 'forward' && !destination)) return
+    const key = roomKey
+    const ids = selected
+    const target: ChatRoom = destination === 'personal'
+      ? { scope: 'personal', groupId: '' }
+      : { scope: 'group', groupId: destination }
+    setActing(true)
+    try {
+      if (action === 'delete') {
+        const approved = await confirm({
+          title: `删除选中的 ${ids.length} 条聊天记录？`,
+          description: '仅从本机聊天记录移除，其他设备上的记录仍可查看。',
+          confirmLabel: '删除',
+        })
+        if (!approved || activeRoom.current !== key) return
+        await vaultApi.deleteChatMessages({ ...room, ids })
+        if (activeRoom.current !== key) return
+        setHistory(previous => ({ ...previous, messages: previous.messages.filter(message => !ids.includes(message.id)) }))
+      } else {
+        await vaultApi.forwardChatMessages({ ...room, ids, target })
+        toast(`已转发 ${ids.length} 条消息`, 'success')
+      }
+      if (activeRoom.current === key) {
+        resetSelection()
+        void load()
+      }
+    } catch (error) {
+      toast(messageError(error), 'error')
+    } finally {
+      if (activeRoom.current === key) setActing(false)
+    }
+  }
+
   return (
     <div className={cn("vm-chat-layout vm-wechat animate-fade-in", showDetails && "vm-chat-with-details")}>
+      {confirmDialog}
       <aside className="vm-chat-rooms glass-panel" aria-label="聊天空间">
         <div className="vm-chat-room-heading"><MessageSquare className="w-4 h-4 text-primary" /><h2>聊天空间</h2><LockKeyhole className="w-3.5 h-3.5 ml-auto text-muted-foreground" /></div>
         <button aria-label="个人留言" className={cn('vm-chat-room', scope === 'personal' && 'active')} onClick={() => {setFriendRoom('');void setContext('personal')}}>
           <span className="vm-chat-room-icon"><MessageSquare className="w-4 h-4" /></span>
           <span><strong>个人留言</strong><small>自己的设备之间共享文字</small></span>
         </button>
-        <FriendsPanel selected={friendRoom} onOpen={setFriendRoom} />
+        <FriendsPanel selected={friendRoom} onOpen={setFriendRoom} selfSelected={scope === 'personal'}
+          onOpenSelf={() => { setFriendRoom(''); void setContext('personal') }} />
         <p className="vm-chat-section-label">用户组群聊 <span>{state?.groups.length || 0}</span></p>
         <div className="vm-chat-group-list">
           {state?.groups.map(g => <button key={g.id} aria-label={g.name} className={cn('vm-chat-room', groupId === g.id && 'active')} onClick={() => {setFriendRoom('');void setContext('group', g.id)}}>
@@ -335,6 +395,8 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
           <div className="flex gap-2 flex-shrink-0">
             <Button size="sm" aria-expanded={showDetails} onClick={() => setShowDetails(value => !value)}>会话资料</Button>
             {admin && <Button size="sm" variant="ghost" onClick={() => openDialog('invite')}><UserPlus className="w-3.5 h-3.5" />邀请成员</Button>}
+            <Button size="sm" variant="ghost" disabled={!history.messages.length || acting}
+              onClick={() => selecting ? resetSelection() : setSelecting(true)}>{selecting ? '取消多选' : '多选消息'}</Button>
             <Button size="sm" onClick={sync} disabled={syncing}><RefreshCw className={cn('w-3.5 h-3.5', syncing && 'animate-spin')} />{syncing ? '同步中' : '立即同步'}</Button>
           </div>
         </header>
@@ -350,6 +412,12 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
         }}>
           {history.hasMore && <div className="text-center mb-4"><Button size="sm" variant="ghost" onClick={loadOlder} disabled={olderLoading}>{olderLoading ? '正在加载…' : '加载更早的消息'}</Button></div>}
           {loading ? <div className="vm-chat-empty"><span className="vm-spinner" /><p>正在读取聊天记录…</p></div> : !history.messages.length ? <div className="vm-chat-empty"><span className="vm-chat-empty-icon">{scope === 'personal' ? <MessageSquare /> : <Users />}</span><h3>{scope === 'personal' ? '给其他设备留句话' : '开始组内交流'}</h3><p>{scope === 'personal' ? '发送文字、图片或文件后，其他设备加入同一云端账号即可获取。' : '消息与附件会加密同步到组的飞书共享文件夹。'}</p></div> : history.messages.map(message => <article key={message.id} className={cn('vm-chat-message', message.mine && 'mine')}>
+            {selecting && <input type="checkbox" aria-label={`选择消息 ${message.text || message.attachments?.[0]?.name || ''}`}
+              checked={selected.includes(message.id)} disabled={acting || (!selected.includes(message.id) && selected.length >= 100)}
+              onChange={event => {
+                const checked = event.currentTarget.checked
+                setSelected(previous => checked ? [...previous, message.id] : previous.filter(id => id !== message.id))
+              }} />}
             <span className="vm-chat-avatar" aria-hidden="true">{(message.mine ? '我' : Array.from(message.senderName || message.senderEmail || '友')[0]).toUpperCase()}</span>
             <div className="vm-chat-message-body">
             <div className="vm-chat-message-meta"><strong title={message.senderEmail}>{message.mine ? '我' : message.senderName}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></div>
@@ -359,6 +427,15 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
             </div>
           </article>)}
         </div>
+        {selecting && <div className="vm-chat-tools px-4 py-2 flex-wrap" aria-label="批量消息操作">
+          <span role="status">已选 {selected.length} 条</span>
+          <Button size="sm" variant="ghost" disabled={!selected.length || acting} onClick={() => void actOnSelection('delete')}>删除</Button>
+          <select className="vm-input" aria-label="转发到" value={destination} disabled={acting} onChange={event => setDestination(event.target.value)}>
+            <option value="">选择转发会话</option>
+            {destinations.map(entry => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+          </select>
+          <Button size="sm" disabled={!selected.length || !destination || acting} onClick={() => void actOnSelection('forward')}>转发</Button>
+        </div>}
         <form className="vm-chat-composer" onSubmit={event => { event.preventDefault(); void send() }}>
           <div className="vm-chat-tools">
             <Button type="button" size="icon-sm" variant="ghost" aria-label="截图" title={`截图并标注（${formatScreenshotShortcut(screenshotShortcut)}）`} disabled={!history.writable || sending || attaching || loading} onClick={capture}><Camera className="w-4 h-4" /></Button>
