@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Search, File, FileText, Link2, Video, Key, Download,
-  Trash2, Unlock, Database, Send, Bot, User2, Loader2, Eye, FolderOpen, RotateCcw
+  Trash2, Unlock, Database, Bot, User2, Loader2, Eye, FolderOpen, RotateCcw
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { effectiveContentKind } from '@/lib/content-kind'
@@ -12,10 +12,11 @@ import PageHero from '@/components/shared/PageHero'
 import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
 import KnowledgeAnswer from '@/components/shared/KnowledgeAnswer'
 import { vaultApi } from '@/lib/ipc'
-import type { Evidence, LibraryItem, SyncRecord } from '@/lib/ipc'
+import type { Evidence, KnowledgeProgress, LibraryItem, SyncRecord } from '@/lib/ipc'
 
 interface LibraryViewProps {
   context: string
+  onConfigureModel: () => void
 }
 
 const FILTERS = [
@@ -85,7 +86,7 @@ const WELCOME_MESSAGE: ChatMessage = {
   content: '你好！我可以帮你检索本地知识库中的内容。试试问我「SSH 密钥在哪？」或「最新的 API 规范是什么？」',
 }
 
-export default function LibraryView({ context }: LibraryViewProps) {
+export default function LibraryView({ context, onConfigureModel }: LibraryViewProps) {
   const {
     state,
     unlockItem,
@@ -103,7 +104,8 @@ export default function LibraryView({ context }: LibraryViewProps) {
   const items = state?.items || []
   const records = state?.records || []
   const aiReady = Boolean(state?.knowledgeCenter?.aiProfile?.baseUrl && state?.knowledgeCenter?.aiProfile?.model)
-  const remoteCount = items.filter(item => item.remoteOnly).length + records.filter(record => !record.localPath).length
+  const localCopies = new Map(items.filter(item => !item.remoteOnly && item.recordId).map(item => [item.recordId, item]))
+  const remoteCount = items.filter(item => item.remoteOnly).length + records.filter(record => !record.localPath && !localCopies.has(record.id)).length
 
   const [selectedId, setSelectedId] = useState('')
   const [sort, setSort] = useState('newest')
@@ -112,8 +114,22 @@ export default function LibraryView({ context }: LibraryViewProps) {
   const [question, setQuestion] = useState('')
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE])
   const [isQuerying, setIsQuerying] = useState(false)
+  const [queryProgress, setQueryProgress] = useState<KnowledgeProgress | null>(null)
+  const queryRequest = useRef('')
+  useEffect(() => vaultApi.onKnowledgeProgress(progress => {
+    if (progress.requestId === queryRequest.current) setQueryProgress(progress)
+  }), [])
+  const progressText = queryProgress?.stage === 'download'
+    ? `取回并解密 ${queryProgress.current}/${queryProgress.total}：${queryProgress.title}`
+    : ({
+        sync: '正在刷新飞书同步目录…',
+        match: '正在匹配相关资料…',
+        search: '正在检索文件正文…',
+        answer: '正在根据检索结果生成回答…',
+        results: '正在整理检索结果…',
+      }[queryProgress?.stage || 'match'])
   const [filter, setFilter] = useState<string>('all')
-  const [preview, setPreview] = useState<{ open: boolean; item?: LibraryItem; content?: string; url?: string; kind?: string; loading: boolean }>({ open: false, loading: false })
+  const [preview, setPreview] = useState<{ open: boolean; item?: LibraryItem; title?: string; content?: string; url?: string; kind?: string; loading: boolean }>({ open: false, loading: false })
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -201,18 +217,45 @@ export default function LibraryView({ context }: LibraryViewProps) {
     await handleDownloadRecord(record)
   }
 
-  const handleOpenEvidence = async (evidence: Evidence) => {
-    if (!evidence.assetId) return
-    if (evidence.sourceTable === 'library_items') {
-      const item = items.find(entry => entry.id === evidence.assetId)
-      if (item && !item.remoteOnly) {
+  const openingEvidence = useRef(new Set<string>())
+
+  const handleOpenEvidence = async (evidence: Evidence, retrieve = false) => {
+    const id = evidence.assetId
+    if (!id || openingEvidence.current.has(id)) return
+    openingEvidence.current.add(id)
+    try {
+      const isRecord = evidence.sourceTable === 'records'
+      const record = records.find(entry => isRecord ? entry.id === id : entry.assetId === id)
+      let item = items.find(entry => isRecord ? entry.recordId === id || entry.id === record?.assetId : entry.id === id)
+      if (!item && isRecord) {
+        const result = await vaultApi.openAsset({ assetId: id, sourceTable: 'records', localOnly: true })
+        if (result.opened) return
+      }
+      if (item?.remoteOnly || (!item && isRecord)) {
+        if (!retrieve) {
+          toast('双击参考来源即可取回并打开。', 'info')
+          return
+        }
+        const recordId = record?.id || item?.recordId || (isRecord ? id : '')
+        if (!recordId) throw new Error('找不到对应的云端记录，请先同步目录。')
+        toast('正在取回并解密…', 'info')
+        const next = await vaultApi.downloadRecord({ recordId, passphrase: state?.settings.feishuPassphrase || '' })
+        item = next.items.find(entry => !entry.remoteOnly && (entry.id === item?.id || entry.id === record?.assetId || entry.recordId === recordId))
+        await useAppStore.getState().refresh()
+        if (!item) throw new Error('已取回，但没有找到可打开的本地条目。')
+      }
+      if (item) {
         if (effectiveContentKind(item) === 'secret') await handleUnlock(item)
         else await handleOpen(item)
         return
       }
+      const result = await vaultApi.openItem({ itemId: id })
+      if (!result.opened) setPreview({ open: true, title: result.name || evidence.title, content: result.content || result.url || '暂无可预览内容', kind: result.kind, loading: false })
+    } catch (error) {
+      toast(error instanceof Error ? error.message : '无法打开来源', 'error')
+    } finally {
+      openingEvidence.current.delete(id)
     }
-    const result = await openAsset({ assetId: evidence.assetId, sourceTable: evidence.sourceTable })
-    if (!result?.opened) toast('该来源当前无法直接打开', 'warning')
   }
 
   const handleDeleteRecord = async (record: SyncRecord) => {
@@ -226,18 +269,22 @@ export default function LibraryView({ context }: LibraryViewProps) {
   }
 
   const handleQuery = async () => {
-    if (!question.trim()) return
+    if (!question.trim() || queryRequest.current) return
+    const requestId = crypto.randomUUID()
+    queryRequest.current = requestId
+    setQueryProgress(null)
     const userMsg = question
     setQuestion('')
     setChatMessages(prev => [...prev, { role: 'user' as const, content: userMsg }])
     setIsQuerying(true)
-    const { answer, evidence, error } = await queryKnowledge(userMsg, {})
+    const { answer, evidence, notices, error } = await queryKnowledge(userMsg, { requestId })
+    queryRequest.current = ''
     setIsQuerying(false)
     if (error) {
       toast(error, 'error')
       setChatMessages(prev => [...prev, { role: 'assistant', content: `### 暂时无法完成检索\n\n${error}\n\n请检查知识源或模型配置后重试。` }])
     } else {
-      setChatMessages(prev => [...prev, { role: 'assistant' as const, content: answer || '未找到相关结果', evidence }])
+      setChatMessages(prev => [...prev, { role: 'assistant' as const, content: [answer || '未找到相关结果', ...(notices || [])].join('\n\n'), evidence }])
     }
   }
 
@@ -277,6 +324,111 @@ export default function LibraryView({ context }: LibraryViewProps) {
         </div>
 
       </div>
+      {/* 中栏：AI 知识库对话 */}
+      <div className="glass-panel rounded-xl flex flex-col vm-library-chat vm-library-wechat">
+        {/* 头部 */}
+        <div className="vm-library-chat-header px-5 py-4 flex items-center gap-3 flex-shrink-0 border-b border-border">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-muted border border-border">
+            <Bot className="w-5 h-5 text-cyan" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-foreground">知识库对话</h2>
+            <p className="text-xs mt-0.5 text-muted-foreground">
+              优先检索本地库 · 飞书 Wiki · Obsidian
+            </p>
+          </div>
+          <div className={cn('ml-auto vm-badge text-[10px]', aiReady ? 'vm-badge-emerald' : 'vm-badge-cyan')}>
+            {aiReady ? '模型已配置' : '本地检索'}
+          </div>
+          {chatMessages.length > 1 && (
+            <Button variant="ghost" size="icon-sm" title="清空当前对话" onClick={() => setChatMessages([WELCOME_MESSAGE])}>
+              <RotateCcw className="w-3.5 h-3.5" />
+            </Button>
+          )}
+        </div>
+
+        {!aiReady && (
+          <aside aria-label="模型配置向导" className="vm-model-setup flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+            <div>
+              <strong className="text-xs text-foreground">开启 AI 问答</strong>
+              <p className="text-[11px] text-muted-foreground">① 选服务商　② 填模型、接口地址和 API Key　③ 保存并测试</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={onConfigureModel}>配置模型</Button>
+          </aside>
+        )}
+
+        {/* 对话区域 */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4 min-h-0">
+          {chatMessages.map((msg, i) => (
+            <div key={i} className={cn("flex gap-3 animate-fade-in",
+              msg.role === 'user' ? 'flex-row-reverse' : 'flex-row')}>
+              {/* 头像 */}
+              <div className={cn("vm-library-chat-avatar w-8 h-8 flex items-center justify-center flex-shrink-0 mt-1",
+                msg.role === 'assistant'
+                  ? "bg-muted border-border"
+                  : "bg-emerald/10 border-emerald/30")}>
+                {msg.role === 'assistant'
+                  ? <Bot className="w-4 h-4 text-cyan" />
+                  : <User2 className="w-4 h-4 text-emerald" />}
+              </div>
+
+              {/* 气泡 */}
+              <div className={cn("flex flex-col gap-1 min-w-0", msg.role === 'assistant' ? 'max-w-[92%]' : 'max-w-[78%]',
+                msg.role === 'user' ? 'items-end' : 'items-start')}>
+                <span className="text-[10px] text-muted-foreground">
+                  {msg.role === 'assistant' ? 'AxonMind AI' : '你'}
+                </span>
+                <div className={cn("vm-library-chat-bubble px-3 py-2 text-sm leading-relaxed min-w-0",
+                  msg.role === 'user'
+                    ? "vm-library-chat-mine"
+                    : "vm-library-chat-peer")}>
+                  {msg.role === 'assistant'
+                    ? <KnowledgeAnswer content={msg.content} evidence={msg.evidence} onOpenEvidence={handleOpenEvidence} onConfigureModel={!aiReady ? onConfigureModel : undefined} />
+                    : msg.content}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {isQuerying && (
+            <div className="flex gap-3 animate-fade-in">
+              <div className="vm-library-chat-avatar w-8 h-8 flex items-center justify-center shrink-0">
+                <Loader2 className="w-4 h-4 animate-spin text-cyan" />
+              </div>
+              <div className="vm-library-chat-bubble vm-library-chat-peer px-3 py-2 text-xs" role="status">
+                {progressText}
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* 输入区 */}
+        <div className="vm-library-chat-input px-5 pb-4 pt-3 flex-shrink-0 border-t border-border">
+          <div className="flex gap-2 items-end">
+            <textarea
+              className="vm-textarea flex-1 min-h-[52px] max-h-[120px]"
+              placeholder="输入问题，例如：SSH 密钥在哪？"
+              rows={2}
+              value={question}
+              onChange={e => setQuestion(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault()
+                  handleQuery()
+                }
+              }}
+            />
+            <Button variant="primary" className="vm-library-chat-send flex-shrink-0" onClick={handleQuery} disabled={isQuerying || !question.trim()}>
+              发送
+            </Button>
+          </div>
+          <p className="text-[10px] mt-2 text-muted-foreground">
+            Enter 发送 · Shift+Enter 换行 · 优先检索本地加密库
+          </p>
+        </div>
+      </div>
+
       <div className="vm-library-list flex flex-col gap-4">
         {/* 条目列表 */}
         <div className="glass-card rounded-md overflow-hidden">
@@ -389,19 +541,22 @@ export default function LibraryView({ context }: LibraryViewProps) {
                 <p className="vm-empty-title">暂无同步记录</p>
                 <p className="vm-empty-description">完成一次飞书加密同步后，远端文件会显示在这里。</p>
               </div>
-            ) : records.map((r: SyncRecord) => (
-              <div key={r.id} className="px-4 py-2.5 flex items-center gap-3">
+            ) : records.map((r: SyncRecord) => {
+              const localCopy = localCopies.get(r.id)
+              const available = Boolean(localCopy || r.localPath)
+              return (
+              <div key={r.id} className="vm-library-record-row px-4 py-2.5 flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium truncate text-foreground">{r.fileName}</p>
                   <p className="text-[10px] mt-0.5 text-muted-foreground">{formatSize(r.size)}</p>
                 </div>
                 <div className={cn("vm-badge text-[10px]",
-                  r.localPath ? 'vm-badge-emerald' : 'vm-badge-gold')}>
-                  {r.localPath ? '本机可用' : '云端待取回'}
+                  available ? 'vm-badge-emerald' : 'vm-badge-gold')}>
+                  {available ? '本机可用' : '云端待取回'}
                 </div>
                 <div className="flex gap-1">
-                  {r.localPath ? (
-                    <Button variant="ghost" size="sm" title="打开原始本地文件" onClick={() => handleOpenRecord(r)}><FolderOpen className="w-3 h-3" />打开</Button>
+                  {available ? (
+                    <Button variant="ghost" size="sm" title="打开本地文件" onClick={() => localCopy ? handleOpen(localCopy) : handleOpenRecord(r)}><FolderOpen className="w-3 h-3" />打开</Button>
                   ) : (
                     <Button variant="cyan" size="sm" title="从云端下载并解密到本机" onClick={() => handleDownloadRecord(r)}><Download className="w-3 h-3" />取回</Button>
                   )}
@@ -411,104 +566,10 @@ export default function LibraryView({ context }: LibraryViewProps) {
                   </Button>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         </div>}
-      </div>
-
-      {/* 右栏：AI 知识库对话 */}
-      <div className="glass-panel rounded-xl flex flex-col vm-library-chat">
-        {/* 头部 */}
-        <div className="px-5 py-4 flex items-center gap-3 flex-shrink-0 border-b border-border">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-muted border border-border">
-            <Bot className="w-5 h-5 text-cyan" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-foreground">知识库对话</h2>
-            <p className="text-xs mt-0.5 text-muted-foreground">
-              优先检索本地库 · 飞书 Wiki · Obsidian
-            </p>
-          </div>
-          <div className={cn('ml-auto vm-badge text-[10px]', aiReady ? 'vm-badge-emerald' : 'vm-badge-cyan')}>
-            {aiReady ? '模型已连接' : '本地检索'}
-          </div>
-          {chatMessages.length > 1 && (
-            <Button variant="ghost" size="icon-sm" title="清空当前对话" onClick={() => setChatMessages([WELCOME_MESSAGE])}>
-              <RotateCcw className="w-3.5 h-3.5" />
-            </Button>
-          )}
-        </div>
-
-        {/* 对话区域 */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-4 min-h-0">
-          {chatMessages.map((msg, i) => (
-            <div key={i} className={cn("flex gap-3 animate-fade-in",
-              msg.role === 'user' ? 'flex-row-reverse' : 'flex-row')}>
-              {/* 头像 */}
-              <div className={cn("w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-1 border",
-                msg.role === 'assistant'
-                  ? "bg-muted border-border"
-                  : "bg-emerald/10 border-emerald/30")}>
-                {msg.role === 'assistant'
-                  ? <Bot className="w-4 h-4 text-cyan" />
-                  : <User2 className="w-4 h-4 text-emerald" />}
-              </div>
-
-              {/* 气泡 */}
-              <div className={cn("flex flex-col gap-1", msg.role === 'assistant' ? 'max-w-[92%]' : 'max-w-[78%]',
-                msg.role === 'user' ? 'items-end' : 'items-start')}>
-                <span className="text-[10px] text-muted-foreground">
-                  {msg.role === 'assistant' ? 'AxonMind AI' : '你'}
-                </span>
-                <div className={cn("px-4 py-3 rounded-xl text-sm leading-relaxed text-foreground min-w-0",
-                  msg.role === 'user'
-                    ? "rounded-tr-sm bg-emerald/10 border border-emerald/30"
-                    : "rounded-tl-sm bg-card border border-border")}>
-                  {msg.role === 'assistant'
-                    ? <KnowledgeAnswer content={msg.content} evidence={msg.evidence} onOpenEvidence={handleOpenEvidence} />
-                    : msg.content}
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {isQuerying && (
-            <div className="flex gap-3 animate-fade-in">
-              <div className="w-8 h-8 rounded-full flex items-center justify-center bg-muted border border-border">
-                <Loader2 className="w-4 h-4 animate-spin text-cyan" />
-              </div>
-              <div className="px-4 py-3 rounded-xl rounded-tl-sm text-xs bg-card border border-border text-muted-foreground">
-                正在检索知识库...
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* 输入区 */}
-        <div className="px-5 pb-4 pt-3 flex-shrink-0 border-t border-border">
-          <div className="flex gap-2 items-end">
-            <textarea
-              className="vm-textarea flex-1 min-h-[52px] max-h-[120px]"
-              placeholder="输入问题，例如：SSH 密钥在哪？"
-              rows={2}
-              value={question}
-              onChange={e => setQuestion(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  handleQuery()
-                }
-              }}
-            />
-            <Button variant="primary" className="h-[52px] px-4 flex-shrink-0" onClick={handleQuery} disabled={isQuerying}>
-              <Send className="w-4 h-4" />
-            </Button>
-          </div>
-          <p className="text-[10px] mt-2 text-muted-foreground">
-            Enter 发送 · Shift+Enter 换行 · 优先检索本地加密库
-          </p>
-        </div>
       </div>
 
       {/* 内容预览弹窗 */}
@@ -516,7 +577,7 @@ export default function LibraryView({ context }: LibraryViewProps) {
         <div className="vm-modal-mask fixed inset-0 z-50 flex items-center justify-center p-6" onClick={() => setPreview({ open: false, loading: false })}>
           <div className="glass-card rounded-lg w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-semibold truncate pr-4">{preview.item?.title}</h3>
+              <h3 className="text-sm font-semibold truncate pr-4">{preview.item?.title || preview.title}</h3>
               <button onClick={() => setPreview({ open: false, loading: false })} className="text-muted-foreground hover:text-foreground text-lg">×</button>
             </div>
             <div className="p-4 overflow-auto flex-1">

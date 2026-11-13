@@ -43,9 +43,9 @@ async function register(window) {
   await register(window);
 
   // ---- Theme toggle test ----
-  // Detect initial theme (should be dark by default)
+  // Fresh installations start in light mode
   const initialHtmlClass = await window.locator('html').getAttribute('class').catch(() => '');
-  console.log('Initial html class:', JSON.stringify(initialHtmlClass));
+  if (!initialHtmlClass?.split(' ').includes('light')) throw new Error('Expected light mode on first launch');
 
   // Find theme toggle button
   const toggle = window.locator('button[title="切换亮色模式"], button[title="切换暗色模式"]');
@@ -53,21 +53,6 @@ async function register(window) {
   if (toggleCount === 0) {
     throw new Error('Theme toggle button not found');
   }
-
-  const toggleTitle = await toggle.getAttribute('title');
-  console.log('Toggle button title:', toggleTitle);
-
-  // Click to switch to light mode
-  await toggle.click();
-  await window.waitForTimeout(800);
-
-  const lightHtmlClass = await window.locator('html').getAttribute('class').catch(() => '');
-  console.log('After toggle html class:', JSON.stringify(lightHtmlClass));
-
-  if (!lightHtmlClass || !lightHtmlClass.includes('light')) {
-    throw new Error(`Expected 'light' class on html after toggle, got: "${lightHtmlClass}"`);
-  }
-  console.log('Theme toggle: dark -> light passed');
 
   // Audit every primary page for accidental near-black panels in light mode.
   const pageNames = ['概览', '知识库', '密码库', '添加内容', '用户组', '聊天', '同步中心', '开发连接', '设置'];
@@ -97,9 +82,9 @@ async function register(window) {
   await window.waitForTimeout(800);
 
   const darkHtmlClass = await window.locator('html').getAttribute('class').catch(() => '');
-  console.log('After 2nd toggle html class:', JSON.stringify(darkHtmlClass));
+  console.log('After switching to dark html class:', JSON.stringify(darkHtmlClass));
   if (darkHtmlClass && darkHtmlClass.includes('light')) {
-    throw new Error(`Expected no 'light' class on html after 2nd toggle, got: "${darkHtmlClass}"`);
+    throw new Error(`Expected no 'light' class on html after switching to dark, got: "${darkHtmlClass}"`);
   }
   console.log('Theme toggle: light -> dark passed');
 

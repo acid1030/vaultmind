@@ -84,6 +84,11 @@ contextBridge.exposeInMainWorld('vaultApi', {
   saveVectorSources: (payload) => ipcRenderer.invoke('vault:saveVectorSources', payload),
   saveObsidianSources: (payload) => ipcRenderer.invoke('vault:saveObsidianSources', payload),
   saveFeishuWikiSettings: (payload) => ipcRenderer.invoke('vault:saveFeishuWikiSettings', payload),
+  onKnowledgeProgress: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:knowledgeProgress', listener);
+    return () => ipcRenderer.removeListener('vault:knowledgeProgress', listener);
+  },
   queryKnowledgeCenter: (payload) => ipcRenderer.invoke('vault:queryKnowledgeCenter', payload),
   saveProjectAccount: (payload) => ipcRenderer.invoke('vault:saveProjectAccount', payload),
   saveProjectRepository: (payload) => ipcRenderer.invoke('vault:saveProjectRepository', payload),

@@ -1,14 +1,25 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowRight, BookOpen, Check, Cloud, Monitor, RefreshCw, Users } from 'lucide-react'
 import { useAppStore } from '@/store/app'
 import { effectiveContentKind } from '@/lib/content-kind'
 import { tagDistribution } from '@/lib/dashboard'
 import KnowledgeOrb from './KnowledgeOrb'
+import WorkspaceFlow from './WorkspaceFlow'
 
 type View = 'library' | 'vault' | 'add' | 'chat' | 'groups' | 'sync'
 export default function WorkbenchOverview({ onNavigate, children }: { onNavigate: (view: View) => void; children: ReactNode }) {
   const { state } = useAppStore()
   const [mode, setMode] = useState('all')
+  const [light, setLight] = useState(() => document.documentElement.classList.contains('light'))
+  useEffect(() => {
+    const root = document.documentElement
+    const update = () => setLight(root.classList.contains('light'))
+    const observer = new MutationObserver(update)
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] })
+    update()
+    return () => observer.disconnect()
+  }, [])
+  const panelTitle = light ? '知识流转' : '知识网络图谱'
   const items = state?.items || [], records = state?.records || [], groups = state?.groups || []
   const devices = state?.accountSync?.devices.filter(device => device.status === 'active') || []
   const tags = tagDistribution(items)
@@ -24,11 +35,17 @@ export default function WorkbenchOverview({ onNavigate, children }: { onNavigate
   const time = (value: string) => value && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '暂无记录'
   const distributions = mode === 'tags' ? tags.slice(0, 5).map((tag, index) => ({ ...tag, color: kinds[index % kinds.length].color })) : kinds.map(kind => ({ ...kind, count: items.filter(item => effectiveContentKind(item) === kind.id).length }))
   return <section className="vm-dashboard-panels" aria-label="知识中枢实时数据">
-    <article className="glass-card vm-orb-panel" aria-label="知识网络图谱">
-      <div className="vm-section-heading"><h2>知识网络图谱 <small>KNOWLEDGE NETWORK</small></h2><div className="vm-orb-tabs" role="group" aria-label="图谱视图">{[{ id: 'all', label: '全局' }, { id: 'types', label: '分类' }, { id: 'tags', label: '标签' }].map(tab => <button key={tab.id} aria-pressed={mode === tab.id} onClick={() => setMode(tab.id)}>{tab.label}</button>)}</div></div>
+    <article className="glass-card vm-orb-panel" aria-label={panelTitle}>
+      <div className="vm-section-heading"><h2>{panelTitle} <small>{light ? 'WORKSPACE FLOW' : 'KNOWLEDGE NETWORK'}</small></h2><div className="vm-orb-tabs" role="group" aria-label="图谱视图">{[{ id: 'all', label: '全局' }, { id: 'types', label: '分类' }, { id: 'tags', label: '标签' }].map(tab => <button key={tab.id} aria-pressed={mode === tab.id} onClick={() => setMode(tab.id)}>{tab.label}</button>)}</div></div>
       <div className="vm-orb-stage">
         <dl className="vm-orb-metrics"><div><dt>内容节点</dt><dd>{items.length.toLocaleString()}</dd></div><div><dt>有效标签</dt><dd>{tags.length}</dd></div><div><dt>共享条目</dt><dd>{shared.length}</dd></div><div><dt>本机可用</dt><dd>{items.filter(item => !item.remoteOnly).length}</dd></div></dl>
-        <div className="vm-orb-visual"><KnowledgeOrb mode={mode} /><small>空间粒子视效 · 非语义关系推断</small></div>
+        <div className="vm-orb-visual">{light ? <><WorkspaceFlow nodes={[
+          { label: '本机可用', value: items.filter(item => !item.remoteOnly).length },
+          { label: '待取回', value: items.filter(item => item.remoteOnly).length },
+          { label: '可见内容', value: items.length },
+          { label: '共享条目', value: shared.length },
+          { label: '云端记录', value: records.length },
+        ]} /><small>节点显示当前统计 · 流线为视觉示意</small></> : <><KnowledgeOrb mode={mode} /><small>空间粒子视效 · 非语义关系推断</small></>}</div>
         <div className="vm-orb-breakdown"><h3>{mode === 'tags' ? '标签分布 · Top 5' : '内容类型分布'}</h3>{mode === 'tags' && <p className="vm-tag-coverage-note">条目覆盖率 · 多标签可重叠</p>}{distributions.length ? distributions.map(entry => <div key={entry.label} style={{ '--asset-color': entry.color } as React.CSSProperties}><span><i />{entry.label}</span><strong>{items.length ? `${(entry.count / items.length * 100).toFixed(1)}%` : '0%'}</strong><em style={{ width: `${items.length ? Math.min(100, entry.count / items.length * 100) : 0}%` }} /></div>) : <p>添加标签后显示分布</p>}<footer><span>云端记录 <b>{records.length}</b></span><span>待取回 <b>{items.filter(item => item.remoteOnly).length}</b></span></footer></div>
       </div>
     </article>

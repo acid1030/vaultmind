@@ -20,12 +20,11 @@ try {
     await window.vaultApi.createGroup({ name: '研发协作组' });
   });
   await page.reload();
-  await page.getByRole('article', { name: '知识网络图谱', exact: true }).waitFor();
-  const orb = page.locator('.vm-orb-canvas');
-  await page.waitForFunction(() => document.querySelector('.vm-orb-canvas')?.width > 100);
-  const before = await orb.evaluate(canvas => canvas.toDataURL());
-  await page.waitForTimeout(250);
-  assert.notEqual(await orb.evaluate(canvas => canvas.toDataURL()), before, 'orb particles must animate');
+  await page.getByRole('article', { name: '知识流转', exact: true }).waitFor();
+  const flow = page.locator('.vm-workspace-flow');
+  assert.match(await flow.getAttribute('aria-label'), /可见内容 4/);
+  const signal = flow.locator('.vm-flow-signal').first();
+  assert.equal(await signal.evaluate(el => getComputedStyle(el).animationName), 'vm-flow-travel');
   assert.equal(await page.locator('.vm-dashboard-stat').count(), 4);
   assert.equal(await page.locator('.vm-dashboard-spark').count(), 4);
   assert.equal(await page.locator('.vm-dashboard-stat-value').first().textContent(), '4条可见内容');
@@ -40,14 +39,18 @@ try {
   assert.equal(await page.getByText('fixture-value-only', { exact: true }).count(), 0, 'dashboard never reveals credential bodies');
   await recent.getByRole('button', { name: '全部', exact: true }).click();
   await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.getByRole('button', { name: '切换暗色模式' }).click();
+  const orb = page.getByRole('article', { name: '知识网络图谱', exact: true }).locator('canvas');
+  await orb.waitFor();
+  assert.equal(await flow.count(), 0);
+  const frame = await orb.evaluate(canvas => canvas.toDataURL());
+  await page.waitForFunction(previous => document.querySelector('.vm-orb-canvas')?.toDataURL() !== previous, frame);
   await page.screenshot({ path: '/tmp/mizhan-orb-dashboard.png', fullPage: true });
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.waitForTimeout(100);
-  const still = await orb.evaluate(canvas => canvas.toDataURL());
-  await page.waitForTimeout(150);
-  assert.equal(await orb.evaluate(canvas => canvas.toDataURL()), still, 'reduced motion must stop particle animation');
   await page.getByRole('button', { name: '切换亮色模式' }).click();
-  await page.waitForTimeout(250);
+  await flow.waitFor();
+  assert.equal(await page.locator('.vm-orb-canvas').count(), 0);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await signal.evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.screenshot({ path: '/tmp/mizhan-orb-dashboard-light.png', fullPage: true });
   for (const width of [1000, 760]) {
     await page.setViewportSize({ width, height: 800 });
@@ -71,5 +74,5 @@ try {
   assert.ok(wide.left <= 1 && wide.right <= 1, 'wide dashboard must fill the workspace inside its padding');
   assert.equal(wide.overflow, false, 'wide dashboard must fit without page scrolling');
   assert.deepEqual(errors, []);
-  console.log('Dashboard E2E passed: real counts, animated orb, reduced motion, tag view, recent filters, secret masking, themes and compact layouts.');
+  console.log('Dashboard E2E passed: real counts, animated workspace flow, reduced motion, tag view, recent filters, secret masking, themes and compact layouts.');
 } finally { await app.close(); fs.rmSync(profile, { recursive: true, force: true }); }

@@ -1,3 +1,11 @@
+export interface KnowledgeProgress {
+  requestId: string
+  stage: 'sync' | 'match' | 'download' | 'search' | 'answer' | 'results'
+  current?: number
+  total?: number
+  title?: string
+}
+
 /**
  * AxonMind IPC Type Bridge
  *
@@ -405,7 +413,7 @@ export interface VaultApi {
   downloadRecord: (payload: any) => Promise<VaultState>
   openAsset: (payload: any) => Promise<any>
   unlockItem: (payload: { itemId: string }) => Promise<{ id: string; name: string; text: string }>
-  openItem: (payload: { itemId: string }) => Promise<{ id: string; name: string; kind: string; content?: string; url?: string; opened?: boolean; path?: string; viewable?: boolean }>
+  openItem: (payload: { itemId: string; previewOnly?: boolean }) => Promise<{ id: string; name: string; kind: string; content?: string; url?: string; opened?: boolean; path?: string; viewable?: boolean }>
   saveItemFile: (payload: { itemId: string }) => Promise<VaultState>
   forgetRecord: (recordId: string) => Promise<VaultState>
   forgetItem: (itemId: string) => Promise<VaultState>
@@ -417,6 +425,7 @@ export interface VaultApi {
   saveVectorSources: (sources: any[]) => Promise<VaultState>
   saveObsidianSources: (sources: any[]) => Promise<VaultState>
   saveFeishuWikiSettings: (input: any) => Promise<VaultState>
+  onKnowledgeProgress: (callback: (progress: KnowledgeProgress) => void) => () => void
   queryKnowledgeCenter: (payload: any) => Promise<any>
   saveProjectAccount: (payload: any) => Promise<VaultState>
   saveProjectRepository: (payload: any) => Promise<VaultState>
@@ -552,6 +561,7 @@ const mockVaultApi: VaultApi = {
   saveVectorSources: async () => { throw new Error('Electron 不可用') },
   saveObsidianSources: async () => { throw new Error('Electron 不可用') },
   saveFeishuWikiSettings: async () => { throw new Error('Electron 不可用') },
+  onKnowledgeProgress: () => () => {},
   queryKnowledgeCenter: async () => { throw new Error('Electron 不可用') },
   saveProjectAccount: async () => { throw new Error('Electron 不可用') },
   saveProjectRepository: async () => { throw new Error('Electron 不可用') },

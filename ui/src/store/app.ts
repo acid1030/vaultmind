@@ -29,7 +29,7 @@ interface AppState {
   forgetRecord: (recordId: string) => Promise<void>
   saveItemFile: (itemId: string) => Promise<{ error?: string }>
   openAsset: (payload: any) => Promise<any>
-  queryKnowledge: (question: string, options?: any) => Promise<{ answer?: string; evidence?: Evidence[]; error?: string }>
+  queryKnowledge: (question: string, options?: any) => Promise<{ answer?: string; evidence?: Evidence[]; notices?: string[]; error?: string }>
   saveSettings: (settings: any) => Promise<{ error?: string }>
   saveLocalVectorSettings: (input: { localVectorSearch?: boolean; localVectorModel?: string }) => Promise<{ error?: string }>
   loginFeishu: () => Promise<{ error?: string }>
@@ -240,7 +240,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const result = await vaultApi.queryKnowledgeCenter({ question, ...options })
       set({ state: result.state })
-      return { answer: result.answer, evidence: result.evidence }
+      return { answer: result.answer, evidence: result.evidence, notices: result.notices }
     } catch (err: any) {
       return { error: err.message }
     }

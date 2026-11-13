@@ -43,7 +43,9 @@ async function register(window) {
   await register(window);
 
   await window.screenshot({ path: '/tmp/mizhan-console-home.png' });
-  await window.getByRole('button', { name: '切换亮色模式' }).click();
+  if (!await window.evaluate(() => document.documentElement.classList.contains('light'))) {
+    await window.getByRole('button', { name: '切换亮色模式' }).click();
+  }
   await window.waitForTimeout(400);
   await window.screenshot({ path: '/tmp/mizhan-console-light.png' });
   await window.getByRole('button', { name: '切换暗色模式' }).click();
@@ -96,9 +98,8 @@ async function register(window) {
   await window.getByRole('radio', { name: /AxonMind 托管/ }).waitFor();
   await window.getByRole('radio', { name: /个人自建/ }).waitFor();
   await window.getByRole('radio', { name: /企业自建/ }).waitFor();
-  await window.getByText('托管服务等待上线').waitFor();
-  const managedLoginDisabled = await window.getByRole('button', { name: '登录飞书' }).isDisabled();
-  if (!managedLoginDisabled) throw new Error('Managed login must be disabled without a configured service');
+  await window.getByText('托管服务已就绪').waitFor();
+  if (!await window.getByRole('button', { name: '登录飞书', exact: true }).isEnabled()) throw new Error('Managed login must be enabled with a configured service');
   await window.getByRole('radio', { name: /个人自建/ }).click();
   await window.locator('input[placeholder="cli_xxx"]').waitFor();
   await window.locator('input[placeholder*="所有设备保持一致"]').waitFor();

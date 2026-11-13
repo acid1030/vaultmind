@@ -231,7 +231,7 @@ export default function AddContentView() {
               <button className={cn(fileDestination === 'cloud' && 'active')} role="radio"
                 aria-checked={fileDestination === 'cloud'} onClick={() => setFileDestination('cloud')}>
                 <Cloud className="w-4 h-4" />
-                <span><strong>加密同步</strong><small>{state?.isFeishuLoggedIn ? '上传到已连接的飞书' : '需要先连接飞书'}</small></span>
+                <span><strong>加密同步</strong><small>{state?.isFeishuLoggedIn ? '本机加密保存并上传飞书' : '需要先连接飞书'}</small></span>
               </button>
             </div>
             <button className={cn('vm-file-picker w-full border-2 border-dashed rounded-lg py-8 flex flex-col items-center gap-2 transition-all', selectedFiles.length > 0 && 'selected')}
@@ -353,7 +353,7 @@ export default function AddContentView() {
       </section>
       <section className="glass-card" aria-label="保存前确认">
         <div className="vm-section-heading"><h2>保存前确认</h2></div>
-        <dl className="vm-review-list"><div><dt>内容类型</dt><dd>{MODES.find(m => m.id === mode)?.label}</dd></div><div><dt>目标空间</dt><dd>{isPersonal ? '个人空间' : context.groupName || '用户组共享'}</dd></div><div><dt>保存方式</dt><dd>{mode === 'file' && fileDestination === 'cloud' ? '加密上传飞书' : '本机加密保存'}</dd></div><div><dt>{mode === 'file' ? '选择文件' : '标题'}</dt><dd>{mode === 'file' ? `${selectedFiles.length} 个` : title.trim() || '尚未填写'}</dd></div>{mode !== 'file' && <div><dt>标签</dt><dd>{tags.trim() || '无'}</dd></div>}</dl>
+        <dl className="vm-review-list"><div><dt>内容类型</dt><dd>{MODES.find(m => m.id === mode)?.label}</dd></div><div><dt>目标空间</dt><dd>{isPersonal ? '个人空间' : context.groupName || '用户组共享'}</dd></div><div><dt>保存方式</dt><dd>{mode === 'file' && fileDestination === 'cloud' ? '本机加密保存并同步飞书' : '本机加密保存'}</dd></div><div><dt>{mode === 'file' ? '选择文件' : '标题'}</dt><dd>{mode === 'file' ? `${selectedFiles.length} 个` : title.trim() || '尚未填写'}</dd></div>{mode !== 'file' && <div><dt>标签</dt><dd>{tags.trim() || '无'}</dd></div>}</dl>
         <p className="vm-module-note">{mode === 'secret' ? '凭据内容不会在此预览，保存后按需解锁。' : isPersonal ? '当前内容属于个人空间，不自动共享给用户组。' : '当前内容将归属所选用户组，请确认共享范围。'}</p>
         {mode === 'file' && fileDestination === 'cloud' && <p className="vm-module-note">{!state?.isFeishuLoggedIn ? '尚未连接飞书，请先完成授权。' : !settings?.hasFeishuPassphrase && passphrase.length < 8 ? '请先设置至少 8 位加密口令。' : '飞书已连接；文件加密后上传。'}</p>}
       </section>

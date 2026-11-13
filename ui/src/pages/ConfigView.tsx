@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Settings, Bot, BookOpen, Database, Zap, Globe,
@@ -31,6 +31,7 @@ const SECTIONS: { id: ConfigSection; label: string; icon: React.ReactNode; desc:
 const LLM_PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', url: 'https://api.deepseek.com' },
   { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1' },
+  { id: 'sub2api', label: 'Sub2API', url: 'https://api.axonclawx.cn/v1' },
   { id: 'qwen', label: '千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   { id: 'kimi', label: 'Kimi', url: 'https://api.moonshot.cn/v1' },
   { id: 'zhipu', label: '智谱 AI', url: 'https://open.bigmodel.cn/api/paas/v4' },
@@ -68,6 +69,8 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'ok' | 'fail' | null>(null)
   const [models, setModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const modelRequest = useRef(0)
   const [customModels, setCustomModels] = useState<Record<string, string[]>>({})
 
   // Feishu form
@@ -170,7 +173,12 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
   }, [])
 
   useEffect(() => {
+    modelRequest.current++
+    setLoadingModels(false)
     setModels([])
+  }, [llmProvider, llmUrl, llmKey])
+
+  useEffect(() => {
     if (!llmModel && llmProvider) {
       const presets = MODEL_PRESETS[llmProvider]
       if (presets && presets[0]) setLlmModel(presets[0])
@@ -237,16 +245,21 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
   }
 
   const handleListModels = async () => {
+    const request = ++modelRequest.current
+    setLoadingModels(true)
     try {
       const result = await vaultApi.listModels({
         provider: llmProvider,
         baseUrl: llmUrl,
         apiKey: llmKey,
       })
+      if (request !== modelRequest.current) return
       setModels(result.models || [])
       toast(`找到 ${result.models?.length || 0} 个模型`, 'success')
     } catch (err: any) {
-      toast(err.message || '获取模型列表失败', 'error')
+      if (request === modelRequest.current) toast(err.message || '获取模型列表失败', 'error')
+    } finally {
+      if (request === modelRequest.current) setLoadingModels(false)
     }
   }
 
@@ -429,8 +442,16 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
               <div>
                 <label className="block text-xs mb-1.5 text-muted-foreground" >AI 服务商</label>
                 <div className="grid grid-cols-3 gap-2">
-                  {(showMoreProviders ? LLM_PROVIDERS : LLM_PROVIDERS.slice(0, 6)).map(p => (
-                    <button key={p.id} onClick={() => { setLlmProvider(p.id); if (p.url) setLlmUrl(p.url) }}
+                  {(showMoreProviders ? LLM_PROVIDERS : LLM_PROVIDERS.slice(0, 7)).map(p => (
+                    <button key={p.id} onClick={() => {
+                      if (p.id !== llmProvider && (p.id === 'sub2api' || llmProvider === 'sub2api')) {
+                        setLlmKey('')
+                        setLlmModel('')
+                        setTestResult(null)
+                      }
+                      setLlmProvider(p.id)
+                      if (p.url) setLlmUrl(p.url)
+                    }}
                       className={cn(
                         "vm-provider-option px-3 py-2 rounded text-xs font-medium text-left transition-all border",
                         llmProvider === p.id && "active"
@@ -454,12 +475,18 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
                 </div>
                 <div>
                   <label className="block text-xs mb-1.5 text-muted-foreground" >模型</label>
-                  <div className="flex gap-1">
-                    <input className="vm-input" placeholder="deepseek-chat / gpt-4" value={llmModel} onChange={e => setLlmModel(e.target.value)} />
-                    <Button variant="outline" size="sm" onClick={handleListModels} title="获取模型列表">
-                      <Globe className="w-3.5 h-3.5" />
+                  <div className="flex gap-2">
+                    <select aria-label="选择模型" className="vm-input min-w-0 flex-1" value={llmModel} onChange={e => setLlmModel(e.target.value)}>
+                      <option value="">请选择模型</option>
+                      {[...new Set([...(models.length ? models : MODEL_PRESETS[llmProvider] || []), ...(customModels[llmProvider] || []), llmModel])].filter(Boolean).map(model => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                    <Button variant="outline" size="sm" className="shrink-0" onClick={handleListModels} disabled={loadingModels || !llmUrl.trim()}>
+                      {loadingModels ? '加载中…' : '获取模型'}
                     </Button>
                   </div>
+                  {llmProvider === 'sub2api' && !models.length && <p className="mt-1 text-xs text-muted-foreground">填入 API Key 后点击「获取模型」，也可手动添加模型 ID。</p>}
                   <ModelChips
                     models={models}
                     provider={llmProvider}

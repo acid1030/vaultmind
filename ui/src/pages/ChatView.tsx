@@ -28,7 +28,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   const room: ChatRoom = { scope, groupId }
   const group = state?.groups.find(g => g.id === groupId)
   const [history, setHistory] = useState<ChatHistory>({ messages: [], hasMore: false, writable: false, pending: 0 })
-  const [showDetails, setShowDetails] = useState(() => window.matchMedia('(min-width: 1450px)').matches)
+  const [showDetails, setShowDetails] = useState(false)
   const [attachmentSearch, setAttachmentSearch] = useState('')
   const [draft, setDraft] = useState('')
   const [draftFiles, setDraftFiles] = useState<ChatDraftAttachment[]>([])
@@ -292,7 +292,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   const title = friend ? friend.remark || friend.name || friend.email : scope === 'group' ? group?.name || '用户组群聊' : '个人留言'
 
   return (
-    <div className={cn("vm-chat-layout animate-fade-in", showDetails && "vm-chat-with-details")}>
+    <div className={cn("vm-chat-layout vm-wechat animate-fade-in", showDetails && "vm-chat-with-details")}>
       <aside className="vm-chat-rooms glass-panel" aria-label="聊天空间">
         <div className="vm-chat-room-heading"><MessageSquare className="w-4 h-4 text-primary" /><h2>聊天空间</h2><LockKeyhole className="w-3.5 h-3.5 ml-auto text-muted-foreground" /></div>
         <button aria-label="个人留言" className={cn('vm-chat-room', scope === 'personal' && 'active')} onClick={() => {setFriendRoom('');void setContext('personal')}}>
@@ -339,10 +339,13 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
         }}>
           {history.hasMore && <div className="text-center mb-4"><Button size="sm" variant="ghost" onClick={loadOlder} disabled={olderLoading}>{olderLoading ? '正在加载…' : '加载更早的消息'}</Button></div>}
           {loading ? <div className="vm-chat-empty"><span className="vm-spinner" /><p>正在读取聊天记录…</p></div> : !history.messages.length ? <div className="vm-chat-empty"><span className="vm-chat-empty-icon">{scope === 'personal' ? <MessageSquare /> : <Users />}</span><h3>{scope === 'personal' ? '给其他设备留句话' : '开始组内交流'}</h3><p>{scope === 'personal' ? '发送文字、图片或文件后，其他设备加入同一云端账号即可获取。' : '消息与附件会加密同步到组的飞书共享文件夹。'}</p></div> : history.messages.map(message => <article key={message.id} className={cn('vm-chat-message', message.mine && 'mine')}>
+            <span className="vm-chat-avatar" aria-hidden="true">{(message.mine ? '我' : Array.from(message.senderName || message.senderEmail || '友')[0]).toUpperCase()}</span>
+            <div className="vm-chat-message-body">
             <div className="vm-chat-message-meta"><strong title={message.senderEmail}>{message.mine ? '我' : message.senderName}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></div>
             {message.text && <div className="vm-chat-bubble">{message.text}</div>}
             {Boolean(message.attachments?.length) && <div className="vm-chat-attachments">{message.attachments!.map(attachment => <ChatAttachmentView key={attachment.id} attachment={attachment} messageId={message.id} room={room} onImageLoad={() => { if (stickToBottom.current && timeline.current) timeline.current.scrollTop = timeline.current.scrollHeight }} />)}</div>}
             {message.mine && <small className="vm-chat-message-status">{message.synced ? <><CheckCheck className="w-3 h-3" />已存云端</> : '已存本机 · 待云端归档'}</small>}
+            </div>
           </article>)}
         </div>
         <form className="vm-chat-composer" onSubmit={event => { event.preventDefault(); void send() }}>

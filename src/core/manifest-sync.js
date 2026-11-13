@@ -245,8 +245,11 @@ function applyManifestToDatabase(db, queryOne, queryAll, saveDatabase, user, sco
       db.run('UPDATE library_items SET title = ?, url = ?, tags = ?, updated_at = ?, remote_only = ? WHERE id = ?',
         [item.title, item.url || '', item.tags || '', item.updatedAt || now, remoteSelected ? 1 : Number(existing.remote_only || 0), item.id]);
       updatedItems += 1;
-      indexAsset(db, { assetId: item.id, ownerUserId: user.id, scope, groupId: scope === 'group' ? groupId : '',
-        kind: item.kind, sourceTable: 'library_items', title: item.title, tags: item.tags });
+      if (remoteSelected || existing.remote_only) {
+        removeVector(db, item.id);
+        indexAsset(db, { assetId: item.id, ownerUserId: user.id, scope, groupId: scope === 'group' ? groupId : '',
+          kind: item.kind, sourceTable: 'library_items', title: item.title, tags: item.tags });
+      }
       continue;
     }
     db.run(

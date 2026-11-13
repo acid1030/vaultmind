@@ -1224,14 +1224,14 @@ function payloadFromFile(filePath) {
   };
 }
 
-async function importFileToLocal(filePath, scopeMeta = {}) {
+async function importFileToLocal(filePath, scopeMeta = {}, options = {}) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
   const { scope, groupId } = resolveScopeFromInput(scopeMeta);
   if (scope === 'group') {
     groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
   }
-  const payload = payloadFromFile(filePath);
+  const payload = options.payload || payloadFromFile(filePath);
   const plainBytes = Buffer.from(payload.contentBase64, 'base64');
   const encrypted = encryptContent(plainBytes, scope, groupId || null, user, localPassword);
   const itemId = crypto.randomUUID();
@@ -1239,10 +1239,11 @@ async function importFileToLocal(filePath, scopeMeta = {}) {
   db.run(
     `INSERT INTO decrypted_items
       (id, user_id, record_id, kind, name, source_path, saved_path, content_ciphertext, content_iv, content_tag, size, downloaded_at, scope, group_id, created_by)
-      VALUES (?, ?, '', 'file', ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, 'file', ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       itemId,
       user.id,
+      options.recordId || '',
       payload.name,
       payload.sourcePath,
       encrypted.ciphertext,
@@ -1733,7 +1734,7 @@ async function deleteFeishuFile(fileToken) {
   const token = await refreshFeishuTokenIfNeeded();
   const response = await requestJson(
     'DELETE',
-    `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}`,
+    `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}?type=file`,
     { headers: { Authorization: `Bearer ${token.accessToken}` } },
   );
   ensureFeishuPayload(response, '删除飞书文件失败');
@@ -2204,11 +2205,19 @@ async function pullManifestFromFeishu(payload) {
   const { scope, groupId } = resolveScopeFromInput(payload || {});
   const vaultId = currentVaultId(user);
   const device = currentDevice(user);
+  const checkSession = sessionGuard(user);
+  const check = () => {
+    checkSession();
+    if (scope === 'group') groupService.requireGroupAccess(db, queryOne, groupId, user.id);
+  };
+  check();
   const resolved = await resolveManifestFiles(scope, groupId, vaultId, scope === 'personal' ? user.id : '');
+  check();
   if (!resolved.manifests.length) throw new Error('云端未找到目录清单，请先执行一次同步');
   const remoteManifests = [];
   for (const file of resolved.manifests) {
     const buffer = await downloadFeishuFileBuffer(file.token);
+    check();
     const manifest = manifestService.decryptManifest(buffer, passphrase, decryptVaultPayload);
     remoteManifests.push({ file, manifest });
   }
@@ -2241,6 +2250,7 @@ async function pullManifestFromFeishu(payload) {
     passphrase,
     mode: payload.downloadMode || getSettings().syncDownloadMode,
   });
+  check();
   const newestRemote = remoteManifests[remoteManifests.length - 1];
   setStateValue(manifestStateKey(scope, groupId, vaultId), {
     ...(getManifestMeta(scope, groupId, vaultId) || {}),
@@ -2298,13 +2308,19 @@ function chatOperation(input, writable = false) {
   const user = requireUser();
   requireSessionPassword();
   if (!input || !['personal', 'group'].includes(input.scope)) throw new Error('请选择有效的聊天空间');
-  if (input.scope === 'group') groupService.requireGroupAccess(db, queryOne, String(input.groupId || ''), user.id,
-    writable ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
+  const requireAccess = () => {
+    if (input.scope === 'group') groupService.requireGroupAccess(db, queryOne, String(input.groupId || ''), user.id,
+      writable ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
+  };
+  requireAccess();
+  const check = sessionGuard(user);
+  return () => { check(); requireAccess(); };
+}
+
+function sessionGuard(user) {
   const epoch = chatSessionEpoch;
   return () => {
     if (epoch !== chatSessionEpoch || activeUser?.id !== user.id) throw new Error('登录状态已变化，请重试');
-    if (input.scope === 'group') groupService.requireGroupAccess(db, queryOne, String(input.groupId || ''), user.id,
-      writable ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
   };
 }
 
@@ -2715,8 +2731,10 @@ async function openAsset(input = {}) {
   if (sourceTable === 'records' || !sourceTable) {
     const record = queryOne('SELECT * FROM records WHERE id = ?', [assetId]);
     if (record) {
-      if (record.user_id !== user.id && record.scope !== 'group') throw new Error('无权打开该文件');
+      if (record.scope === 'group') groupService.requireGroupAccess(db, queryOne, record.group_id, user.id);
+      else if (record.user_id !== user.id) throw new Error('无权打开该文件');
       if (await openPathOrThrow(record.local_path)) return { opened: true, target: record.local_path };
+      if (input.localOnly === true) return { opened: false, needsDownload: true };
       if (record.url) {
         await shell.openExternal(record.url);
         return { opened: true, target: record.url };
@@ -2754,7 +2772,7 @@ async function openAsset(input = {}) {
   throw new Error('未找到可打开的匹配文件');
 }
 
-async function downloadRecordToLocal(recordId, feishuPassphrase) {
+async function downloadRecordToLocal(recordId, feishuPassphrase, { returnState = true } = {}) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
   const passphrase = configuredFeishuPassphrase(feishuPassphrase);
@@ -2766,13 +2784,16 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
     throw new Error('找不到这条同步记录');
   }
   const record = normalizeRecord(row);
+  const check = sessionGuard(user);
   const token = await refreshFeishuTokenIfNeeded();
+  check();
   const response = await requestBuffer('GET', `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(record.token)}/download`, {
     headers: { Authorization: `Bearer ${token.accessToken}` },
   });
   if (response.status >= 400) {
     throw new Error(`下载飞书文件失败：HTTP ${response.status} ${response.body.toString('utf8').slice(0, 300)}`);
   }
+  check();
   const payload = decryptVaultPayload(response.body, passphrase);
   const plainBytes = payload.kind === 'text'
     ? Buffer.from(payload.text || '', 'utf8')
@@ -2780,6 +2801,15 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
   const scope = record.scope || 'personal';
   const groupId = record.groupId || record.group_id || null;
   const local = encryptContent(plainBytes, scope, groupId, user, localPassword);
+  const checkRecord = () => {
+    check();
+    if (record.scope === 'group') groupService.requireGroupAccess(db, queryOne, record.groupId, user.id);
+    const current = queryOne('SELECT token, uploaded_at FROM records WHERE id = ?', [record.id]);
+    if (!current || current.token !== record.token || current.uploaded_at !== record.uploadedAt) {
+      throw new Error('同步记录已更新，请重试');
+    }
+  };
+  checkRecord();
   if (payload.kind === 'library-item' && record.assetId) {
     const library = queryOne('SELECT * FROM library_items WHERE id = ?', [record.assetId]);
     if (!library) throw new Error('同步记录关联的内容条目不存在，请先拉取目录清单');
@@ -2810,8 +2840,17 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
       text: `${library.title}\n${body.content || ''}`,
     });
     saveDatabase();
-    return publicState();
+    return returnState ? publicState() : undefined;
   }
+  let fileContent = payload.kind === 'text' ? plainBytes.toString('utf8') : '';
+  if (payload.kind === 'file') {
+    try {
+      fileContent = await extractContent.extractTextFromBuffer(plainBytes, payload.name || record.fileName);
+    } catch {
+      // ignore extraction failures
+    }
+  }
+  checkRecord();
   const existing = queryOne('SELECT id FROM decrypted_items WHERE record_id = ? AND user_id = ?', [record.id, user.id]);
   const itemId = existing ? existing.id : crypto.randomUUID();
   db.run(
@@ -2836,14 +2875,6 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
       user.id,
     ],
   );
-  let fileContent = '';
-  if (payload.kind === 'file') {
-    try {
-      fileContent = await extractContent.extractTextFromBuffer(plainBytes, payload.name || record.fileName);
-    } catch {
-      // ignore extraction failures
-    }
-  }
   searchService.indexAsset(db, {
     assetId: itemId,
     ownerUserId: user.id,
@@ -2863,7 +2894,7 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
     text: `${payload.name || record.fileName}\n${fileContent}`,
   });
   saveDatabase();
-  return publicState();
+  return returnState ? publicState() : undefined;
 }
 
 async function hydratePulledContent({ scope, groupId, passphrase, mode }) {
@@ -3106,7 +3137,7 @@ function unlockLibraryItem(itemId) {
   return { id: row.id, name: row.name, title: row.name, kind: 'text', content: bytes.toString('utf8') };
 }
 
-function openLibraryItem(itemId) {
+async function openLibraryItem(itemId, { previewOnly = false } = {}) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
   const lib = queryOne('SELECT * FROM library_items WHERE id = ?', [itemId]);
@@ -3129,12 +3160,13 @@ function openLibraryItem(itemId) {
   }
   const bytes = decryptContent(row, user, localPassword);
   if (row.kind === 'file') {
+    if (previewOnly) return { id: row.id, name: row.name, kind: row.kind, viewable: false };
     const tempDir = path.join(app.getPath('temp'), 'vaultmind-previews');
     fs.mkdirSync(tempDir, { recursive: true });
     const ext = path.extname(row.name || '') || '';
     const tempPath = path.join(tempDir, `${crypto.randomUUID()}${ext}`);
     fs.writeFileSync(tempPath, bytes);
-    const error = shell.openPath(tempPath);
+    const error = await shell.openPath(tempPath);
     if (error && error !== '') {
       throw new Error(`无法打开文件：${error}`);
     }
@@ -3512,11 +3544,50 @@ async function synthesizeWithLlm(profile, question, evidence, options = {}) {
   }
 }
 
-async function queryKnowledgeCenter(question, options = {}) {
+function knowledgeDownloadCandidates(matches, user) {
+  const candidates = new Map();
+  for (const match of matches) {
+    let record;
+    if (match.sourceTable === 'library_items') {
+      const item = queryOne('SELECT id, scope, group_id, user_id, remote_only FROM library_items WHERE id = ?', [match.assetId]);
+      if (!item?.remote_only) continue;
+      record = queryOne(
+        `SELECT * FROM records WHERE asset_id = ? AND kind = 'library-item' AND
+           ((scope = 'group' AND group_id = ?) OR (COALESCE(scope, 'personal') = 'personal' AND user_id = ?))
+         ORDER BY uploaded_at DESC, id DESC LIMIT 1`,
+        [item.id, item.scope === 'group' ? item.group_id : '', item.scope === 'group' ? '' : user.id],
+      );
+    } else if (match.sourceTable === 'records') {
+      record = queryOne('SELECT * FROM records WHERE id = ?', [match.assetId]);
+      if (record?.kind === 'library-item' && record.asset_id) {
+        if (!queryOne('SELECT id FROM library_items WHERE id = ? AND remote_only = 1', [record.asset_id])) continue;
+        record = queryOne(
+          `SELECT * FROM records WHERE asset_id = ? AND kind = 'library-item' AND
+            COALESCE(scope, 'personal') = ? AND
+            ((scope = 'group' AND group_id = ?) OR (COALESCE(scope, 'personal') = 'personal' AND user_id = ?))
+           ORDER BY uploaded_at DESC, id DESC LIMIT 1`,
+          [record.asset_id, record.scope || 'personal', record.group_id || '', user.id],
+        );
+      }
+    }
+    if (!record?.token || candidates.has(record.id)) continue;
+    if (record.kind !== 'library-item' && queryOne(
+      'SELECT id FROM decrypted_items WHERE record_id = ? AND user_id = ? AND downloaded_at >= ?',
+      [record.id, user.id, record.uploaded_at],
+    )) continue;
+    candidates.set(record.id, { id: record.id, title: match.title });
+    if (candidates.size >= 6) break;
+  }
+  return [...candidates.values()];
+}
+
+async function queryKnowledgeCenter(question, options = {}, report = () => {}) {
   const user = requireUser();
   const cleanQuestion = String(question || '').trim();
   if (!cleanQuestion) throw new Error('请输入要检索的问题');
+  const check = sessionGuard(user);
   const context = options.context || getContext();
+  if (context.scope === 'group') groupService.requireGroupAccess(db, queryOne, context.groupId, user.id);
   const includePersonal = options.includePersonal !== false && context.scope !== 'group';
   const searchContext = options.searchScope === 'all'
     ? { scope: 'all', groupId: '' }
@@ -3532,18 +3603,96 @@ async function queryKnowledgeCenter(question, options = {}) {
     : [];
   const aiProfile = getAiProfileRow(user.id);
   searchService.ensureSearchIndex(db, queryAll, user.id, {
-    decryptLibraryItem: (row) => decryptContent(row, user, requireSessionPassword()),
+    decryptLibraryItem: (row) => row.remote_only ? Buffer.from('{}') : decryptContent(row, user, requireSessionPassword()),
   });
   saveDatabase();
   const vectorOptions = {
     enabled: isLocalVectorSearchEnabled(),
     modelName: currentVectorModel(),
   };
-  const evidence = [...await searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext, vectorOptions)];
+  const findLocal = (vector = {}) => searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext, vector);
+  const notices = [];
+  const feishuToken = getFeishuToken();
+  const cloudMatches = !user.feishu_open_id_hash || (feishuToken?.user?.openId &&
+    cloudAccount.hashFeishuOpenId(feishuToken.user.openId) === user.feishu_open_id_hash);
+  const canSync = Boolean(feishuToken?.accessToken && cloudMatches);
+  if (feishuToken?.accessToken && !cloudMatches) notices.push('当前飞书账号与秘栈绑定账号不一致，已继续使用本机资料。');
+  if (canSync) {
+    const scopes = searchContext.scope === 'all'
+      ? [{ scope: 'personal' }, ...queryAll(
+        "SELECT group_id FROM group_memberships WHERE user_id = ? AND status = 'active'", [user.id],
+      ).map(row => ({ scope: 'group', groupId: row.group_id }))]
+      : [{ scope: context.scope === 'group' ? 'group' : 'personal', groupId: context.groupId }];
+    report({ stage: 'sync' });
+    let failedScopes = 0;
+    for (const scope of scopes) {
+      try {
+        await pullManifestFromFeishu({ ...scope, downloadMode: 'manual' });
+      } catch {
+        failedScopes += 1;
+      }
+      check();
+    }
+    if (failedScopes) notices.push('飞书目录未全部刷新，本次结果可能包含本机已有版本。');
+  }
+
+  report({ stage: 'match' });
+  const initial = await findLocal({ includeMetadata: true });
+  check();
+  const downloads = canSync ? knowledgeDownloadCandidates(initial, user) : [];
+  let failedDownloads = 0;
+  for (const [index, record] of downloads.entries()) {
+    report({ stage: 'download', current: index + 1, total: downloads.length, title: record.title });
+    try {
+      await downloadRecordToLocal(record.id, '', { returnState: false });
+    } catch {
+      failedDownloads += 1;
+    }
+    check();
+  }
+  if (failedDownloads) notices.push(`${failedDownloads} 份匹配资料未能取回，回答仅依据可用资料。`);
+
+  report({ stage: 'search' });
+  const finalMatches = await findLocal({ ...vectorOptions, includeMetadata: true });
+  check();
+  const terms = searchService.tokenizeQuery(cleanQuestion);
+  const withLibraryBody = (match) => {
+    const row = queryOne('SELECT * FROM library_items WHERE id = ?', [match.assetId]);
+    if (!row || row.remote_only || row.kind === 'secret') return match;
+    // Recover the body for items indexed by older builds as metadata only.
+    try {
+      const body = JSON.parse(decryptContent(row, user, requireSessionPassword()).toString('utf8'));
+      if (body.content) return { ...match, content: searchService.extractSnippet(body.content, terms) };
+    } catch { /* Keep the available metadata. */ }
+    return match;
+  };
+  const evidence = finalMatches.filter(match => match.sourceTable !== 'decrypted_items' || !queryOne(
+    `SELECT 1 FROM decrypted_items di JOIN records r ON r.id = di.record_id
+     WHERE di.id = ? AND di.downloaded_at < r.uploaded_at`, [match.assetId],
+  )).map(match => {
+    if (match.sourceTable === 'library_items') return withLibraryBody(match);
+    if (match.sourceTable !== 'records') return match;
+    const linked = queryOne(
+      "SELECT li.id, li.kind, li.title FROM records r JOIN library_items li ON li.id = r.asset_id WHERE r.id = ? AND r.kind = 'library-item'",
+      [match.assetId],
+    );
+    if (linked) {
+      if (finalMatches.some(item => item.assetId === linked.id)) return null;
+      return withLibraryBody({ ...match, assetId: linked.id, sourceTable: 'library_items', title: linked.title, kind: linked.kind });
+    }
+    const local = queryOne(
+      `SELECT di.id, idx.content FROM decrypted_items di
+       LEFT JOIN asset_search_fallback idx ON idx.asset_id = di.id
+       JOIN records r ON r.id = di.record_id
+       WHERE di.record_id = ? AND di.user_id = ? AND di.downloaded_at >= r.uploaded_at`,
+      [match.assetId, user.id],
+    );
+    return local ? { ...match, assetId: local.id, sourceTable: 'decrypted_items',
+      content: local.content ? searchService.extractSnippet(local.content, terms) : match.content } : match;
+  }).filter(Boolean).filter((match, index, matches) => matches.findIndex(item => item.assetId === match.assetId) === index);
   const setupHints = [];
 
-  const feishuToken = getFeishuToken();
-  if (feishuToken && feishuToken.accessToken && getFeishuWikiSettings().enabled) {
+  if (canSync && getFeishuWikiSettings().enabled) {
     try {
       evidence.push(...await callFeishuWikiRetriever(cleanQuestion));
     } catch (error) {
@@ -3595,7 +3744,7 @@ async function queryKnowledgeCenter(question, options = {}) {
     setupHints.push(knowledgeHints.obsidianSetupHint());
   }
 
-  const hasRemote = Boolean(feishuToken && feishuToken.accessToken && getFeishuWikiSettings().enabled)
+  const hasRemote = Boolean(canSync && getFeishuWikiSettings().enabled)
     || knowledgeSources.length + vectorSources.length + obsidianSources.length > 0;
   const actionableEvidence = evidence.filter((item) => !item.isHint);
   if (actionableEvidence.length === 0 && setupHints.length === 0) {
@@ -3606,7 +3755,10 @@ async function queryKnowledgeCenter(question, options = {}) {
     );
   }
   const allEvidence = knowledgeSafety.prepareEvidence([...actionableEvidence, ...setupHints], { limit: 6, hintLimit: 2 });
+  check();
+  report({ stage: aiProfile?.base_url && aiProfile?.model ? 'answer' : 'results' });
   const synthesis = await synthesizeWithLlm(aiProfile, cleanQuestion, allEvidence);
+  check();
   const safeAnswer = knowledgeSafety.redactSensitiveText(synthesis.answer);
   const log = {
     id: crypto.randomUUID(),
@@ -3622,7 +3774,7 @@ async function queryKnowledgeCenter(question, options = {}) {
     [log.id, user.id, log.question, log.answer, JSON.stringify(log.evidence), log.createdAt],
   );
   saveDatabase();
-  return { ...log, state: publicState(), usedLlm: synthesis.usedLlm, setupHints };
+  return { ...log, state: publicState(), usedLlm: synthesis.usedLlm, setupHints, notices };
 }
 
 function createWindow() {
@@ -4208,6 +4360,7 @@ function registerHandlers() {
     const filePaths = Array.isArray(payload && payload.filePaths) ? payload.filePaths : [];
     if (filePaths.length === 0) throw new Error('请选择至少一个本地文件');
     const scopeMeta = resolveScopeFromInput(payload || {});
+    const check = sessionGuard(requireUser());
     const uploadId = String(payload && payload.uploadId ? payload.uploadId : crypto.randomUUID());
     const total = filePaths.length;
     const records = [];
@@ -4235,7 +4388,11 @@ function registerHandlers() {
         index,
       });
       try {
-        const record = await uploadVaultPayload(payloadFromFile(filePath), configuredFeishuPassphrase(payload.passphrase), scopeMeta);
+        check();
+        const file = payloadFromFile(filePath);
+        const record = await uploadVaultPayload(file, configuredFeishuPassphrase(payload.passphrase), scopeMeta);
+        check();
+        await importFileToLocal(filePath, scopeMeta, { payload: file, recordId: record.id });
         records.push(record);
         sendUploadProgress(event, {
           uploadId,
@@ -4322,7 +4479,7 @@ function registerHandlers() {
 
   ipcMain.handle('vault:openItem', async (_event, payload) => {
     await ensureDatabase();
-    return openLibraryItem(String(payload.itemId || ''));
+    return openLibraryItem(String(payload.itemId || ''), { previewOnly: payload.previewOnly === true });
   });
 
   ipcMain.handle('vault:saveItemFile', async (_event, payload) => {
@@ -4510,9 +4667,14 @@ function registerHandlers() {
     return saveFeishuWikiSettings(input || {});
   });
 
-  ipcMain.handle('vault:queryKnowledgeCenter', async (_event, payload) => {
+  ipcMain.handle('vault:queryKnowledgeCenter', async (event, payload) => {
     await ensureDatabase();
-    return queryKnowledgeCenter(payload && payload.question, payload || {});
+    const requestId = typeof payload?.requestId === 'string' ? payload.requestId.slice(0, 64) : '';
+    return queryKnowledgeCenter(payload?.question, payload || {}, progress => {
+      if (requestId && !event.sender.isDestroyed()) {
+        event.sender.send('vault:knowledgeProgress', { requestId, ...progress });
+      }
+    });
   });
 
   ipcMain.handle('vault:pickChatAttachments', async (_event, input) => {

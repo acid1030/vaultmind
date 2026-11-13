@@ -1,0 +1,66 @@
+html.light {
+  color-scheme: light;
+  --background: 150 6% 92%;
+  --card: 150 5% 96%;
+  --surface: 150 6% 93%;
+  --surface-raised: 150 5% 97%;
+  --foreground: 150 12% 13%;
+  --muted: 150 6% 90%;
+  --muted-foreground: 150 6% 38%;
+  --border: 150 6% 84%;
+  --primary: 153 74% 29%;
+  --primary-foreground: 0 0% 100%;
+  --ring: var(--primary);
+  --accent: 148 36% 93%;
+  --accent-foreground: 153 67% 25%;
+  --shadow-card: none;
+}
+html.light :is(.vm-shell, .vm-page, .vm-auth-shell) { background: hsl(var(--background)); }
+html.light :is(.vm-sidebar, .vm-topbar) { background: hsl(var(--card)); border-color: hsl(var(--border)); box-shadow: none; }
+html.light .vm-sidebar { background: #e8ebe9; }
+html.light .vm-sidebar .vm-side-link {
+  color: hsl(var(--foreground)); background: transparent; border-color: transparent;
+  box-shadow: none; border-radius: 7px; margin-bottom: 4px;
+}
+html.light .vm-sidebar .vm-side-link > svg { color: hsl(var(--muted-foreground)); background: transparent; }
+html.light .vm-sidebar .vm-side-link:hover { background: hsl(var(--muted)); }
+html.light .vm-sidebar .vm-side-link.active { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); }
+html.light .vm-sidebar .vm-side-link.active > svg { color: hsl(var(--accent-foreground)); }
+html.light .vm-brand em { display: none; }
+html.light .vm-page[data-view] { --module: 153 65% 29%; }
+html.light .vm-page :is(.glass-card, .glass-panel, .vm-surface-card, .vm-page-hero, .vm-dashboard-stat) {
+  background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: 9px; box-shadow: none;
+}
+html.light .vm-page :is(.glass-card, .glass-panel) > :is(.vm-section-heading, .border-b) { background: transparent; }
+html.light .vm-page .vm-section-heading h2::before { display: none; }
+html.light :is(.vm-shell, .vm-auth-shell) [data-ui-variant="primary"]:not(:disabled) {
+  background: hsl(var(--primary)); color: white; border-color: transparent; box-shadow: none;
+}
+html.light :is(.vm-shell, .vm-auth-shell) [data-ui-variant="primary"]:not(:disabled):hover { filter: brightness(.92); }
+html.light .vm-auth-shell::before, html.light .vm-auth-visual > img, html.light .vm-auth-visual-shade { display: none; }
+html.light .vm-auth-frame {
+  background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: 16px;
+  box-shadow: 0 12px 40px rgb(24 38 29 / 7%);
+}
+html.light .vm-auth-visual { background: #e4ebe6; border-right: 1px solid hsl(var(--border)); }
+html.light :is(.vm-auth-visual-brand strong, .vm-auth-visual-copy h2, .vm-auth-form-heading h2) { color: hsl(var(--foreground)); text-shadow: none; }
+html.light :is(.vm-auth-visual-brand small, .vm-auth-visual-copy > p, .vm-auth-footnote) { color: hsl(var(--muted-foreground)); }
+html.light :is(.vm-auth-form-panel, .vm-auth-card) { background: hsl(var(--card)); box-shadow: none; border-color: hsl(var(--border)); }
+html.light .vm-auth-feature-row span { color: hsl(var(--accent-foreground)); background: hsl(var(--card)); border-color: hsl(var(--border)); }
+html.light .vm-auth-kicker { color: hsl(var(--primary)); }
+html.light .vm-cloud-signin { background: #ebf0ec; border-color: hsl(var(--border)); }
+html.light .vm-page[data-view="chat"] .vm-wechat .vm-chat-rooms { background: var(--wx-list); }
+html.light .vm-page[data-view="chat"] .vm-wechat .vm-chat-conversation { background: hsl(var(--background)); }
+
+html.light .vm-page[data-view="chat"] > .vm-wechat {
+  --background: 150 5% 91%;
+  --card: 150 5% 95%;
+  --surface: 150 5% 96%;
+  --wx-incoming: #f2f4f3;
+}
+html.light .vm-page[data-view="library"] .vm-library-wechat {
+  --qa-surface: #e8ebe9;
+  --qa-bar: #f0f2f1;
+  --qa-bubble: #f4f5f4;
+}
+html.light .vm-input { background: hsl(var(--surface)); }

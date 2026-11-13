@@ -242,7 +242,7 @@ export default function MainLayout() {
 
         <main className="vm-page" data-view={activeView}>
           {activeView === 'home' && <HomeView onNavigate={navigate} onSearch={() => setShowGlobalSearch(true)} />}
-          {activeView === 'library' && <LibraryView context={context.scope === 'group' ? context.groupId : 'personal'} />}
+          {activeView === 'library' && <LibraryView context={context.scope === 'group' ? context.groupId : 'personal'} onConfigureModel={() => { setConfigSection('llm'); navigate('config') }} />}
           {activeView === 'vault' && <PasswordVaultView />}
           {activeView === 'chat' && <ChatView onOpenSync={() => navigate('sync')} screenshotDelivery={screenshotDelivery} onScreenshotConsumed={consumeScreenshot} />}
           {activeView === 'groups' && <GroupsView />}
@@ -265,7 +265,7 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
   const [opening, setOpening] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [preview, setPreview] = useState<{ title: string; content: string } | null>(null)
+  const [preview, setPreview] = useState<{ title: string; content: string; next?: 'sync' | 'library' } | null>(null)
 
   useEffect(() => {
     if (!query.trim()) {
@@ -292,36 +292,17 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
   useEffect(() => setSelectedIndex(0), [results])
 
   const openResult = async (result: any) => {
-    if (result.sourceTable === 'records') {
-      setOpening(true)
-      try {
-        const opened = await vaultApi.openAsset({ assetId: result.assetId, sourceTable: 'records' })
-        if (opened?.opened) onClose()
-        else {
-          onNavigate('sync')
-          onClose()
-        }
-      } catch {
-        onNavigate('sync')
-        onClose()
-      } finally {
-        setOpening(false)
-      }
-      return
-    }
-    if (!result.assetId) {
-      onNavigate('library')
-      onClose()
+    const title = result.title || '内容预览'
+    if (result.sourceTable === 'records' || !result.assetId) {
+      setPreview({ title, content: result.content || '没有可预览的本地正文。', next: result.sourceTable === 'records' ? 'sync' : 'library' })
       return
     }
     setOpening(true)
     try {
-      const opened = await vaultApi.openItem({ itemId: result.assetId })
-      if (opened.opened) onClose()
-      else setPreview({ title: opened.name || result.title || '内容预览', content: opened.content || opened.url || '暂无可预览内容' })
+      const item = await vaultApi.openItem({ itemId: result.assetId, previewOnly: true })
+      setPreview({ title: item.name || title, content: item.content || item.url || result.content || '暂无可预览内容', next: item.kind === 'file' ? 'library' : undefined })
     } catch {
-      onNavigate('library')
-      onClose()
+      setPreview({ title, content: result.content || '无法读取本地正文。', next: 'library' })
     } finally {
       setOpening(false)
     }
@@ -358,6 +339,8 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
                 <Button variant="ghost" size="icon-sm" onClick={() => setPreview(null)}><X className="w-3.5 h-3.5" /></Button>
               </div>
               <pre className="vm-search-preview">{preview.content}</pre>
+              {preview.next === 'sync' && <p className="my-2 text-xs text-muted-foreground">这是本地同步记录。需要文件正文时，可到同步中心取回。</p>}
+              {preview.next && <Button size="sm" variant="outline" onClick={() => { onNavigate(preview.next!); onClose() }}>{preview.next === 'sync' ? '前往同步中心' : '前往知识库'}</Button>}
             </div>
           ) : searching || opening ? (
             <div className="vm-command-empty"><span className="vm-spinner" />{opening ? '正在安全打开内容...' : '正在搜索...'}</div>
@@ -374,13 +357,13 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
                 <strong>{result.title}</strong>
                 <small>{result.sourceTable || 'library_items'} · {result.scope === 'group' ? '团队空间' : '个人空间'}</small>
               </span>
-              <span className="text-[10px] text-muted-foreground">打开</span>
+              <span className="text-[10px] text-muted-foreground">预览</span>
             </button>
           )) : (
-            <div className="vm-command-empty"><Search className="w-7 h-7" /><span>搜索整个 AxonMind</span><small>支持知识条目、文件索引与团队共享内容</small></div>
+            <div className="vm-command-empty"><Search className="w-7 h-7" /><span>搜索秘栈本地库</span><small>支持本地知识条目、同步索引与已同步的团队内容</small></div>
           )}
         </div>
-        <div className="vm-command-footer"><span>↑↓ 浏览</span><span>Enter 打开</span><span>Esc 关闭</span></div>
+        <div className="vm-command-footer"><span>↑↓ 浏览</span><span>Enter 预览</span><span>Esc 关闭</span></div>
       </div>
     </div>
   )

@@ -72,7 +72,9 @@ const appPath = path.resolve(__dirname, '..', '..');
   }
 
   await window.screenshot({ path: '/tmp/electron-responsive.png' })
-  await window.click('button[title="切换亮色模式"]')
+  if (!await window.evaluate(() => document.documentElement.classList.contains('light'))) {
+    await window.click('button[title="切换亮色模式"]')
+  }
   await window.waitForTimeout(250)
   if (!await window.locator('.vm-page-hero h1').isVisible()) throw new Error('Page title is hidden after switching to the light theme')
   await window.screenshot({ path: '/tmp/electron-responsive-light.png' })

@@ -116,10 +116,21 @@ async function register(window) {
 
   // 回答需结构化展示、带来源卡片，同时不能泄露凭据。
   const question = window.locator('.vm-library-chat textarea');
+  await window.evaluate(() => {
+    window.knowledgeTestProgress = [];
+    window.stopKnowledgeTestProgress = window.vaultApi.onKnowledgeProgress(({ stage }) => window.knowledgeTestProgress.push(stage));
+  });
   await question.fill(title);
   await question.press('Enter');
   await window.locator('.vm-answer-body h3').first().waitFor({ state: 'visible' });
   await window.locator('.vm-answer-source').first().waitFor({ state: 'visible' });
+  const stages = await window.evaluate(() => {
+    window.stopKnowledgeTestProgress();
+    return window.knowledgeTestProgress;
+  });
+  if (stages.join(',') !== 'match,search,results') {
+    throw new Error(`Unexpected knowledge progress: ${stages.join(',')}`);
+  }
   const answerText = await window.locator('.vm-answer').last().innerText();
   if (answerText.includes(sensitiveValue) || answerText.includes(tokenValue)) {
     throw new Error('Knowledge answer exposed sensitive content');
@@ -151,6 +162,14 @@ async function register(window) {
   }
 
   await window.screenshot({ path: '/tmp/electron-library-answer.png' });
+
+  await window.getByRole('button', { name: '配置模型', exact: true }).waitFor();
+  const modelPrompt = window.locator('.vm-library-chat textarea');
+  await modelPrompt.fill(title);
+  await modelPrompt.press('Enter');
+  await window.getByRole('button', { name: '前往配置大模型', exact: true }).click({ timeout: 10000 });
+  await window.getByText('AI 服务商', { exact: true }).waitFor();
+  await window.getByRole('button', { name: '测试连接', exact: true }).waitFor();
 
   console.log('Content library test passed');
   console.log('Errors:', JSON.stringify(errors, null, 2));
