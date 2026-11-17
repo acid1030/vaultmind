@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { normalizeRect, createHistory, appendAnnotation, undo, redo, drawAnnotation } from '../src/screenshot/annotation-model.mjs';
+assert.deepEqual(normalizeRect({ x: 90, y: 80 }, { x: -5, y: 150 }, 100, 100), { x: 0, y: 80, width: 90, height: 20 });
+let history = createHistory();
+const brush = { tool: 'brush', points: [{ x: 1, y: 2 }, { x: 3, y: 4 }], color: '#f04452', width: 4 };
+history = appendAnnotation(history, brush);
+brush.points.push({ x: 99, y: 99 });
+assert.equal(history.items[0].points.length, 2, 'completed marks must not change when the pending gesture changes');
+history = appendAnnotation(history, { tool: 'text', x: 4, y: 5, text: '第一行\n第二行', color: '#f04452', fontSize: 24 });
+assert.equal(undo(history).items.length, 1);
+assert.equal(redo(undo(history)).items.length, 2);
+assert.equal(appendAnnotation(undo(history), { tool: 'rectangle', x: 1, y: 1, width: 9, height: 9, color: '#fff', lineWidth: 4 }).future.length, 0);
+const calls = [];
+const context = new Proxy({ measureText: text => ({ width: text.length * 10 }) }, { get(target, key) { return key in target ? target[key] : (...args) => calls.push([key, ...args]); }, set(target, key, value) { target[key] = value; return true; } });
+drawAnnotation(context, history.items[1]);
+assert.deepEqual(calls.filter(call => call[0] === 'fillText').map(call => call[1]), ['第一行', '第二行']);
+console.log('Screenshot annotation model tests passed.');

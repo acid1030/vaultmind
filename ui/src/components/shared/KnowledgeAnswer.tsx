@@ -65,10 +65,11 @@ function InlineText({ text }: { text: string }) {
 interface KnowledgeAnswerProps {
   content: string
   evidence?: Evidence[]
-  onOpenEvidence?: (evidence: Evidence) => void
+  onConfigureModel?: () => void
+  onOpenEvidence?: (evidence: Evidence, retrieve?: boolean) => void
 }
 
-export default function KnowledgeAnswer({ content, evidence = [], onOpenEvidence }: KnowledgeAnswerProps) {
+export default function KnowledgeAnswer({ content, evidence = [], onOpenEvidence, onConfigureModel }: KnowledgeAnswerProps) {
   const blocks = parseAnswer(content)
   const sources = evidence.filter(item => !item.isHint).slice(0, 6)
   return (
@@ -81,7 +82,13 @@ export default function KnowledgeAnswer({ content, evidence = [], onOpenEvidence
             const List = block.ordered ? 'ol' : 'ul'
             return <List key={index}>{block.items.map((item, itemIndex) => <li key={itemIndex}><InlineText text={item} /></li>)}</List>
           }
-          return <p key={index}><InlineText text={block.text} /></p>
+          return <p key={index}>
+            <InlineText text={block.text} />
+            {onConfigureModel && block.text.startsWith('未配置可用的大模型，') && (
+              <button type="button" className="ml-2 inline-flex items-center gap-1 font-medium text-primary underline underline-offset-2"
+                onClick={onConfigureModel}>前往配置大模型 <ArrowUpRight aria-hidden="true" className="w-3 h-3" /></button>
+            )}
+          </p>
         })}
       </div>
       {sources.length > 0 && (
@@ -93,7 +100,9 @@ export default function KnowledgeAnswer({ content, evidence = [], onOpenEvidence
               const canOpen = Boolean(openEvidence && item.assetId)
               const SourceTag = canOpen ? 'button' : 'div'
               return (
-                <SourceTag key={`${item.source}-${item.title}-${index}`} className="vm-answer-source" onClick={canOpen && openEvidence ? () => openEvidence(item) : undefined}>
+                <SourceTag key={`${item.source}-${item.title}-${index}`} className="vm-answer-source" title={canOpen ? '单击打开本地内容；双击取回云端内容并打开' : undefined}
+                  onClick={canOpen && openEvidence ? event => { if (event.detail < 2) openEvidence(item, event.detail === 0) } : undefined}
+                  onDoubleClick={canOpen && openEvidence ? () => openEvidence(item, true) : undefined}>
                   <span className="vm-answer-source-icon"><FileText className="w-3.5 h-3.5" /></span>
                   <span className="min-w-0 flex-1">
                     <strong>{item.title || '未命名资料'}</strong>

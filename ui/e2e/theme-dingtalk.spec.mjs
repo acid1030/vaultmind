@@ -17,6 +17,7 @@ async function launchApp() {
 }
 
 async function register(window) {
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first();
   if (await registerButton.isVisible().catch(() => false)) {
     await registerButton.click();
@@ -43,9 +44,9 @@ async function register(window) {
   await register(window);
 
   // ---- Theme toggle test ----
-  // Detect initial theme (should be dark by default)
+  // Fresh installations start in light mode
   const initialHtmlClass = await window.locator('html').getAttribute('class').catch(() => '');
-  console.log('Initial html class:', JSON.stringify(initialHtmlClass));
+  if (!initialHtmlClass?.split(' ').includes('light')) throw new Error('Expected light mode on first launch');
 
   // Find theme toggle button
   const toggle = window.locator('button[title="切换亮色模式"], button[title="切换暗色模式"]');
@@ -54,25 +55,10 @@ async function register(window) {
     throw new Error('Theme toggle button not found');
   }
 
-  const toggleTitle = await toggle.getAttribute('title');
-  console.log('Toggle button title:', toggleTitle);
-
-  // Click to switch to light mode
-  await toggle.click();
-  await window.waitForTimeout(800);
-
-  const lightHtmlClass = await window.locator('html').getAttribute('class').catch(() => '');
-  console.log('After toggle html class:', JSON.stringify(lightHtmlClass));
-
-  if (!lightHtmlClass || !lightHtmlClass.includes('light')) {
-    throw new Error(`Expected 'light' class on html after toggle, got: "${lightHtmlClass}"`);
-  }
-  console.log('Theme toggle: dark -> light passed');
-
   // Audit every primary page for accidental near-black panels in light mode.
-  const pageNames = ['概览', '知识库', '密码库', '添加内容', '用户组', '同步中心', '开发连接', '设置'];
+  const pageNames = ['概览', '知识库', '密码库', '添加内容', '用户组', '聊天', '同步中心', '开发连接', '设置'];
   for (const pageName of pageNames) {
-    const navButton = window.locator(`nav button:has-text("${pageName}")`).first();
+    const navButton = window.getByRole('button', { name: pageName, exact: true }).first();
     if (!await navButton.isVisible().catch(() => false)) continue;
     await navButton.click();
     await window.waitForTimeout(250);
@@ -97,15 +83,15 @@ async function register(window) {
   await window.waitForTimeout(800);
 
   const darkHtmlClass = await window.locator('html').getAttribute('class').catch(() => '');
-  console.log('After 2nd toggle html class:', JSON.stringify(darkHtmlClass));
+  console.log('After switching to dark html class:', JSON.stringify(darkHtmlClass));
   if (darkHtmlClass && darkHtmlClass.includes('light')) {
-    throw new Error(`Expected no 'light' class on html after 2nd toggle, got: "${darkHtmlClass}"`);
+    throw new Error(`Expected no 'light' class on html after switching to dark, got: "${darkHtmlClass}"`);
   }
   console.log('Theme toggle: light -> dark passed');
 
   // Audit the same routes for accidental light surfaces in dark mode.
   for (const pageName of pageNames) {
-    const navButton = window.locator(`nav button:has-text("${pageName}")`).first();
+    const navButton = window.getByRole('button', { name: pageName, exact: true }).first();
     if (!await navButton.isVisible().catch(() => false)) continue;
     await navButton.click();
     await window.waitForTimeout(250);
@@ -120,6 +106,7 @@ async function register(window) {
       .slice(0, 5)
       .map(element => ({ tag: element.tagName, className: element.className, text: (element.textContent || '').trim().slice(0, 60), background: getComputedStyle(element).backgroundColor })));
     if (lightPanels.length) throw new Error(`${pageName} 暗色模式存在近白色面板: ${JSON.stringify(lightPanels)}`);
+    await window.screenshot({ path: `/tmp/mizhan-a-${pageNames.indexOf(pageName)}.png` });
   }
   console.log('Dark theme page audit passed');
 

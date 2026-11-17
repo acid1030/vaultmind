@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Settings, Bot, BookOpen, Database, Zap, Globe,
@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
+import CloudSignin from '@/components/shared/CloudSignin'
 import PageHero from '@/components/shared/PageHero'
 import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { vaultApi, type AppUpdateState, type DatabaseBackup } from '@/lib/ipc'
@@ -30,6 +31,7 @@ const SECTIONS: { id: ConfigSection; label: string; icon: React.ReactNode; desc:
 const LLM_PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', url: 'https://api.deepseek.com' },
   { id: 'openai', label: 'OpenAI', url: 'https://api.openai.com/v1' },
+  { id: 'sub2api', label: 'Sub2API', url: 'https://api.axonclawx.cn/v1' },
   { id: 'qwen', label: '千问', url: 'https://dashscope.aliyuncs.com/compatible-mode/v1' },
   { id: 'kimi', label: 'Kimi', url: 'https://api.moonshot.cn/v1' },
   { id: 'zhipu', label: '智谱 AI', url: 'https://open.bigmodel.cn/api/paas/v4' },
@@ -49,12 +51,13 @@ const MODEL_PRESETS: Record<string, string[]> = {
   custom: [],
 }
 
-export default function ConfigView() {
+export default function ConfigView({ initialSection = 'llm' }: { initialSection?: ConfigSection }) {
   const { state, saveSettings, saveAiProfile, loginFeishu, logoutFeishu, saveLocalVectorSettings } = useAppStore()
   const toast = useToast()
   const { confirm, confirmDialog } = useConfirmDialog()
 
-  const [active, setActive] = useState<ConfigSection>('llm')
+  const [sectionSearch, setSectionSearch] = useState('')
+  const [active, setActive] = useState<ConfigSection>(initialSection)
 
   // LLM form
   const aiProfile = state?.knowledgeCenter.aiProfile
@@ -66,6 +69,8 @@ export default function ConfigView() {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'ok' | 'fail' | null>(null)
   const [models, setModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const modelRequest = useRef(0)
   const [customModels, setCustomModels] = useState<Record<string, string[]>>({})
 
   // Feishu form
@@ -168,7 +173,12 @@ export default function ConfigView() {
   }, [])
 
   useEffect(() => {
+    modelRequest.current++
+    setLoadingModels(false)
     setModels([])
+  }, [llmProvider, llmUrl, llmKey])
+
+  useEffect(() => {
     if (!llmModel && llmProvider) {
       const presets = MODEL_PRESETS[llmProvider]
       if (presets && presets[0]) setLlmModel(presets[0])
@@ -235,16 +245,21 @@ export default function ConfigView() {
   }
 
   const handleListModels = async () => {
+    const request = ++modelRequest.current
+    setLoadingModels(true)
     try {
       const result = await vaultApi.listModels({
         provider: llmProvider,
         baseUrl: llmUrl,
         apiKey: llmKey,
       })
+      if (request !== modelRequest.current) return
       setModels(result.models || [])
       toast(`找到 ${result.models?.length || 0} 个模型`, 'success')
     } catch (err: any) {
-      toast(err.message || '获取模型列表失败', 'error')
+      if (request === modelRequest.current) toast(err.message || '获取模型列表失败', 'error')
+    } finally {
+      if (request === modelRequest.current) setLoadingModels(false)
     }
   }
 
@@ -369,14 +384,21 @@ export default function ConfigView() {
         description="配置 AI 模型、知识来源、云端连接、安全恢复和应用更新。"
         details={['九类配置', state?.isFeishuLoggedIn ? '飞书已连接' : '本地模式', localVectorSearch ? '向量检索开启' : '基础检索']}
       />
-      <div className="vm-sidebar-grid">
+      <section className="vm-settings-readiness" aria-label="设置连接概况">
+        <button onClick={() => setActive('llm')}><Bot className="w-4 h-4" /><span><strong>知识问答</strong><small>{state?.knowledgeCenter.aiProfile?.model && state?.knowledgeCenter.aiProfile?.baseUrl ? '模型已配置' : '待配置模型'}</small></span></button>
+        <button onClick={() => setActive('feishu')}><CloudCog className="w-4 h-4" /><span><strong>飞书同步</strong><small>{state?.isFeishuLoggedIn ? '已登录授权' : '待连接'}</small></span></button>
+        <button onClick={() => setActive('feishu')}><ShieldCheck className="w-4 h-4" /><span><strong>云端加密保护</strong><small>{state?.settings.hasFeishuPassphrase ? '已启用' : '待连接'}</small></span></button>
+        <button onClick={() => setActive('security')}><ArchiveRestore className="w-4 h-4" /><span><strong>本地备份</strong><small>查看备份与恢复</small></span></button>
+      </section>
+      <div className="vm-sidebar-grid vm-settings-grid">
       {/* 左侧菜单 */}
       <div className="glass-card rounded-md overflow-hidden">
-        <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="px-4 py-3" style={{ borderBottom: '1px solid hsl(var(--border))' }}>
           <h2 className="text-sm font-semibold text-foreground" >配置中心</h2>
         </div>
         <div className="p-1.5 space-y-0.5">
-          {SECTIONS.map(s => (
+          <input className="vm-input mb-2" aria-label="搜索设置项" placeholder="搜索设置项" value={sectionSearch} onChange={e => setSectionSearch(e.target.value)} />
+          {SECTIONS.filter(s => `${s.label} ${s.desc}`.toLowerCase().includes(sectionSearch.toLowerCase())).map(s => (
             <button key={s.id} onClick={() => setActive(s.id)}
               className={cn(
                 "vm-settings-nav-item w-full flex items-center gap-2.5 px-3 py-2.5 rounded text-left transition-all",
@@ -394,7 +416,7 @@ export default function ConfigView() {
 
       {/* 右侧内容 */}
       <div className="glass-card rounded-md overflow-hidden">
-        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="px-5 py-4" style={{ borderBottom: '1px solid hsl(var(--border))' }}>
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center"
               style={{ background: 'hsl(190 60% 16% / 0.5)', border: '1px solid hsl(190 60% 24% / 0.3)', color: 'hsl(190 90% 68%)' }}>
@@ -407,14 +429,29 @@ export default function ConfigView() {
           </div>
         </div>
 
-        <div className="p-5">
+        <div className="p-5 vm-settings-body">
+          <aside className="vm-settings-help" aria-label="当前配置说明">
+            <ShieldCheck className="w-5 h-5" />
+            <h3>{activeSection?.label}配置说明</h3>
+            <p>{active === 'feishu' ? syncAccessMode === 'managed' ? '飞书扫码授权后自动登录并开启同步，无需设置或记录口令。' : '填写自建应用凭据并保存，再登录飞书授权。加密口令应在所有设备保持一致。' : active === 'llm' ? '选择服务商后填写模型、接口地址和 API Key，保存后使用测试连接验证配置。' : active === 'security' ? '备份与恢复操作前，先确认当前数据和目标备份。恢复前会保存保护性备份。' : '配置按当前本地账号保存。修改后请使用本页保存按钮，并检查连接或操作结果。'}</p>
+            <ol className="vm-config-steps">{(active === 'feishu' ? syncAccessMode === 'managed' ? ['点击飞书扫码登录或绑定。', '在飞书中确认授权。', '返回秘栈，账号与同步自动就绪。'] : ['填写 App ID、App Secret，并配置回调地址与所需权限。', '保存配置，登录飞书并完成授权。', '保存各设备一致的加密口令，再到同步中心创建或加入云端账号。'] : active === 'llm' ? ['选择服务商和模型。', '填写接口地址与 API Key。', '保存配置，再测试连接。'] : active === 'security' ? ['检查当前账号与数据。', '先创建并确认备份。', '选择目标备份，阅读恢复提示后操作。'] : ['按表单填写当前服务配置。', '保存后检查提示与连接结果。', '返回对应模块验证实际使用。']).map((step, index) => <li key={step}><span>{index + 1}</span>{step}</li>)}</ol>
+            <div className="vm-settings-help-note">{activeSection?.desc}</div>
+          </aside>
           {active === 'llm' && (
             <div className="space-y-4 max-w-2xl">
               <div>
                 <label className="block text-xs mb-1.5 text-muted-foreground" >AI 服务商</label>
                 <div className="grid grid-cols-3 gap-2">
-                  {(showMoreProviders ? LLM_PROVIDERS : LLM_PROVIDERS.slice(0, 6)).map(p => (
-                    <button key={p.id} onClick={() => { setLlmProvider(p.id); if (p.url) setLlmUrl(p.url) }}
+                  {(showMoreProviders ? LLM_PROVIDERS : LLM_PROVIDERS.slice(0, 7)).map(p => (
+                    <button key={p.id} onClick={() => {
+                      if (p.id !== llmProvider && (p.id === 'sub2api' || llmProvider === 'sub2api')) {
+                        setLlmKey('')
+                        setLlmModel('')
+                        setTestResult(null)
+                      }
+                      setLlmProvider(p.id)
+                      if (p.url) setLlmUrl(p.url)
+                    }}
                       className={cn(
                         "vm-provider-option px-3 py-2 rounded text-xs font-medium text-left transition-all border",
                         llmProvider === p.id && "active"
@@ -438,12 +475,18 @@ export default function ConfigView() {
                 </div>
                 <div>
                   <label className="block text-xs mb-1.5 text-muted-foreground" >模型</label>
-                  <div className="flex gap-1">
-                    <input className="vm-input" placeholder="deepseek-chat / gpt-4" value={llmModel} onChange={e => setLlmModel(e.target.value)} />
-                    <Button variant="outline" size="sm" onClick={handleListModels} title="获取模型列表">
-                      <Globe className="w-3.5 h-3.5" />
+                  <div className="flex gap-2">
+                    <select aria-label="选择模型" className="vm-input min-w-0 flex-1" value={llmModel} onChange={e => setLlmModel(e.target.value)}>
+                      <option value="">请选择模型</option>
+                      {[...new Set([...(models.length ? models : MODEL_PRESETS[llmProvider] || []), ...(customModels[llmProvider] || []), llmModel])].filter(Boolean).map(model => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                    <Button variant="outline" size="sm" className="shrink-0" onClick={handleListModels} disabled={loadingModels || !llmUrl.trim()}>
+                      {loadingModels ? '加载中…' : '获取模型'}
                     </Button>
                   </div>
+                  {llmProvider === 'sub2api' && !models.length && <p className="mt-1 text-xs text-muted-foreground">填入 API Key 后点击「获取模型」，也可手动添加模型 ID。</p>}
                   <ModelChips
                     models={models}
                     provider={llmProvider}
@@ -491,6 +534,7 @@ export default function ConfigView() {
 
           {active === 'feishu' && (
             <div className="space-y-4 max-w-2xl">
+                <CloudSignin binding />
               <div>
                 <p className="text-xs font-medium text-foreground mb-2">选择同步接入方式</p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2" role="radiogroup" aria-label="同步接入方式">
@@ -580,13 +624,13 @@ export default function ConfigView() {
                 </div>
               </div>}
 
-              <div>
+              {syncAccessMode !== 'managed' && <div>
                 <label className="block text-xs mb-1.5 text-muted-foreground">端到端加密口令</label>
                 <input className="vm-input" type="password" placeholder="至少 8 位；所有设备保持一致" value={passphrase} onChange={e => setPassphrase(e.target.value)} />
                 <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
                   口令仅保存在本机并用于加解密同步内容，AxonMind 和飞书均无法读取或找回。
                 </p>
-              </div>
+              </div>}
 
               <label className="vm-surface-card flex items-center gap-2.5 p-3 rounded-lg cursor-pointer">
                 <input
@@ -716,7 +760,7 @@ export default function ConfigView() {
                 </Button>
               </div>
 
-              <div className="pt-4" style={{ borderTop: '1px solid var(--border)' }}>
+              <div className="pt-4" style={{ borderTop: '1px solid hsl(var(--border))' }}>
                 <p className="text-xs font-medium text-foreground mb-3" >外部向量数据库（可选）</p>
                 <KnowledgeSourceConfig type="vector" />
               </div>

@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
 import { vaultApi } from '@/lib/ipc'
+import CloudSignin from '@/components/shared/CloudSignin'
 import BrandMark from '@/components/shared/BrandMark'
 import loginVisual from '@/assets/brand-login-v2.jpg'
 
@@ -150,7 +151,7 @@ export default function LoginPage() {
               <span><strong>AxonMind</strong><small>SECURE KNOWLEDGE WORKSPACE</small></span>
             </div>
             <div className="vm-auth-visual-copy">
-              <span className="vm-auth-kicker">LOCAL FIRST · END-TO-END ENCRYPTED</span>
+              <span className="vm-auth-kicker">LOCAL FIRST · ENCRYPTED SYNC</span>
               <h2>重要的信息，应该<br />安静地掌握在你手中。</h2>
               <p>把知识、密钥与项目线索收进一个可信空间，在本地检索，并按你的规则同步。</p>
               <div className="vm-auth-feature-row">
@@ -171,13 +172,16 @@ export default function LoginPage() {
                 </div>
               </div>
               <div className="mt-8">
-                <h2>{mode === 'login' ? '欢迎回来' : '建立你的本地保险库'}</h2>
-                <p>{mode === 'login' ? '使用本地密码解锁此设备。' : '先创建本机账号，之后可连接飞书开启多端协同。'}</p>
+                <h2>{hasUsers ? '欢迎回来' : '欢迎使用秘栈'}</h2>
+                <p>飞书扫码授权，即可进入你的知识空间。</p>
               </div>
             </div>
 
           {/* 登录卡片 */}
           <div className="vm-auth-card">
+            <CloudSignin />
+            <details>
+            <summary className="vm-local-login-label cursor-pointer">本机账号（离线 / 高级）</summary>
             {/* 模式切换 */}
             <div className="flex gap-1 p-1 rounded-lg mb-5 bg-muted"
               >
@@ -321,11 +325,12 @@ export default function LoginPage() {
                 </div>
               )}
             </div>
+            </details>
           </div>
 
           {/* 底部说明 */}
           <p className="vm-auth-footnote" >
-            数据默认储存在本机 SQLite · 端到端加密 · 无服务器读取明文
+            本地优先 · 加密同步 · 托管密钥自动管理
           </p>
           </section>
         </div>

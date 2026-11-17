@@ -4,17 +4,17 @@ import { cn } from '@/lib/utils'
 
 export default function ThemeToggle() {
   const [dark, setDark] = useState(() => {
-    return localStorage.getItem('theme') !== 'light'
+    return localStorage.getItem('workspace-theme') === 'dark'
   })
 
   useEffect(() => {
     const root = document.documentElement
     if (dark) {
       root.classList.remove('light')
-      localStorage.setItem('theme', 'dark')
+      localStorage.setItem('workspace-theme', 'dark')
     } else {
       root.classList.add('light')
-      localStorage.setItem('theme', 'light')
+      localStorage.setItem('workspace-theme', 'light')
     }
   }, [dark])
 

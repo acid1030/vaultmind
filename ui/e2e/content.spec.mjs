@@ -17,6 +17,7 @@ async function launchApp() {
 }
 
 async function register(window) {
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first();
   if (await registerButton.isVisible().catch(() => false)) {
     await registerButton.click();
@@ -61,6 +62,8 @@ async function register(window) {
   const tokenValue = 'ghp_1234567890abcdef1234567890abcdef1234';
   await window.fill('textarea[placeholder="文本、笔记或备注"]', `This is an end-to-end test note. password: ${sensitiveValue} token: ${tokenValue}`);
   await window.fill('input[placeholder="api, config, important"]', 'e2e, test');
+  const review = window.getByRole('region', { name: '保存前确认' });
+  await review.getByText(title, { exact: true }).waitFor();
   await window.click('button:has-text("保存")');
   await window.waitForTimeout(1500);
 
@@ -68,6 +71,7 @@ async function register(window) {
 
   // 工作台最近内容可直接打开具体条目，而不是只跳转到知识库。
   await window.click('nav button:has-text("概览")');
+  await window.locator('.vm-activity-list', { hasText: title }).waitFor();
   await window.locator('.vm-recent-row', { hasText: title }).click();
   await window.locator('.vm-content-preview').waitFor({ state: 'visible' });
   await window.getByRole('button', { name: '关闭预览' }).click();
@@ -104,16 +108,30 @@ async function register(window) {
   if (await itemRow.getByRole('button', { name: '取回' }).count()) {
     throw new Error('Local text item incorrectly requires download');
   }
+  await itemRow.click();
+  await window.getByRole('region', { name: '选中内容详情' }).waitFor();
+  await window.getByLabel('内容排序', { exact: true }).selectOption('name');
   await itemRow.getByRole('button', { name: '查看' }).click();
   await window.waitForSelector(`text=${sensitiveValue}`);
   await window.getByRole('button', { name: '关闭', exact: true }).click();
 
   // 回答需结构化展示、带来源卡片，同时不能泄露凭据。
   const question = window.locator('.vm-library-chat textarea');
+  await window.evaluate(() => {
+    window.knowledgeTestProgress = [];
+    window.stopKnowledgeTestProgress = window.vaultApi.onKnowledgeProgress(({ stage }) => window.knowledgeTestProgress.push(stage));
+  });
   await question.fill(title);
   await question.press('Enter');
   await window.locator('.vm-answer-body h3').first().waitFor({ state: 'visible' });
   await window.locator('.vm-answer-source').first().waitFor({ state: 'visible' });
+  const stages = await window.evaluate(() => {
+    window.stopKnowledgeTestProgress();
+    return window.knowledgeTestProgress;
+  });
+  if (stages.join(',') !== 'match,search,results') {
+    throw new Error(`Unexpected knowledge progress: ${stages.join(',')}`);
+  }
   const answerText = await window.locator('.vm-answer').last().innerText();
   if (answerText.includes(sensitiveValue) || answerText.includes(tokenValue)) {
     throw new Error('Knowledge answer exposed sensitive content');
@@ -145,6 +163,14 @@ async function register(window) {
   }
 
   await window.screenshot({ path: '/tmp/electron-library-answer.png' });
+
+  await window.getByRole('button', { name: '配置模型', exact: true }).waitFor();
+  const modelPrompt = window.locator('.vm-library-chat textarea');
+  await modelPrompt.fill(title);
+  await modelPrompt.press('Enter');
+  await window.getByRole('button', { name: '前往配置大模型', exact: true }).click({ timeout: 10000 });
+  await window.getByText('AI 服务商', { exact: true }).waitFor();
+  await window.getByRole('button', { name: '测试连接', exact: true }).waitFor();
 
   console.log('Content library test passed');
   console.log('Errors:', JSON.stringify(errors, null, 2));

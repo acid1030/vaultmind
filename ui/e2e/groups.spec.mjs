@@ -17,6 +17,7 @@ async function launchApp() {
 }
 
 async function register(window) {
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first();
   if (await registerButton.isVisible().catch(() => false)) {
     await registerButton.click();
@@ -60,6 +61,11 @@ async function register(window) {
   if (!isVisible) {
     throw new Error(`Created group "${groupName}" not found in list`);
   }
+
+  await window.getByRole('region', { name: '用户组概况' }).waitFor();
+  await window.getByRole('textbox', { name: '搜索用户组', exact: true }).fill(groupName);
+  await window.getByRole('textbox', { name: '搜索成员或共享内容' }).fill('not-found-test');
+  await window.getByRole('textbox', { name: '搜索成员或共享内容' }).fill('');
 
   // Invite a member
   await window.fill('input[placeholder="成员邮箱"]', 'member@example.com');

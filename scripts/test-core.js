@@ -222,6 +222,23 @@ async function main() {
   const unrelatedHits = await searchService.searchLocalAssets(db, queryAll, userA.id, '完全不存在的检索短语', { scope: 'personal', groupId: '' });
   assert.equal(unrelatedHits.length, 0, 'unmatched query must not fall back to unrelated recent items');
 
+  // A directory-only refresh must retain cached body text, but invalidate a superseded version.
+  searchService.indexAsset(db, {
+    assetId: 'item-1', ownerUserId: userA.id, kind: 'secret', title: '生产密钥', content: 'fixture-body-marker',
+  });
+  const item = { id: 'item-1', title: '生产密钥', kind: 'secret', updatedAt: new Date().toISOString() };
+  const applyDirectory = (entry) => manifestService.applyManifestToDatabase(
+    db, queryOne, queryAll, saveDatabase, userA, 'personal', '', { items: [entry] },
+    { indexAsset: searchService.indexAsset, encryptContent: () => ({}), requireSessionPassword: () => 'fixture' },
+  );
+  const bodyQuery = () => searchService.searchLocalAssets(db, queryAll, userA.id, 'fixture-body-marker', { scope: 'personal' });
+  applyDirectory(item);
+  assert.ok((await bodyQuery()).some(hit => hit.content === 'fixture-body-marker'));
+  applyDirectory({ ...item, _syncSource: 'remote' });
+  assert.equal(queryOne('SELECT remote_only FROM library_items WHERE id = ?', [item.id]).remote_only, 1);
+  assert.equal((await bodyQuery()).length, 0, 'superseded body must not be returned before fetching the new version');
+  db.run('UPDATE library_items SET remote_only = 0 WHERE id = ?', [item.id]);
+
   const localManifest = manifestService.buildManifestEntries(db, queryAll, userA.id, 'personal', '', {
     vaultId: 'vault-a', deviceId: 'device-a',
   });

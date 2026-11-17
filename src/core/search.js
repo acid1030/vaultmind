@@ -404,7 +404,7 @@ async function searchLocalAssets(db, queryAll, userId, question, context, vector
   };
 
   addRows(ftsSearch(db, queryAll, userId, ctx, ftsQuery));
-  if (merged.length < 5) {
+  if (merged.length < 5 || vectorOptions.includeMetadata) {
     addRows(likeSearchTables(db, queryAll, userId, ctx, terms.length ? terms : [q]));
   }
 
@@ -540,5 +540,6 @@ module.exports = {
   reindexAllForUser,
   ensureSearchIndex,
   tokenizeQuery,
+  extractSnippet,
   parseTags,
 };

@@ -158,7 +158,7 @@ async function runGitAction(repo, action, input = {}) {
   }
 
   const gitMap = {
-    status: ['status', '--short', '--branch'],
+    status: ['-c', 'core.quotepath=false', 'status', '--short', '--branch'],
     log: ['log', '--oneline', '--decorate', '-20'],
     diff: ['diff', '--stat'],
     branch: ['branch', '-vv'],

@@ -1,8 +1,53 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('vaultApi', {
+  annotateChatDraft: (payload) => ipcRenderer.invoke('vault:annotateChatDraft', payload),
+  getScreenshotShortcut: () => ipcRenderer.invoke('vault:getScreenshotShortcut'),
+  setScreenshotShortcut: (payload) => ipcRenderer.invoke('vault:setScreenshotShortcut', payload),
+  getPendingScreenshot: () => ipcRenderer.invoke('vault:getPendingScreenshot'),
+  ackScreenshotDelivery: (payload) => ipcRenderer.invoke('vault:ackScreenshotDelivery', payload),
+  onScreenshotDelivered: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:screenshotDelivered', listener);
+    return () => ipcRenderer.removeListener('vault:screenshotDelivered', listener);
+  },
+  onScreenshotNotice: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:screenshotNotice', listener);
+    return () => ipcRenderer.removeListener('vault:screenshotNotice', listener);
+  },
+  pickChatAttachments: (payload) => ipcRenderer.invoke('vault:pickChatAttachments', payload),
+  stageChatData: (payload) => ipcRenderer.invoke('vault:stageChatData', payload),
+  discardChatAttachments: (payload) => ipcRenderer.invoke('vault:discardChatAttachments', payload),
+  captureChatScreenshot: (payload) => ipcRenderer.invoke('vault:captureChatScreenshot', payload),
+  getChatAttachment: (payload) => ipcRenderer.invoke('vault:getChatAttachment', payload),
+  pasteChatAttachment: (payload) => ipcRenderer.invoke('vault:pasteChatAttachment', payload),
+  operateChatAttachment: (payload) => ipcRenderer.invoke('vault:operateChatAttachment', payload),
+  saveChatAttachment: (payload) => ipcRenderer.invoke('vault:saveChatAttachment', payload),
+  exportFriendDevice: payload => ipcRenderer.invoke('vault:exportFriendDevice',payload),
+  inviteFriend: payload => ipcRenderer.invoke('vault:inviteFriend',payload),
+  inspectFriendInvite: payload => ipcRenderer.invoke('vault:inspectFriendInvite',payload),
+  acceptFriendInvite: payload => ipcRenderer.invoke('vault:acceptFriendInvite',payload),
+  updateFriend: payload => ipcRenderer.invoke('vault:updateFriend',payload),
+  getChatUnread: () => ipcRenderer.invoke('vault:getChatUnread'),
+  markChatRead: (payload) => ipcRenderer.invoke('vault:markChatRead', payload),
+  deleteChatMessages: payload => ipcRenderer.invoke('vault:deleteChatMessages', payload),
+  forwardChatMessages: payload => ipcRenderer.invoke('vault:forwardChatMessages', payload),
+  listChat: (payload) => ipcRenderer.invoke('vault:listChat', payload),
+  sendChat: (payload) => ipcRenderer.invoke('vault:sendChat', payload),
+  syncChat: (payload) => ipcRenderer.invoke('vault:syncChat', payload),
+  exportChatInvite: (payload) => ipcRenderer.invoke('vault:exportChatInvite', payload),
+  acceptChatInvite: (payload) => ipcRenderer.invoke('vault:acceptChatInvite', payload),
+  onChatStatus: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:chatStatus', listener);
+    return () => ipcRenderer.removeListener('vault:chatStatus', listener);
+  },
   getState: () => ipcRenderer.invoke('vault:getState'),
   register: (payload) => ipcRenderer.invoke('vault:register', payload),
+  beginCloudSignin: () => ipcRenderer.invoke('vault:beginCloudSignin'),
+  finishCloudSignin: payload => ipcRenderer.invoke('vault:finishCloudSignin',payload),
   loginLocal: (payload) => ipcRenderer.invoke('vault:loginLocal', payload),
   logoutLocal: () => ipcRenderer.invoke('vault:logoutLocal'),
   updateRecovery: (payload) => ipcRenderer.invoke('vault:updateRecovery', payload),
@@ -45,6 +90,11 @@ contextBridge.exposeInMainWorld('vaultApi', {
   saveVectorSources: (payload) => ipcRenderer.invoke('vault:saveVectorSources', payload),
   saveObsidianSources: (payload) => ipcRenderer.invoke('vault:saveObsidianSources', payload),
   saveFeishuWikiSettings: (payload) => ipcRenderer.invoke('vault:saveFeishuWikiSettings', payload),
+  onKnowledgeProgress: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('vault:knowledgeProgress', listener);
+    return () => ipcRenderer.removeListener('vault:knowledgeProgress', listener);
+  },
   queryKnowledgeCenter: (payload) => ipcRenderer.invoke('vault:queryKnowledgeCenter', payload),
   saveProjectAccount: (payload) => ipcRenderer.invoke('vault:saveProjectAccount', payload),
   saveProjectRepository: (payload) => ipcRenderer.invoke('vault:saveProjectRepository', payload),

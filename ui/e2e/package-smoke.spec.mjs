@@ -21,6 +21,7 @@ try {
   )
   if (!brandImagesReady) throw new Error('打包应用未正确加载品牌图片')
   await window.getByRole('button', { name: '注册' }).first().click()
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   await window.fill('input[placeholder="you@example.com"]', `package-${Date.now()}@example.com`)
   await window.fill('input[placeholder="你的名字"]', 'PackageTester')
   await window.fill('input[placeholder="至少 8 位"]', 'TestPass123!')

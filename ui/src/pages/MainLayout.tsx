@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bell, BookOpen, Check, ChevronDown, Cloud, FolderGit2, Home, KeyRound,
-  LogOut, Plus, Search, Settings, Users, X,
+  LogOut, Plus, Search, Settings, Users, X, MessageSquare, Layers,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store/app'
 import { useToast } from '@/components/shared/Toast'
-import { vaultApi } from '@/lib/ipc'
+import { vaultApi, type ChatUnread, type ScreenshotDelivery } from '@/lib/ipc'
 import HomeView from './HomeView'
 import LibraryView from './LibraryView'
 import GroupsView from './GroupsView'
@@ -16,10 +16,10 @@ import ProjectsView from './ProjectsView'
 import ConfigView from './ConfigView'
 import PasswordVaultView from './PasswordVaultView'
 import SyncCenterView from './SyncCenterView'
+import ChatView from './ChatView'
 import ThemeToggle from '../components/shared/ThemeToggle'
-import BrandMark from '../components/shared/BrandMark'
 
-type NavView = 'home' | 'library' | 'vault' | 'groups' | 'projects' | 'add' | 'sync' | 'config'
+type NavView = 'chat' | 'home' | 'library' | 'vault' | 'groups' | 'projects' | 'add' | 'sync' | 'config'
 
 const NAV_GROUPS = [
   {
@@ -34,6 +34,7 @@ const NAV_GROUPS = [
   {
     label: '组织与连接',
     items: [
+      { id: 'chat' as NavView, label: '聊天', icon: MessageSquare, Layers, description: '个人多端留言与用户组群聊' },
       { id: 'groups' as NavView, label: '用户组', icon: Users, description: '成员与共享空间' },
       { id: 'sync' as NavView, label: '同步中心', icon: Cloud, description: '飞书加密同步' },
     ],
@@ -42,12 +43,12 @@ const NAV_GROUPS = [
     label: '高级工具',
     items: [
       { id: 'projects' as NavView, label: '开发连接', icon: FolderGit2, description: 'Git / SVN 辅助入口' },
-      { id: 'config' as NavView, label: '设置', icon: Settings, description: '模型、数据源与账户' },
     ],
   },
 ]
 
 const VIEW_META: Record<NavView, { title: string; subtitle: string }> = {
+  chat: { title: '聊天', subtitle: '个人跨端留言与群内共享，消息和附件加密保存到飞书' },
   home: { title: '工作台概览', subtitle: '从一个清晰入口掌握知识、密钥、协作与同步状态' },
   library: { title: '知识库', subtitle: '浏览内容、查找线索，并基于可信资料进行问答' },
   vault: { title: '密码库', subtitle: '集中管理本地加密的密码、Token 与密钥' },
@@ -61,10 +62,30 @@ const VIEW_META: Record<NavView, { title: string; subtitle: string }> = {
 export default function MainLayout() {
   const { state, logout, setContext, pendingInvites } = useAppStore()
   const toast = useToast()
+  const [configSection, setConfigSection] = useState<'llm' | 'feishu'>('llm')
   const [activeView, setActiveView] = useState<NavView>('home')
+  const [screenshotDelivery, setScreenshotDelivery] = useState<ScreenshotDelivery | null>(null)
   const [contextOpen, setContextOpen] = useState(false)
   const [showGlobalSearch, setShowGlobalSearch] = useState(false)
   const contextMenuRef = useRef<HTMLDivElement>(null)
+
+  const [chatUnread, setChatUnread] = useState<ChatUnread | null>(null)
+  const userId = state?.auth.user?.id
+  useEffect(() => {
+    let current = true
+    let updated = false
+    setChatUnread(null)
+    const unsubscribe = vaultApi.onChatStatus(status => {
+      if (status.unread !== undefined) {
+        updated = true
+        setChatUnread(status.unread)
+      }
+    })
+    void vaultApi.getChatUnread().then(counts => {
+      if (current && !updated) setChatUnread(counts)
+    }).catch(() => {})
+    return () => { current = false; unsubscribe() }
+  }, [userId])
 
   const context = state?.context || { scope: 'personal' as const, groupId: '', groupName: '' }
   const groups = state?.groups || []
@@ -79,6 +100,7 @@ export default function MainLayout() {
   const meta = VIEW_META[activeView]
 
   const navigate = (view: NavView) => {
+    if (view === 'config') setConfigSection('llm')
     setActiveView(view)
     setContextOpen(false)
   }
@@ -88,6 +110,25 @@ export default function MainLayout() {
     else await setContext('group', value)
     setContextOpen(false)
     toast(`已切换到 ${contexts.find(item => item.value === value)?.label}`, 'info', 2000)
+  }
+
+  useEffect(() => {
+    let active = true
+    const receive = async (delivery: ScreenshotDelivery) => {
+      if (!active) return
+      await setContext(delivery.scope, delivery.groupId)
+      if (!active) return
+      setActiveView('chat')
+      setScreenshotDelivery(delivery)
+    }
+    const offDelivery = vaultApi.onScreenshotDelivered(delivery => { void receive(delivery) })
+    const offNotice = vaultApi.onScreenshotNotice(value => toast(value.message, 'warning'))
+    vaultApi.getPendingScreenshot().then(delivery => { if (delivery) void receive(delivery) }).catch(() => {})
+    return () => { active = false; offDelivery(); offNotice() }
+  }, [setContext, toast])
+  const consumeScreenshot = async (id: string, discard = false) => {
+    await vaultApi.ackScreenshotDelivery({ id, discard })
+    setScreenshotDelivery(previous => previous?.id === id ? null : previous)
   }
 
   useEffect(() => {
@@ -118,10 +159,10 @@ export default function MainLayout() {
     <div className="vm-shell">
       <aside className="vm-sidebar">
         <button className="vm-brand" onClick={() => navigate('home')} aria-label="返回工作台概览">
-          <BrandMark size="sm" decorative />
+          <span className="vm-console-logo" aria-hidden="true"><Layers /></span>
           <span className="vm-sidebar-copy">
-            <strong>AxonMind</strong>
-            <small>SECURE KNOWLEDGE WORKSPACE</small>
+            <strong>秘栈 <em>CONTROL</em></strong>
+            <small>PRIVATE KNOWLEDGE NETWORK</small>
           </span>
         </button>
 
@@ -134,13 +175,18 @@ export default function MainLayout() {
                 return (
                   <button
                     key={item.id}
+                    data-module={item.id}
                     title={item.description}
+                    aria-label={item.id === 'chat' && chatUnread?.total ? `聊天，${chatUnread.total} 条未读消息` : item.label}
                     aria-current={activeView === item.id ? 'page' : undefined}
                     onClick={() => navigate(item.id)}
                     className={cn('vm-side-link', activeView === item.id && 'active')}
                   >
                     <Icon className="w-[18px] h-[18px]" />
                     <span className="vm-sidebar-copy flex-1 text-left">{item.label}</span>
+                    {item.id === 'chat' && Boolean(chatUnread?.total) && (
+                      <span className="vm-chat-unread" aria-hidden="true">{chatUnread!.total > 99 ? '99+' : chatUnread!.total}</span>
+                    )}
                     {item.id === 'groups' && pendingInvites.length > 0 && <span className="vm-nav-dot" />}
                   </button>
                 )
@@ -150,6 +196,10 @@ export default function MainLayout() {
         </nav>
 
         <div className="vm-sidebar-footer">
+          <button className={cn('vm-side-link', activeView === 'config' && 'active')} data-module="config" aria-label="设置" aria-current={activeView === 'config' ? 'page' : undefined} onClick={() => navigate('config')}>
+            <Settings className="w-[18px] h-[18px]" />
+            <span className="vm-sidebar-copy flex-1 text-left">设置</span>
+          </button>
           <button className={cn('vm-connection-card', isFeishuLoggedIn && 'connected')} onClick={() => navigate('sync')}>
             <span className="vm-connection-icon"><Cloud className="w-4 h-4" /></span>
             <span className="vm-sidebar-copy min-w-0 text-left">
@@ -163,7 +213,7 @@ export default function MainLayout() {
       <section className="vm-workspace">
         <header className="vm-topbar">
           <div className="vm-topbar-heading min-w-0">
-            <span className="vm-topbar-breadcrumb">AxonMind / {currentContext.label}</span>
+            <span className="vm-topbar-breadcrumb">秘栈 / {currentContext.label}</span>
             <h1 className="truncate text-base font-semibold text-foreground">{meta.title}</h1>
             <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{meta.subtitle}</p>
           </div>
@@ -211,15 +261,16 @@ export default function MainLayout() {
           </div>
         </header>
 
-        <main className="vm-page">
+        <main className="vm-page" data-view={activeView}>
           {activeView === 'home' && <HomeView onNavigate={navigate} onSearch={() => setShowGlobalSearch(true)} />}
-          {activeView === 'library' && <LibraryView context={context.scope === 'group' ? context.groupId : 'personal'} />}
+          {activeView === 'library' && <LibraryView context={context.scope === 'group' ? context.groupId : 'personal'} onConfigureModel={() => { setConfigSection('llm'); navigate('config') }} />}
           {activeView === 'vault' && <PasswordVaultView />}
+          {activeView === 'chat' && <ChatView onOpenSync={() => navigate('sync')} screenshotDelivery={screenshotDelivery} onScreenshotConsumed={consumeScreenshot} />}
           {activeView === 'groups' && <GroupsView />}
           {activeView === 'add' && <AddContentView />}
           {activeView === 'projects' && <ProjectsView />}
-          {activeView === 'sync' && <SyncCenterView />}
-          {activeView === 'config' && <ConfigView />}
+          {activeView === 'sync' && <SyncCenterView onConfigureFeishu={() => { setConfigSection('feishu'); setActiveView('config') }} />}
+          {activeView === 'config' && <ConfigView initialSection={configSection} />}
         </main>
       </section>
 
@@ -235,7 +286,7 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
   const [opening, setOpening] = useState(false)
   const [searchError, setSearchError] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [preview, setPreview] = useState<{ title: string; content: string } | null>(null)
+  const [preview, setPreview] = useState<{ title: string; content: string; next?: 'sync' | 'library' } | null>(null)
 
   useEffect(() => {
     if (!query.trim()) {
@@ -262,36 +313,17 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
   useEffect(() => setSelectedIndex(0), [results])
 
   const openResult = async (result: any) => {
-    if (result.sourceTable === 'records') {
-      setOpening(true)
-      try {
-        const opened = await vaultApi.openAsset({ assetId: result.assetId, sourceTable: 'records' })
-        if (opened?.opened) onClose()
-        else {
-          onNavigate('sync')
-          onClose()
-        }
-      } catch {
-        onNavigate('sync')
-        onClose()
-      } finally {
-        setOpening(false)
-      }
-      return
-    }
-    if (!result.assetId) {
-      onNavigate('library')
-      onClose()
+    const title = result.title || '内容预览'
+    if (result.sourceTable === 'records' || !result.assetId) {
+      setPreview({ title, content: result.content || '没有可预览的本地正文。', next: result.sourceTable === 'records' ? 'sync' : 'library' })
       return
     }
     setOpening(true)
     try {
-      const opened = await vaultApi.openItem({ itemId: result.assetId })
-      if (opened.opened) onClose()
-      else setPreview({ title: opened.name || result.title || '内容预览', content: opened.content || opened.url || '暂无可预览内容' })
+      const item = await vaultApi.openItem({ itemId: result.assetId, previewOnly: true })
+      setPreview({ title: item.name || title, content: item.content || item.url || result.content || '暂无可预览内容', next: item.kind === 'file' ? 'library' : undefined })
     } catch {
-      onNavigate('library')
-      onClose()
+      setPreview({ title, content: result.content || '无法读取本地正文。', next: 'library' })
     } finally {
       setOpening(false)
     }
@@ -328,6 +360,8 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
                 <Button variant="ghost" size="icon-sm" onClick={() => setPreview(null)}><X className="w-3.5 h-3.5" /></Button>
               </div>
               <pre className="vm-search-preview">{preview.content}</pre>
+              {preview.next === 'sync' && <p className="my-2 text-xs text-muted-foreground">这是本地同步记录。需要文件正文时，可到同步中心取回。</p>}
+              {preview.next && <Button size="sm" variant="outline" onClick={() => { onNavigate(preview.next!); onClose() }}>{preview.next === 'sync' ? '前往同步中心' : '前往知识库'}</Button>}
             </div>
           ) : searching || opening ? (
             <div className="vm-command-empty"><span className="vm-spinner" />{opening ? '正在安全打开内容...' : '正在搜索...'}</div>
@@ -344,13 +378,13 @@ function GlobalSearch({ onClose, onNavigate }: { onClose: () => void; onNavigate
                 <strong>{result.title}</strong>
                 <small>{result.sourceTable || 'library_items'} · {result.scope === 'group' ? '团队空间' : '个人空间'}</small>
               </span>
-              <span className="text-[10px] text-muted-foreground">打开</span>
+              <span className="text-[10px] text-muted-foreground">预览</span>
             </button>
           )) : (
-            <div className="vm-command-empty"><Search className="w-7 h-7" /><span>搜索整个 AxonMind</span><small>支持知识条目、文件索引与团队共享内容</small></div>
+            <div className="vm-command-empty"><Search className="w-7 h-7" /><span>搜索秘栈本地库</span><small>支持本地知识条目、同步索引与已同步的团队内容</small></div>
           )}
         </div>
-        <div className="vm-command-footer"><span>↑↓ 浏览</span><span>Enter 打开</span><span>Esc 关闭</span></div>
+        <div className="vm-command-footer"><span>↑↓ 浏览</span><span>Enter 预览</span><span>Esc 关闭</span></div>
       </div>
     </div>
   )

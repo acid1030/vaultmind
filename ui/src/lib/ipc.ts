@@ -1,3 +1,21 @@
+export type ChatUnread = { personal: number; groups: Record<string, number>; total: number }
+
+export interface CloudSigninResult {
+  state?: VaultState
+  name?: string
+  binding?: boolean
+  needsRecovery?: boolean
+  needsLocalPassword?: boolean
+}
+
+export interface KnowledgeProgress {
+  requestId: string
+  stage: 'sync' | 'match' | 'download' | 'search' | 'answer' | 'results'
+  current?: number
+  total?: number
+  title?: string
+}
+
 /**
  * AxonMind IPC Type Bridge
  *
@@ -224,6 +242,8 @@ export interface ProjectsData {
   repositories: ProjectRepository[]
 }
 
+export interface FriendContact { groupId: string; email: string; name: string; remark: string; status: 'pending' | 'accepted'; folderToken: string }
+
 export interface VaultState {
   auth: {
     hasUsers: boolean
@@ -234,6 +254,8 @@ export interface VaultState {
   isFeishuLoggedIn: boolean
   feishuUser: { name: string; openId: string; avatarUrl: string } | null
   context: VaultContext
+  managedSignin?: {available:boolean}
+  friends?: FriendContact[]
   groups: VaultGroup[]
   pendingInvites: PendingInvite[]
   manifestMeta: ManifestMeta | null
@@ -297,7 +319,82 @@ export interface DatabaseBackup {
 
 // ── VaultApi Interface ────────────────────────────────────
 
+export interface ChatRoom {
+  scope: 'personal' | 'group'
+  groupId?: string
+}
+export interface ChatAttachment {
+  id: string
+  name: string
+  size: number
+  mime: string
+  sha256: string
+  fileToken?: string
+}
+export interface ChatDraftAttachment extends ChatAttachment { preview?: string }
+export interface ChatMessage {
+  id: string
+  senderId: string
+  senderName: string
+  senderEmail: string
+  deviceId: string
+  createdAt: string
+  text: string
+  attachments?: ChatAttachment[]
+  synced: boolean
+  mine: boolean
+}
+export interface ChatHistory {
+  readThrough?: number
+  messages: ChatMessage[]
+  hasMore: boolean
+  writable: boolean
+  pending: number
+  lastSyncAt?: string
+  lastError?: string
+}
+export interface ChatSyncResult {
+  uploaded: number
+  received: number
+  errors: string[]
+}
+
+export interface ScreenshotShortcutState { accelerator: string; registered: boolean; error: string }
+export interface ScreenshotDelivery extends ChatRoom { id: string; attachments: ChatDraftAttachment[] }
 export interface VaultApi {
+  annotateChatDraft: (input: ChatRoom & { attachmentId: string }) => Promise<{ canceled: boolean; attachments: ChatDraftAttachment[] }>
+  getScreenshotShortcut: () => Promise<ScreenshotShortcutState>
+  setScreenshotShortcut: (input: { accelerator: string }) => Promise<ScreenshotShortcutState>
+  getPendingScreenshot: () => Promise<ScreenshotDelivery | null>
+  ackScreenshotDelivery: (input: { id: string; discard?: boolean }) => Promise<{ ok: boolean }>
+  onScreenshotDelivered: (callback: (payload: ScreenshotDelivery) => void) => () => void
+  onScreenshotNotice: (callback: (payload: { message: string }) => void) => () => void
+
+  pickChatAttachments: (input: ChatRoom & { imagesOnly?: boolean }) => Promise<{ canceled: boolean; attachments: ChatDraftAttachment[] }>
+  stageChatData: (input: ChatRoom & { files: { name: string; base64: string }[] }) => Promise<{ attachments: ChatDraftAttachment[] }>
+  discardChatAttachments: (input: { ids: string[] }) => Promise<{ ok: boolean }>
+  captureChatScreenshot: (input: ChatRoom) => Promise<{ canceled: boolean; attachments: ChatDraftAttachment[] }>
+  getChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string; thumbnail?: boolean }) => Promise<{ preview: string }>
+  pasteChatAttachment: (input: ChatRoom) => Promise<{ attachments: ChatDraftAttachment[] }>
+  operateChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string; action: 'open' | 'reveal' | 'copyPath' | 'copyImage' | 'copyFile' }) => Promise<void>
+  saveChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string }) => Promise<{ canceled: boolean }>
+
+  exportFriendDevice: (input:{groupId:string}) => Promise<{code:string}>
+  inviteFriend: (input: {email:string;folderToken:string}) => Promise<{code:string;groupId:string}>
+  inspectFriendInvite: (input:{code:string}) => Promise<{kind:'request'|'accepted'|'device';email:string;name:string}>
+  acceptFriendInvite: (input:{code:string}) => Promise<{code:string;groupId:string}>
+  updateFriend: (input:{groupId:string;remark?:string;remove?:boolean}) => Promise<FriendContact[]>
+  getChatUnread: () => Promise<ChatUnread>
+  markChatRead: (input: ChatRoom & { readThrough: number }) => Promise<void>
+  deleteChatMessages: (input: ChatRoom & { ids: string[] }) => Promise<number>
+  forwardChatMessages: (input: ChatRoom & { ids: string[]; target: ChatRoom }) => Promise<number>
+  listChat: (input: ChatRoom & { before?: { createdAt: string; id: string } }) => Promise<ChatHistory>
+  sendChat: (input: ChatRoom & { text: string; attachmentIds?: string[] }) => Promise<ChatMessage>
+  syncChat: (input: ChatRoom) => Promise<ChatSyncResult>
+  exportChatInvite: (input: { groupId: string; email: string; role: 'member' | 'viewer' }) => Promise<{ code: string; expiresAt: string }>
+  acceptChatInvite: (input: { code: string }) => Promise<{ groupId: string; state: VaultState }>
+  onChatStatus: (callback: (status: { syncing?: boolean; unread?: ChatUnread | null; readChanged?: boolean }) => void) => () => void
+
   getState: () => Promise<VaultState>
   register: (payload: {
     email: string
@@ -306,6 +403,8 @@ export interface VaultApi {
     phone?: string
     recoveryEmail?: string
   }) => Promise<VaultState & { recoveryCode: string; acceptedInvites: any[] }>
+  beginCloudSignin: () => Promise<CloudSigninResult>
+  finishCloudSignin: (input:{passphrase?:string;localPassword?:string}) => Promise<CloudSigninResult>
   loginLocal: (payload: { email: string; password: string }) => Promise<VaultState & { acceptedInvites: any[] }>
   logoutLocal: () => Promise<VaultState>
   updateRecovery: (payload: { phone?: string; recoveryEmail?: string }) => Promise<VaultState>
@@ -331,7 +430,7 @@ export interface VaultApi {
   downloadRecord: (payload: any) => Promise<VaultState>
   openAsset: (payload: any) => Promise<any>
   unlockItem: (payload: { itemId: string }) => Promise<{ id: string; name: string; text: string }>
-  openItem: (payload: { itemId: string }) => Promise<{ id: string; name: string; kind: string; content?: string; url?: string; opened?: boolean; path?: string; viewable?: boolean }>
+  openItem: (payload: { itemId: string; previewOnly?: boolean }) => Promise<{ id: string; name: string; kind: string; content?: string; url?: string; opened?: boolean; path?: string; viewable?: boolean }>
   saveItemFile: (payload: { itemId: string }) => Promise<VaultState>
   forgetRecord: (recordId: string) => Promise<VaultState>
   forgetItem: (itemId: string) => Promise<VaultState>
@@ -343,6 +442,7 @@ export interface VaultApi {
   saveVectorSources: (sources: any[]) => Promise<VaultState>
   saveObsidianSources: (sources: any[]) => Promise<VaultState>
   saveFeishuWikiSettings: (input: any) => Promise<VaultState>
+  onKnowledgeProgress: (callback: (progress: KnowledgeProgress) => void) => () => void
   queryKnowledgeCenter: (payload: any) => Promise<any>
   saveProjectAccount: (payload: any) => Promise<VaultState>
   saveProjectRepository: (payload: any) => Promise<VaultState>
@@ -385,6 +485,38 @@ export interface VaultApi {
 // ── Dev-mode mock (when not running in Electron) ──────────
 
 const mockVaultApi: VaultApi = {
+  beginCloudSignin: async () => { throw new Error('Electron unavailable') },
+  finishCloudSignin: async () => { throw new Error('Electron unavailable') },
+  exportFriendDevice: async () => { throw new Error('Electron unavailable') },
+  inviteFriend: async () => { throw new Error('Electron unavailable') },
+  inspectFriendInvite: async () => { throw new Error('Electron unavailable') },
+  acceptFriendInvite: async () => { throw new Error('Electron unavailable') },
+  updateFriend: async () => { throw new Error('Electron unavailable') },
+  annotateChatDraft: async () => { throw new Error('Electron 不可用') },
+  getScreenshotShortcut: async () => ({ accelerator: 'CommandOrControl+Alt+A', registered: false, error: 'Electron 不可用' }),
+  setScreenshotShortcut: async () => { throw new Error('Electron 不可用') },
+  getPendingScreenshot: async () => null,
+  ackScreenshotDelivery: async () => ({ ok: true }),
+  onScreenshotDelivered: () => () => {},
+  onScreenshotNotice: () => () => {},
+  pickChatAttachments: async () => { throw new Error('Electron 不可用') },
+  stageChatData: async () => { throw new Error('Electron 不可用') },
+  discardChatAttachments: async () => ({ ok: true }),
+  captureChatScreenshot: async () => { throw new Error('Electron 不可用') },
+  getChatAttachment: async () => { throw new Error('Electron 不可用') },
+  pasteChatAttachment: async () => ({ attachments: [] }),
+  operateChatAttachment: async () => { throw new Error('Electron 不可用') },
+  saveChatAttachment: async () => { throw new Error('Electron 不可用') },
+  getChatUnread: async () => ({ personal: 0, groups: {}, total: 0 }),
+  markChatRead: async () => {},
+  deleteChatMessages: async () => { throw new Error('Electron 不可用') },
+  forwardChatMessages: async () => { throw new Error('Electron 不可用') },
+  listChat: async () => { throw new Error('Electron 不可用') },
+  sendChat: async () => { throw new Error('Electron 不可用') },
+  syncChat: async () => { throw new Error('Electron 不可用') },
+  exportChatInvite: async () => { throw new Error('Electron 不可用') },
+  acceptChatInvite: async () => { throw new Error('Electron 不可用') },
+  onChatStatus: () => () => {},
   getState: async () => ({
     auth: { hasUsers: false, isLoggedIn: false, user: null },
     settings: { syncAccessMode: 'managed', managedServiceUrl: '', appId: '', appSecret: '', feishuPassphrase: '', hasFeishuPassphrase: false, folderToken: 'root', redirectPort: 37891, feishuAutoSync: true, syncIntervalSeconds: 30, syncConflictStrategy: 'newest', syncDownloadMode: 'all', syncDeviceName: '' },
@@ -452,6 +584,7 @@ const mockVaultApi: VaultApi = {
   saveVectorSources: async () => { throw new Error('Electron 不可用') },
   saveObsidianSources: async () => { throw new Error('Electron 不可用') },
   saveFeishuWikiSettings: async () => { throw new Error('Electron 不可用') },
+  onKnowledgeProgress: () => () => {},
   queryKnowledgeCenter: async () => { throw new Error('Electron 不可用') },
   saveProjectAccount: async () => { throw new Error('Electron 不可用') },
   saveProjectRepository: async () => { throw new Error('Electron 不可用') },

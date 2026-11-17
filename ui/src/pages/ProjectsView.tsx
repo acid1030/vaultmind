@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react'
+import { useState, useRef } from 'react'
+import { projectStatus } from '@/lib/projectStatus'
 import { Button } from '@/components/ui/button'
 import {
   GitBranch, Plus, Trash2, Terminal, RefreshCw, Download,
@@ -21,11 +22,15 @@ export default function ProjectsView() {
   const projects = state?.projects || { accounts: [], repositories: [] }
   const context = state?.context || { scope: 'personal' as const, groupId: '', groupName: '' }
 
+  const [repoSearch, setRepoSearch] = useState('')
+  const [runs, setRuns] = useState<{ repoId: string; action: string; time: string; success: boolean }[]>([])
+  const selectedRepoRef = useRef('')
   const [activeTab, setActiveTab] = useState<ProjectTab>('repos')
   const [showAccountModal, setShowAccountModal] = useState(false)
   const [showRepoModal, setShowRepoModal] = useState(false)
   const [selectedRepo, setSelectedRepo] = useState<string>('')
   const [output, setOutput] = useState<string>('')
+  const [statusSnapshot, setStatusSnapshot] = useState<{ repoId: string; output: string; time: string } | null>(null)
   const [running, setRunning] = useState(false)
   const [commitMsg, setCommitMsg] = useState('')
 
@@ -46,6 +51,10 @@ export default function ProjectsView() {
   const repos = projects.repositories
   const accounts = projects.accounts
   const currentRepo = repos.find(r => r.id === selectedRepo)
+  selectedRepoRef.current = selectedRepo
+  const currentRuns = runs.filter(run => run.repoId === selectedRepo)
+  const snapshot = statusSnapshot?.repoId === selectedRepo ? statusSnapshot : null
+  const statusView = snapshot ? projectStatus(snapshot.output, currentRepo?.tool || 'git') : null
 
   const handleSaveAccount = async () => {
     if (!accLabel.trim() || !accSecret.trim()) {
@@ -127,17 +136,23 @@ export default function ProjectsView() {
   }
 
   const handleAction = async (action: string, message?: string) => {
-    if (!selectedRepo) return
+    if (!selectedRepo || running) return false
+    const actionRepo = selectedRepo
     setRunning(true)
+    if (!['status', 'log'].includes(action)) setStatusSnapshot(null)
     setOutput(`$ ${action}...\n`)
     const result = await runProjectAction(selectedRepo, action, message)
     setRunning(false)
+    setRuns(previous => [{ repoId: actionRepo, action, time: new Date().toISOString(), success: !result.error }, ...previous].slice(0, 30))
+    if (selectedRepoRef.current !== actionRepo) return !result.error
     if (result.error) {
       setOutput(prev => prev + `Error: ${result.error}`)
       toast(`操作失败: ${result.error}`, 'error')
     } else {
       setOutput(result.output || '(无输出)')
+      if (action === 'status') setStatusSnapshot({ repoId: actionRepo, output: result.output || '', time: new Date().toISOString() })
     }
+    return !result.error
   }
 
   const handleCommit = async () => {
@@ -145,8 +160,7 @@ export default function ProjectsView() {
       toast('请输入提交信息', 'warning')
       return
     }
-    await handleAction('commit', commitMsg.trim())
-    setCommitMsg('')
+    if (await handleAction('commit', commitMsg.trim())) setCommitMsg('')
   }
 
   return (
@@ -157,6 +171,7 @@ export default function ProjectsView() {
         description="管理 Git 与 SVN 项目、授权账号和本地工作目录，并执行常用仓库操作。"
         details={[`${repos.length} 个仓库`, `${accounts.length} 个账号`, context.scope === 'group' ? '团队上下文' : '个人上下文']}
         tone="violet"
+        actions={<><Button variant="outline" onClick={() => setShowAccountModal(true)}><Key className="w-4 h-4" />添加账号</Button><Button variant="primary" onClick={() => setShowRepoModal(true)}><Plus className="w-4 h-4" />添加仓库</Button></>}
       />
       <div className="vm-project-grid">
       {/* ====== Left: Repo & Account List ====== */}
@@ -187,7 +202,7 @@ export default function ProjectsView() {
         {activeTab === 'repos' && (
           <div className="glass-card rounded-lg overflow-hidden">
             <div className="px-4 py-3 flex items-center justify-between"
-              style={{ borderBottom: '1px solid var(--border)' }}>
+              style={{ borderBottom: '1px solid hsl(var(--border))' }}>
               <h2 className="text-sm font-semibold text-foreground">仓库列表</h2>
               <Button variant="primary" size="icon-sm" onClick={() => setShowRepoModal(true)}>
                 <Plus className="w-3.5 h-3.5" />
@@ -200,7 +215,8 @@ export default function ProjectsView() {
                   <p className="text-xs text-[hsl(218_16%_44%)]">还没有项目</p>
                 </div>
               )}
-              {repos.map(repo => (
+              <input className="vm-input mb-2" aria-label="搜索仓库" placeholder="搜索名称或远程地址" value={repoSearch} onChange={e => setRepoSearch(e.target.value)} />
+              {repos.filter(repo => `${repo.name} ${repo.remoteUrl}`.toLowerCase().includes(repoSearch.toLowerCase())).map(repo => (
                 <button key={repo.id} onClick={() => { setSelectedRepo(repo.id); setOutput('') }}
                   className={cn(
                     "w-full text-left px-3 py-3 rounded-lg transition-all border",
@@ -228,7 +244,7 @@ export default function ProjectsView() {
         {activeTab === 'accounts' && (
           <div className="glass-card rounded-lg overflow-hidden">
             <div className="px-4 py-3 flex items-center justify-between"
-              style={{ borderBottom: '1px solid var(--border)' }}>
+              style={{ borderBottom: '1px solid hsl(var(--border))' }}>
               <h2 className="text-sm font-semibold text-foreground">Git/SVN 账号</h2>
               <Button variant="primary" size="icon-sm" onClick={() => setShowAccountModal(true)}>
                 <Plus className="w-3.5 h-3.5" />
@@ -302,6 +318,10 @@ export default function ProjectsView() {
             </div>
           </div>
 
+          <section className="vm-module-summary" aria-label="仓库概况">
+            <div><span>当前仓库</span><strong>{currentRepo.name}</strong></div><div><span>版本工具</span><strong>{currentRepo.tool.toUpperCase()}</strong></div><div><span>授权账号</span><strong>{accounts.find(a => a.id === currentRepo.accountId)?.label || '未指定'}</strong></div><div><span>本次最近执行</span><strong>{currentRuns[0] ? `${currentRuns[0].action} · ${currentRuns[0].success ? '成功' : '失败'}` : '尚未执行'}</strong></div>
+          </section>
+          <div className="vm-repo-location"><span>工作目录</span><code>{currentRepo.localPath}</code></div>
           {/* Commit Area */}
           <div className="glass-card rounded-md p-3 flex-shrink-0">
             <div className="flex items-center gap-2 mb-2">
@@ -322,10 +342,12 @@ export default function ProjectsView() {
             </div>
           </div>
 
-          {/* Output */}
+          {currentRuns.length > 0 && <section className="glass-card vm-run-history" aria-label="本次仓库操作记录"><h3>本次操作记录</h3>{currentRuns.slice(0, 4).map((run, index) => <div key={`${run.time}:${index}`}><time>{new Date(run.time).toLocaleTimeString('zh-CN')}</time><span>{run.action}</span><strong className={run.success ? 'text-emerald' : 'text-rose'}>{run.success ? '成功' : '失败'}</strong></div>)}</section>}
+          {/* Terminal and real status snapshot */}
+          <div className="vm-project-output-grid">
           <div className="glass-card rounded-md flex flex-col overflow-hidden flex-1 min-h-0">
             <div className="px-4 py-2.5 flex-shrink-0 flex items-center gap-2"
-              style={{ borderBottom: '1px solid var(--border)' }}>
+              style={{ borderBottom: '1px solid hsl(var(--border))' }}>
               <Terminal className="w-3.5 h-3.5 text-[hsl(152_72%_52%)]" />
               <p className="text-xs font-semibold text-[hsl(218_16%_58%)]">输出</p>
               {running && (
@@ -343,6 +365,11 @@ export default function ProjectsView() {
               }}>
               {output || '$ 等待操作...'}
             </pre>
+          </div>
+          <section className="glass-card vm-project-changes" aria-label="文件变更">
+            <div className="vm-section-heading"><h3>文件变更</h3><span className="text-xs text-muted-foreground">{statusView ? `${statusView.files.length} 项` : '等待检查'}</span></div>
+            {statusView ? <><div className="vm-module-note">{statusView.branch || currentRepo.tool.toUpperCase()}<br />最近检查：{snapshot && new Date(snapshot.time).toLocaleTimeString('zh-CN')} · 仅本次 Status 快照</div>{statusView.files.length ? <ul>{statusView.files.map((file, index) => <li key={index}><code>{file.status}</code><span>{file.path}</span></li>)}</ul> : <p className="vm-module-note">本次检查没有文件变更。</p>}</> : <div className="p-4"><p className="vm-module-note">执行 Status 查看本地工作区变更。</p><Button size="sm" disabled={running} onClick={() => handleAction('status')}>检查工作区</Button></div>}
+          </section>
           </div>
         </div>
       ) : (

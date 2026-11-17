@@ -1,4 +1,8 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell } = require('electron');
+const { authorizeManaged } = require('./core/managed-signin');
+const { chooseSigninAccount, findSigninAccount } = require('./core/signin-profile');
+const { sealLocalUnlock, openLocalUnlock, resolveSigninKey } = require('./core/managed-keys');
+const { createFriendService } = require('./core/friends');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell, nativeImage, systemPreferences, globalShortcut, screen } = require('electron');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -10,6 +14,11 @@ const { autoUpdater } = require('electron-updater');
 const initSqlJs = require('sql.js');
 const { migrateSchema } = require('./core/schema');
 const groupService = require('./core/groups');
+const { createChatService, rebindPersonalMessages } = require('./core/chat');
+const chatFiles = require('./core/chat-attachments');
+const screenshotCapture = require('./core/chat-screenshot');
+const { createScreenshotEditor } = require('./core/screenshot-editor');
+const { createScreenshotShortcut, DEFAULT_SCREENSHOT_SHORTCUT } = require('./core/screenshot-shortcut');
 const searchService = require('./core/search');
 const extractContent = require('./core/extract-content');
 const manifestService = require('./core/manifest-sync');
@@ -28,7 +37,7 @@ app.setName('AxonMind');
 
 const DEFAULT_SETTINGS = {
   syncAccessMode: 'managed',
-  managedServiceUrl: '',
+  managedServiceUrl: 'https://axonclawx.cn/mizhan-auth',
   appId: '',
   appSecret: '',
   feishuPassphrase: '',
@@ -39,6 +48,7 @@ const DEFAULT_SETTINGS = {
   syncConflictStrategy: 'newest',
   syncDownloadMode: 'all',
   syncDeviceName: '',
+  screenshotShortcut: DEFAULT_SCREENSHOT_SHORTCUT,
   localVectorSearch: false,
   localVectorModel: 'Xenova/all-MiniLM-L6-v2',
 };
@@ -93,6 +103,17 @@ let activePassword = '';
 let activeContext = { scope: 'personal', groupId: '' };
 let lastAutomaticBackupAt = 0;
 let autoSyncTimer = null;
+let chatSyncTimer = null;
+let chatCaptureRunning = false;
+let screenshotEditor = null;
+let screenshotShortcutController = null;
+let pendingGlobalScreenshot = null;
+let chatSyncDueAt = 0;
+let chatSyncRunning = false;
+let chatSyncQueued = false;
+let chatSessionEpoch = 0;
+let chatServiceInstance = null;
+let chatServiceDatabase = null;
 let autoSyncRunning = false;
 let autoSyncQueued = false;
 let autoSyncFailureCount = 0;
@@ -476,12 +497,14 @@ function restoreSessionPassword() {
 }
 
 function createLocalSession(userId, password = '') {
+  screenshotEditor?.cancel();
+  pendingGlobalScreenshot = null;
+  chatSessionEpoch += 1;
   const token = crypto.randomBytes(32).toString('base64url');
-  const expiresAt = Date.now() + LOCAL_SESSION_TTL_MS;
   db.run('DELETE FROM local_sessions WHERE user_id = ?', [userId]);
   db.run(
     'INSERT INTO local_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)',
-    [hashSessionToken(token), userId, expiresAt, new Date().toISOString()],
+    [hashSessionToken(token), userId, Date.now() + LOCAL_SESSION_TTL_MS, new Date().toISOString()],
   );
   fs.writeFileSync(sessionTokenPath(), token, { mode: 0o600 });
   if (password) persistSessionPassword(password);
@@ -489,6 +512,14 @@ function createLocalSession(userId, password = '') {
 }
 
 function clearLocalSession() {
+  screenshotEditor?.cancel();
+  pendingGlobalScreenshot = null;
+  chatServiceInstance?.clearDrafts();
+  chatSessionEpoch += 1;
+  chatLiveClient.stop();
+  clearTimeout(chatSyncTimer);
+  chatSyncTimer = null;
+  chatSyncDueAt = 0;
   try {
     const token = fs.readFileSync(sessionTokenPath(), 'utf8').trim();
     if (token) db.run('DELETE FROM local_sessions WHERE token_hash = ?', [hashSessionToken(token)]);
@@ -514,18 +545,21 @@ function restoreLocalSession() {
     const token = fs.readFileSync(sessionTokenPath(), 'utf8').trim();
     if (!token) return;
     const row = queryOne('SELECT * FROM local_sessions WHERE token_hash = ?', [hashSessionToken(token)]);
-    if (!row || Number(row.expires_at) < Date.now()) {
+    if (!row || (Number(row.expires_at) !== 0 && Number(row.expires_at) < Date.now())) {
       clearLocalSession();
       return;
     }
-    const restoredPassword = restoreSessionPassword();
-    if (!restoredPassword) {
-      // 密码缓存丢失，强制重新登录，避免进入「已登录但无法解密」的异常状态
+    const user = queryOne('SELECT * FROM users WHERE id = ?', [row.user_id]);
+    const matchesUser = (value) => Boolean(value && user && hashPassword(value, user.password_salt) === user.password_hash);
+    const savedPassword = restoreSessionPassword();
+    const syncPassphrase = user?.feishu_open_id_hash ? getSettings().feishuPassphrase : '';
+    const password = matchesUser(savedPassword) ? savedPassword : matchesUser(syncPassphrase) ? syncPassphrase : '';
+    if (!password) {
       clearLocalSession();
       return;
     }
-    activeUser = queryOne('SELECT * FROM users WHERE id = ?', [row.user_id]);
-    activePassword = restoredPassword;
+    activeUser = user;
+    activePassword = password;
     db.run('UPDATE local_sessions SET expires_at = ? WHERE token_hash = ?', [Date.now() + LOCAL_SESSION_TTL_MS, hashSessionToken(token)]);
     saveDatabase();
   } catch {
@@ -609,7 +643,10 @@ function getFeishuToken() {
   return getStateValue('feishuToken', null);
 }
 
+let feishuTokenRevision = 0;
+
 function setFeishuToken(token) {
+  feishuTokenRevision += 1;
   setStateValue('feishuToken', token);
 }
 
@@ -621,7 +658,7 @@ function hasUsableFeishuToken(token) {
 }
 
 function managedServiceUrl(settings = getSettings()) {
-  return syncAccess.normalizeServiceUrl(process.env.AXONMIND_MANAGED_SERVICE_URL || settings.managedServiceUrl || '');
+  return syncAccess.normalizeServiceUrl(process.env.AXONMIND_MANAGED_SERVICE_URL || settings.managedServiceUrl || 'https://axonclawx.cn/mizhan-auth');
 }
 
 function syncAccessState(settings = getSettings()) {
@@ -683,6 +720,8 @@ function projectsForContext(userId, context) {
   };
 }
 
+function getFriendService() { return createFriendService({db,queryOne,queryAll,save:saveDatabase,getSession:()=>({user:requireUser(),password:requireSessionPassword()})}); }
+
 function publicState() {
   const settings = getSettings();
   let token = getFeishuToken();
@@ -702,7 +741,7 @@ function publicState() {
   const records = activeUser ? recordsForContext(activeUser.id, context) : [];
   const libraryItems = activeUser ? itemsForContext(activeUser.id, context) : [];
   const groups = activeUser
-    ? groupService.getUserGroups(db, queryAll, activeUser.id).map(groupService.normalizeGroup)
+    ? groupService.getUserGroups(db, queryAll, activeUser.id).filter(g=>!queryOne('SELECT 1 FROM friend_rooms WHERE group_id=?',[g.id])).map(groupService.normalizeGroup)
     : [];
   const aiProfile = activeUser ? normalizeAiProfile(getAiProfileRow(activeUser.id)) : null;
   const knowledgeSources = activeUser
@@ -749,7 +788,9 @@ function publicState() {
     feishuUser: token && token.user,
     context,
     groups,
+    friends: activeUser ? getFriendService().list() : [],
     pendingInvites,
+    managedSignin: {available: Boolean(managedServiceUrl(settings))},
     manifestMeta,
     autoSync,
     syncConflicts: activeUser ? listSyncConflicts(activeUser) : [],
@@ -956,6 +997,7 @@ function sanitizeSettings(input, previousSecret = '', previousFeishuPassphrase =
       : DEFAULT_SETTINGS.syncIntervalSeconds,
     syncConflictStrategy: manifestService.normalizeConflictStrategy(input.syncConflictStrategy),
     syncDownloadMode,
+    screenshotShortcut: String(input.screenshotShortcut || DEFAULT_SCREENSHOT_SHORTCUT),
     syncDeviceName: String(input.syncDeviceName || '').trim().slice(0, 80),
     localVectorSearch: Boolean(input.localVectorSearch),
     localVectorModel: String(input.localVectorModel || DEFAULT_SETTINGS.localVectorModel).trim() || DEFAULT_SETTINGS.localVectorModel,
@@ -1024,6 +1066,7 @@ function requestJson(method, urlText, options = {}) {
         }
       });
     });
+    if (options.timeout) req.setTimeout(options.timeout, () => req.destroy(new Error('请求超时')));
     req.on('error', reject);
     if (body) req.write(body);
     req.end();
@@ -1187,14 +1230,14 @@ function payloadFromFile(filePath) {
   };
 }
 
-async function importFileToLocal(filePath, scopeMeta = {}) {
+async function importFileToLocal(filePath, scopeMeta = {}, options = {}) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
   const { scope, groupId } = resolveScopeFromInput(scopeMeta);
   if (scope === 'group') {
     groupService.requireGroupAccess(db, queryOne, groupId, user.id, ['owner', 'admin', 'member']);
   }
-  const payload = payloadFromFile(filePath);
+  const payload = options.payload || payloadFromFile(filePath);
   const plainBytes = Buffer.from(payload.contentBase64, 'base64');
   const encrypted = encryptContent(plainBytes, scope, groupId || null, user, localPassword);
   const itemId = crypto.randomUUID();
@@ -1202,10 +1245,11 @@ async function importFileToLocal(filePath, scopeMeta = {}) {
   db.run(
     `INSERT INTO decrypted_items
       (id, user_id, record_id, kind, name, source_path, saved_path, content_ciphertext, content_iv, content_tag, size, downloaded_at, scope, group_id, created_by)
-      VALUES (?, ?, '', 'file', ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, 'file', ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       itemId,
       user.id,
+      options.recordId || '',
       payload.name,
       payload.sourcePath,
       encrypted.ciphertext,
@@ -1450,6 +1494,8 @@ function normalizeManagedToken(payload) {
   };
 }
 
+let pendingFeishuRefresh = null;
+
 async function refreshFeishuTokenIfNeeded(options = {}) {
   const settings = getSettings();
   const token = getFeishuToken();
@@ -1461,7 +1507,25 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
   }
   if (token.refreshExpiresAt && Date.now() > token.refreshExpiresAt) {
     setFeishuToken(null);
-    throw new Error('飞书登录已超过 30 天，请重新登录飞书账号。');
+    throw new Error('飞书授权已到期，请重新扫码连接飞书。');
+  }
+
+  if (pendingFeishuRefresh?.revision === feishuTokenRevision) return pendingFeishuRefresh.promise;
+  const revision = feishuTokenRevision;
+  const promise = renewFeishuToken(settings, token, revision);
+  pendingFeishuRefresh = { revision, promise };
+  try {
+    return await promise;
+  } finally {
+    if (pendingFeishuRefresh?.promise === promise) pendingFeishuRefresh = null;
+  }
+}
+
+async function renewFeishuToken(settings, token, revision) {
+  function saveRefreshedToken(next) {
+    if (revision !== feishuTokenRevision) throw new Error('飞书登录状态已变化，请重试');
+    setFeishuToken(next);
+    return next;
   }
 
   if (syncAccess.normalizeMode(settings.syncAccessMode, settings) === 'managed') {
@@ -1469,14 +1533,12 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
     if (!serviceUrl) throw new Error('AxonMind 托管服务尚未配置，请切换到自建模式或安装正式托管版本');
     try {
       const refreshed = await requestJson('POST', `${serviceUrl}/v1/feishu/oauth/refresh`, {
-        body: { refreshToken: token.refreshToken },
+        body: { refreshToken: token.refreshToken }, timeout: 20000,
       });
       const next = { ...normalizeManagedToken(refreshed), user: token.user };
-      setFeishuToken(next);
-      return next;
+      return saveRefreshedToken({ ...next, refreshToken: next.refreshToken || token.refreshToken, refreshExpiresAt: next.refreshToken ? next.refreshExpiresAt : token.refreshExpiresAt });
     } catch (error) {
-      setFeishuToken(null);
-      throw new Error(`AxonMind 托管登录已失效，请重新连接飞书。${error.message || error}`);
+      throw new Error(`暂时无法刷新飞书授权。${error.message || error}`);
     }
   }
 
@@ -1488,12 +1550,11 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
         client_id: settings.appId,
         client_secret: settings.appSecret,
         refresh_token: token.refreshToken,
-      },
+      }, timeout: 20000,
     });
     data = ensureFeishuPayload(refreshed, '刷新飞书登录失败');
   } catch (error) {
-    setFeishuToken(null);
-    throw new Error(`飞书登录已失效，请在顶栏重新登录飞书账号。${error.message || error}`);
+    throw new Error(`暂时无法刷新飞书授权。${error.message || error}`);
   }
   if (!data.access_token) throw new Error('飞书没有返回新的 access_token');
   const next = {
@@ -1504,8 +1565,7 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
     refreshExpiresAt: data.refresh_token ? Date.now() + FEISHU_REFRESH_TTL_MS : (token.refreshExpiresAt || Date.now() + FEISHU_REFRESH_TTL_MS),
     scope: data.scope || token.scope,
   };
-  setFeishuToken(next);
-  return next;
+  return saveRefreshedToken(next);
 }
 
 function isFeishuTokenExpiredError(error) {
@@ -1581,13 +1641,16 @@ async function callFeishuWikiRetriever(question) {
 }
 
 async function listFeishuFolderFiles(folderToken) {
-  const token = await refreshFeishuTokenIfNeeded();
-  const response = await requestJson(
-    'GET',
-    `${FEISHU_API}/open-apis/drive/v1/files?folder_token=${encodeURIComponent(folderToken)}&page_size=200`,
-    { headers: { Authorization: `Bearer ${token.accessToken}` } },
-  );
-  return feishuDrive.parseListFilesResponse(ensureFeishuPayload(response, '列出飞书文件失败'));
+  return feishuDrive.listAllFiles(async (pageToken) => {
+    const token = await refreshFeishuTokenIfNeeded();
+    const suffix = pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : '';
+    const response = await requestJson(
+      'GET',
+      `${FEISHU_API}/open-apis/drive/v1/files?folder_token=${encodeURIComponent(folderToken)}&page_size=200${suffix}`,
+      { headers: { Authorization: `Bearer ${token.accessToken}` } },
+    );
+    return ensureFeishuPayload(response, '列出飞书文件失败');
+  });
 }
 
 async function getFeishuRootFolderToken() {
@@ -1693,7 +1756,7 @@ async function deleteFeishuFile(fileToken) {
   const token = await refreshFeishuTokenIfNeeded();
   const response = await requestJson(
     'DELETE',
-    `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}`,
+    `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(fileToken)}?type=file`,
     { headers: { Authorization: `Bearer ${token.accessToken}` } },
   );
   ensureFeishuPayload(response, '删除飞书文件失败');
@@ -1708,12 +1771,17 @@ function currentVaultId(user = requireUser()) {
   return vaultId;
 }
 
-function currentDevice(user = requireUser(), preferredName = '') {
+function installationDeviceId() {
   let deviceId = getStateValue('installationDeviceId', '');
   if (!deviceId) {
     deviceId = crypto.randomUUID();
     setStateValue('installationDeviceId', deviceId);
   }
+  return deviceId;
+}
+
+function currentDevice(user = requireUser(), preferredName = '') {
+  const deviceId = installationDeviceId();
   const vaultId = currentVaultId(user);
   const existing = queryOne('SELECT * FROM vault_devices WHERE vault_id = ? AND device_id = ?', [vaultId, deviceId]);
   const now = new Date().toISOString();
@@ -1816,6 +1884,7 @@ function persistCloudProfile(user, profile, openId, syncedAt = new Date().toISOS
     [profile.vaultId, openIdHash, user.id],
   );
   if (previousVaultId !== profile.vaultId) {
+    rebindPersonalMessages(db, user.id, previousVaultId, profile.vaultId);
     db.run('UPDATE vault_devices SET vault_id = ? WHERE vault_id = ?', [profile.vaultId, previousVaultId]);
     db.run('UPDATE sync_tombstones SET vault_id = ? WHERE user_id = ?', [profile.vaultId, user.id]);
   }
@@ -1838,7 +1907,11 @@ function persistCloudProfile(user, profile, openId, syncedAt = new Date().toISOS
 }
 
 async function uploadCloudAccountProfile(profile, passphrase, context) {
-  const encrypted = cloudAccount.encryptProfile(profile, passphrase, encryptVaultPayload);
+  const liveUrl = managedServiceUrl();
+  const profileWithChannel = getFeishuToken()?.provider === 'axonmind-managed' && liveUrl
+    ? { ...profile, chatLive: { version: 1, endpoint: liveUrl.replace(/^https:/, 'wss:') + '/v1/chat/live', channelId: profile.vaultId } }
+    : profile;
+  const encrypted = cloudAccount.encryptProfile(profileWithChannel, passphrase, encryptVaultPayload);
   const data = await uploadAllToFeishu({
     file_name: context.fileName,
     parent_type: 'explorer',
@@ -1857,7 +1930,7 @@ async function uploadCloudAccountProfile(profile, passphrase, context) {
 }
 
 async function linkCloudAccount(input = {}) {
-  const user = requireUser();
+  const user = requireUser(), epoch = chatSessionEpoch;
   const passphrase = configuredFeishuPassphrase(input.passphrase);
   const openId = requireFeishuOpenId();
   const context = await loadCloudAccountProfile(passphrase);
@@ -1881,6 +1954,7 @@ async function linkCloudAccount(input = {}) {
     profile = cloudAccount.mergeDevice(context.profile, device);
   }
   await uploadCloudAccountProfile(profile, passphrase, context);
+  if (activeUser?.id !== user.id || chatSessionEpoch !== epoch) throw new Error('账号已变化，请重新绑定');
   persistCloudProfile(user, profile, openId);
   return publicState();
 }
@@ -2153,11 +2227,26 @@ async function pullManifestFromFeishu(payload) {
   const { scope, groupId } = resolveScopeFromInput(payload || {});
   const vaultId = currentVaultId(user);
   const device = currentDevice(user);
+  const checkSession = sessionGuard(user);
+  const check = () => {
+    checkSession();
+    if (scope === 'group') groupService.requireGroupAccess(db, queryOne, groupId, user.id);
+  };
+  check();
   const resolved = await resolveManifestFiles(scope, groupId, vaultId, scope === 'personal' ? user.id : '');
-  if (!resolved.manifests.length) throw new Error('云端未找到目录清单，请先执行一次同步');
+  check();
+  if (!resolved.manifests.length) {
+    if (!payload.automatic) throw new Error('云端未找到目录清单，请先执行一次同步');
+    const hydrated = await hydratePulledContent({
+      scope, groupId, passphrase, mode: payload.downloadMode || getSettings().syncDownloadMode, check,
+    });
+    check();
+    return { stats: { hydrated: hydrated.downloaded, hydrateFailures: hydrated.failures, manifests: 0 } };
+  }
   const remoteManifests = [];
   for (const file of resolved.manifests) {
     const buffer = await downloadFeishuFileBuffer(file.token);
+    check();
     const manifest = manifestService.decryptManifest(buffer, passphrase, decryptVaultPayload);
     remoteManifests.push({ file, manifest });
   }
@@ -2189,7 +2278,9 @@ async function pullManifestFromFeishu(payload) {
     groupId,
     passphrase,
     mode: payload.downloadMode || getSettings().syncDownloadMode,
+    check,
   });
+  check();
   const newestRemote = remoteManifests[remoteManifests.length - 1];
   setStateValue(manifestStateKey(scope, groupId, vaultId), {
     ...(getManifestMeta(scope, groupId, vaultId) || {}),
@@ -2210,6 +2301,201 @@ async function pullManifestFromFeishu(payload) {
     },
     mergedAt: merged.updatedAt,
   };
+}
+
+function getChatService() {
+  if (chatServiceInstance && chatServiceDatabase === db) return chatServiceInstance;
+  chatServiceDatabase = db;
+  chatServiceInstance = createChatService({
+    db, queryOne, queryAll, save: saveDatabase,
+    getSession: () => {
+      const user = requireUser();
+      return { user, password: requireSessionPassword(), vaultId: currentVaultId(user),
+        deviceId: currentDevice(user).id, linked: Boolean(user.cloud_linked), epoch: chatSessionEpoch, cloudIdentity: getFeishuToken()?.user?.openId || '' };
+    },
+    getSettings,
+    onUploaded: () => chatLiveClient.publish(),
+    resolvePersonalFolder: async (folder) => {
+      const user = requireUser();
+      const openId = requireFeishuOpenId();
+      if (user.feishu_open_id_hash && user.feishu_open_id_hash !== cloudAccount.hashFeishuOpenId(openId)) {
+        throw new Error('当前飞书账号与已绑定的云端账号不一致');
+      }
+      return resolveWritableFeishuFolder(folder);
+    },
+    transport: {
+      list: listFeishuFolderFiles,
+      download: downloadFeishuFileBuffer,
+      upload: (folder, name, bytes) => uploadAllToFeishu({
+        file_name: name, parent_type: 'explorer', parent_node: folder, size: String(bytes.length),
+      }, { name, bytes }, '上传聊天记录失败'),
+    },
+  });
+  return chatServiceInstance;
+}
+
+function chatOperation(input, writable = false) {
+  const user = requireUser();
+  requireSessionPassword();
+  if (!input || !['personal', 'group'].includes(input.scope)) throw new Error('请选择有效的聊天空间');
+  const requireAccess = () => {
+    if (input.scope === 'group') groupService.requireGroupAccess(db, queryOne, String(input.groupId || ''), user.id,
+      writable ? ['owner', 'admin', 'member'] : ['owner', 'admin', 'member', 'viewer']);
+  };
+  requireAccess();
+  const check = sessionGuard(user);
+  return () => { check(); requireAccess(); };
+}
+
+function sessionGuard(user) {
+  const epoch = chatSessionEpoch;
+  return () => {
+    if (epoch !== chatSessionEpoch || activeUser?.id !== user.id) throw new Error('登录状态已变化，请重试');
+  };
+}
+
+function chatPreviewData(bytes, mime, thumbnail = false) {
+  if (!chatFiles.imageMime(bytes) || chatFiles.imageMime(bytes) !== mime) return '';
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return '';
+  const size = image.getSize();
+  if (size.width > 20000 || size.height > 20000 || size.width * size.height > 80 * 1000 * 1000) throw new Error('图片尺寸过大，请缩小后重试');
+  if (!thumbnail) return `data:${mime};base64,${bytes.toString('base64')}`;
+  return image.resize({ width: Math.min(320, size.width) }).toDataURL();
+}
+
+function stageChatFiles(input, files) {
+  const staged = getChatService().stageAttachments({ ...input, files });
+  try { return staged.map((file, index) => ({ ...file, preview: chatPreviewData(files[index].bytes, file.mime, true) })); }
+  catch (error) { getChatService().discardAttachments({ ids: staged.map(file => file.id) }); throw error; }
+}
+
+function showChatWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show(); mainWindow.focus();
+}
+
+async function captureEditedChatScreenshot(input, editDraft = false) {
+  const checkSession = chatOperation(input, true);
+  const parentWindow = mainWindow;
+  const check = () => { checkSession(); if (!parentWindow || parentWindow.isDestroyed() || mainWindow !== parentWindow) throw new Error('聊天窗口已关闭，请重新打开'); };
+  if (chatCaptureRunning) throw new Error('截图或标注正在进行，请先完成或取消');
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('请先打开聊天窗口');
+  chatCaptureRunning = true;
+  try {
+    let source;
+    if (editDraft) {
+      const file = getChatService().readDraftAttachment(input);
+      if (!chatFiles.imageMime(file.bytes)) throw new Error('只能标注图片附件');
+      const image = nativeImage.createFromBuffer(file.bytes);
+      if (image.isEmpty()) throw new Error('无法读取该图片');
+      source = { bytes: image.toPNG(), name: `${file.name.replace(/\.[^.]+$/, '')}-标注.png` };
+    } else {
+      source = await screenshotCapture.captureScreenshot({ window: mainWindow, permission: () => systemPreferences.getMediaAccessStatus('screen') });
+    }
+    check();
+    if (source.canceled) return { canceled: true, attachments: [] };
+    const edited = await screenshotEditor.edit({ ...source, check });
+    check();
+    if (edited.canceled) return { canceled: true, attachments: [] };
+    const attachments = stageChatFiles(input, [{ name: edited.name, bytes: edited.bytes }]);
+    if (editDraft) getChatService().discardAttachments({ ids: [input.attachmentId] });
+    showChatWindow();
+    return { canceled: false, attachments };
+  } finally { chatCaptureRunning = false; }
+}
+
+async function captureFromGlobalShortcut() {
+  if (!activeUser || !activePassword || !mainWindow || mainWindow.isDestroyed()) return;
+  if (chatCaptureRunning) return;
+  if (pendingGlobalScreenshot?.epoch !== chatSessionEpoch) pendingGlobalScreenshot = null;
+  if (pendingGlobalScreenshot) {
+    showChatWindow();
+    mainWindow.webContents.send('vault:screenshotDelivered', pendingGlobalScreenshot);
+    return;
+  }
+  const input = { scope: getContext().scope, groupId: getContext().groupId };
+  const epoch = chatSessionEpoch;
+  try {
+    const result = await captureEditedChatScreenshot(input);
+    if (result.canceled || epoch !== chatSessionEpoch) return;
+    pendingGlobalScreenshot = { id: crypto.randomUUID(), ...input, attachments: result.attachments, epoch };
+    mainWindow.webContents.send('vault:screenshotDelivered', pendingGlobalScreenshot);
+  } catch (error) {
+    if (epoch !== chatSessionEpoch) return;
+    showChatWindow();
+    mainWindow.webContents.send('vault:screenshotNotice', { message: String(error.message || error) });
+  }
+}
+
+function notifyChatStatus(patch = {}) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const unread = db && activeUser && activePassword ? getChatService().unreadCounts() : null;
+    mainWindow.webContents.send('vault:chatStatus', { ...patch, unread });
+  }
+}
+
+const chatLiveClient = require('./core/chat-live').createChatLiveClient({
+  getContext: () => {
+    if (!db || !activeUser?.cloud_linked || !activePassword) return null;
+    const settings = getSettings(), token = getFeishuToken();
+    const url = managedServiceUrl(settings), vaultId = activeUser.vault_id, openId = token?.user?.openId;
+    if (!settings.feishuAutoSync || !settings.feishuPassphrase || token?.provider !== 'axonmind-managed' ||
+        !hasUsableFeishuToken(token) || !url || !vaultId || !openId ||
+        activeUser.feishu_open_id_hash !== cloudAccount.hashFeishuOpenId(openId)) return null;
+    return { url, vaultId, openId, key: JSON.stringify([url, vaultId, openId, chatSessionEpoch]) };
+  },
+  issueTicket: async ({ url, vaultId, openId }) => {
+    // The existing cloud sync owns token refresh; do not race rotating refresh tokens.
+    const token = getFeishuToken();
+    if (token?.user?.openId !== openId || token.expiresAt <= Date.now()) throw new Error('等待飞书授权刷新');
+    const reply = await requestJson('POST', url + '/v1/chat/live-ticket', {
+      body: { vaultId }, headers: { Authorization: `Bearer ${token.accessToken}` }, timeout: 25000,
+    });
+    if (typeof reply.ticket !== 'string') throw new Error('实时通道不可用');
+    return reply.ticket;
+  },
+  onChange: () => scheduleChatAutoSync(500),
+  onText: envelope => {
+    try { if (getChatService().receiveLiveText(envelope)) notifyChatStatus(); }
+    catch { /* Invalid ciphertext is ignored; cloud sync can still recover history. */ }
+  },
+});
+
+function scheduleChatAutoSync(delayMs = autoSyncIntervalMs()) {
+  chatLiveClient.reconcile();
+  if (!db || !activeUser || !activePassword || !getSettings().feishuAutoSync || !hasUsableFeishuToken(getFeishuToken())) {
+    clearTimeout(chatSyncTimer);
+    chatSyncTimer = null;
+    chatSyncDueAt = 0;
+    return;
+  }
+  if (chatSyncRunning) { chatSyncQueued = true; return; }
+  const delay = Math.max(500, delayMs);
+  const dueAt = Date.now() + delay;
+  // Frequent state refreshes must not postpone an already scheduled chat sync.
+  if (chatSyncTimer && chatSyncDueAt <= dueAt) return;
+  clearTimeout(chatSyncTimer);
+  chatSyncDueAt = dueAt;
+  chatSyncTimer = setTimeout(async () => {
+    chatSyncTimer = null;
+    chatSyncDueAt = 0;
+    const epoch = chatSessionEpoch;
+    chatSyncRunning = true;
+    notifyChatStatus({ syncing: true });
+    try {
+      await getChatService().syncAll(() => notifyChatStatus());
+    } catch (error) {
+      if (epoch === chatSessionEpoch) console.error('聊天自动同步失败:', error.message || error);
+    } finally {
+      chatSyncRunning = false;
+      if (epoch === chatSessionEpoch) notifyChatStatus({ syncing: false });
+      const queued = chatSyncQueued;
+      chatSyncQueued = false;
+      scheduleChatAutoSync(queued ? 900 : autoSyncIntervalMs());
+    }
+  }, delay);
 }
 
 async function fullSyncManifest(payload) {
@@ -2247,10 +2533,12 @@ function autoSyncIntervalMs() {
 }
 
 function canAutoSync() {
-  if (!db || !activeUser) return false;
+  if (!db || !activeUser || !activePassword) return false;
   const settings = getSettings();
-  if (!settings.feishuAutoSync || !settings.feishuPassphrase || !activeUser.cloud_linked) return false;
-  return hasUsableFeishuToken(getFeishuToken());
+  const token = getFeishuToken();
+  const linkedIdentity = activeUser.feishu_open_id_hash;
+  if (!settings.feishuAutoSync || !settings.feishuPassphrase || !hasUsableFeishuToken(token)) return false;
+  return !linkedIdentity || Boolean(token.user?.openId && cloudAccount.hashFeishuOpenId(token.user.openId) === linkedIdentity);
 }
 
 function writeAutoSyncState(patch) {
@@ -2269,6 +2557,7 @@ function clearAutoSyncTimer() {
 }
 
 function scheduleAutoSync(reason = 'timer', delayMs = autoSyncIntervalMs()) {
+  scheduleChatAutoSync(delayMs);
   clearAutoSyncTimer();
   if (!canAutoSync()) return;
   const delay = Math.max(500, Number(delayMs || autoSyncIntervalMs()));
@@ -2290,25 +2579,46 @@ async function runAutoSync(reason = 'timer') {
   if (!canAutoSync() || autoSyncRunning) return null;
   autoSyncRunning = true;
   const context = getContext();
+  const check = sessionGuard(requireUser());
   const attemptAt = new Date().toISOString();
   writeAutoSyncState({ status: 'syncing', reason, lastAttemptAt: attemptAt, nextSyncAt: '', lastError: '' });
   try {
-    const result = await fullSyncManifest({
+    const options = {
       scope: context.scope,
       groupId: context.groupId,
       conflictStrategy: getSettings().syncConflictStrategy,
       downloadMode: getSettings().syncDownloadMode,
       automatic: true,
-    });
+    };
+    let personalPullError = '';
+    if (context.scope === 'group') {
+      try {
+        const personal = await pullManifestFromFeishu({ ...options, scope: 'personal', groupId: '' });
+        if (personal.stats.hydrateFailures.length) personalPullError = '部分个人资料未能取回，将在下次同步时重试';
+      } catch (error) {
+        personalPullError = String(error.message || error);
+      }
+      check();
+    }
+    // An unlinked local account can recover its existing files using Feishu authorization.
+    const result = activeUser.cloud_linked
+      ? await fullSyncManifest(options)
+      : { pull: await pullManifestFromFeishu(options) };
+    check();
+    const downloadError = result.pull?.stats?.hydrateFailures?.length
+      ? '部分资料未能取回，将在下次同步时重试'
+      : '';
+    const lastError = result.pullError || result.pushError || downloadError || personalPullError || result.accountError || '';
     autoSyncFailureCount = 0;
     writeAutoSyncState({
-      status: result.pushError ? 'attention' : 'success',
+      status: lastError ? 'attention' : 'success',
       lastSuccessAt: new Date().toISOString(),
-      lastError: result.pushError || result.pullError || result.accountError || '',
+      lastError,
       reason,
     });
     return result;
   } catch (error) {
+    try { check(); } catch { return null; }
     autoSyncFailureCount += 1;
     writeAutoSyncState({ status: 'offline', lastError: String(error.message || error), reason });
     return null;
@@ -2477,8 +2787,10 @@ async function openAsset(input = {}) {
   if (sourceTable === 'records' || !sourceTable) {
     const record = queryOne('SELECT * FROM records WHERE id = ?', [assetId]);
     if (record) {
-      if (record.user_id !== user.id && record.scope !== 'group') throw new Error('无权打开该文件');
+      if (record.scope === 'group') groupService.requireGroupAccess(db, queryOne, record.group_id, user.id);
+      else if (record.user_id !== user.id) throw new Error('无权打开该文件');
       if (await openPathOrThrow(record.local_path)) return { opened: true, target: record.local_path };
+      if (input.localOnly === true) return { opened: false, needsDownload: true };
       if (record.url) {
         await shell.openExternal(record.url);
         return { opened: true, target: record.url };
@@ -2516,7 +2828,7 @@ async function openAsset(input = {}) {
   throw new Error('未找到可打开的匹配文件');
 }
 
-async function downloadRecordToLocal(recordId, feishuPassphrase) {
+async function downloadRecordToLocal(recordId, feishuPassphrase, { returnState = true } = {}) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
   const passphrase = configuredFeishuPassphrase(feishuPassphrase);
@@ -2528,13 +2840,16 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
     throw new Error('找不到这条同步记录');
   }
   const record = normalizeRecord(row);
+  const check = sessionGuard(user);
   const token = await refreshFeishuTokenIfNeeded();
+  check();
   const response = await requestBuffer('GET', `${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(record.token)}/download`, {
     headers: { Authorization: `Bearer ${token.accessToken}` },
   });
   if (response.status >= 400) {
     throw new Error(`下载飞书文件失败：HTTP ${response.status} ${response.body.toString('utf8').slice(0, 300)}`);
   }
+  check();
   const payload = decryptVaultPayload(response.body, passphrase);
   const plainBytes = payload.kind === 'text'
     ? Buffer.from(payload.text || '', 'utf8')
@@ -2542,6 +2857,15 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
   const scope = record.scope || 'personal';
   const groupId = record.groupId || record.group_id || null;
   const local = encryptContent(plainBytes, scope, groupId, user, localPassword);
+  const checkRecord = () => {
+    check();
+    if (record.scope === 'group') groupService.requireGroupAccess(db, queryOne, record.groupId, user.id);
+    const current = queryOne('SELECT token, uploaded_at FROM records WHERE id = ?', [record.id]);
+    if (!current || current.token !== record.token || current.uploaded_at !== record.uploadedAt) {
+      throw new Error('同步记录已更新，请重试');
+    }
+  };
+  checkRecord();
   if (payload.kind === 'library-item' && record.assetId) {
     const library = queryOne('SELECT * FROM library_items WHERE id = ?', [record.assetId]);
     if (!library) throw new Error('同步记录关联的内容条目不存在，请先拉取目录清单');
@@ -2572,8 +2896,17 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
       text: `${library.title}\n${body.content || ''}`,
     });
     saveDatabase();
-    return publicState();
+    return returnState ? publicState() : undefined;
   }
+  let fileContent = payload.kind === 'text' ? plainBytes.toString('utf8') : '';
+  if (payload.kind === 'file') {
+    try {
+      fileContent = await extractContent.extractTextFromBuffer(plainBytes, payload.name || record.fileName);
+    } catch {
+      // ignore extraction failures
+    }
+  }
+  checkRecord();
   const existing = queryOne('SELECT id FROM decrypted_items WHERE record_id = ? AND user_id = ?', [record.id, user.id]);
   const itemId = existing ? existing.id : crypto.randomUUID();
   db.run(
@@ -2598,14 +2931,6 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
       user.id,
     ],
   );
-  let fileContent = '';
-  if (payload.kind === 'file') {
-    try {
-      fileContent = await extractContent.extractTextFromBuffer(plainBytes, payload.name || record.fileName);
-    } catch {
-      // ignore extraction failures
-    }
-  }
   searchService.indexAsset(db, {
     assetId: itemId,
     ownerUserId: user.id,
@@ -2625,10 +2950,11 @@ async function downloadRecordToLocal(recordId, feishuPassphrase) {
     text: `${payload.name || record.fileName}\n${fileContent}`,
   });
   saveDatabase();
-  return publicState();
+  return returnState ? publicState() : undefined;
 }
 
-async function hydratePulledContent({ scope, groupId, passphrase, mode }) {
+async function hydratePulledContent({ scope, groupId, passphrase, mode, check }) {
+  const user = requireUser();
   const downloadMode = ['all', 'content', 'manual'].includes(mode) ? mode : 'all';
   if (downloadMode === 'manual') return { downloaded: 0, failures: [] };
   const records = scope === 'group'
@@ -2638,6 +2964,7 @@ async function hydratePulledContent({ scope, groupId, passphrase, mode }) {
   let downloaded = 0;
   const failures = [];
   for (const record of records) {
+    check();
     if (record.asset_id && seenAssets.has(record.asset_id)) continue;
     if (record.asset_id) seenAssets.add(record.asset_id);
     if (downloadMode === 'content' && record.kind !== 'library-item') continue;
@@ -2645,10 +2972,11 @@ async function hydratePulledContent({ scope, groupId, passphrase, mode }) {
       ? Boolean(queryOne('SELECT id FROM library_items WHERE id = ? AND remote_only = 1', [record.asset_id]))
       : false;
     const needsFileContent = record.kind !== 'library-item'
-      && !queryOne('SELECT id FROM decrypted_items WHERE record_id = ?', [record.id]);
+      && !queryOne('SELECT id FROM decrypted_items WHERE record_id = ? AND user_id = ? AND downloaded_at >= ?',
+        [record.id, user.id, record.uploaded_at]);
     if (!needsLibraryContent && !needsFileContent) continue;
     try {
-      await downloadRecordToLocal(record.id, passphrase);
+      await downloadRecordToLocal(record.id, passphrase, { returnState: false });
       downloaded += 1;
     } catch (error) {
       failures.push({ recordId: record.id, message: String(error.message || error) });
@@ -2868,7 +3196,7 @@ function unlockLibraryItem(itemId) {
   return { id: row.id, name: row.name, title: row.name, kind: 'text', content: bytes.toString('utf8') };
 }
 
-function openLibraryItem(itemId) {
+async function openLibraryItem(itemId, { previewOnly = false } = {}) {
   const user = requireUser();
   const localPassword = requireSessionPassword();
   const lib = queryOne('SELECT * FROM library_items WHERE id = ?', [itemId]);
@@ -2891,12 +3219,13 @@ function openLibraryItem(itemId) {
   }
   const bytes = decryptContent(row, user, localPassword);
   if (row.kind === 'file') {
+    if (previewOnly) return { id: row.id, name: row.name, kind: row.kind, viewable: false };
     const tempDir = path.join(app.getPath('temp'), 'vaultmind-previews');
     fs.mkdirSync(tempDir, { recursive: true });
     const ext = path.extname(row.name || '') || '';
     const tempPath = path.join(tempDir, `${crypto.randomUUID()}${ext}`);
     fs.writeFileSync(tempPath, bytes);
-    const error = shell.openPath(tempPath);
+    const error = await shell.openPath(tempPath);
     if (error && error !== '') {
       throw new Error(`无法打开文件：${error}`);
     }
@@ -2945,6 +3274,14 @@ function changeLocalPassword(input) {
       encrypted: encryptForLocalUser(decryptForLocalUser(secretRow, currentPassword, user), newPassword, nextUser),
     };
   });
+  const chatMessages = queryAll('SELECT * FROM chat_messages WHERE owner_user_id = ?', [user.id]).map(row => ({
+    id: row.id, roomId: row.room_id,
+    encrypted: encryptForLocalUser(decryptForLocalUser(row, currentPassword, user), newPassword, nextUser),
+  }));
+  const chatAttachments = queryAll('SELECT * FROM chat_attachments WHERE owner_user_id = ? AND content_ciphertext IS NOT NULL', [user.id]).map(row => ({
+    id: row.id, roomId: row.room_id,
+    encrypted: encryptForLocalUser(decryptForLocalUser(row, currentPassword, user), newPassword, nextUser),
+  }));
   const wrappedGroupKeys = queryAll('SELECT * FROM group_member_keys WHERE user_id = ?', [user.id])
     .map((row) => {
       const groupKey = groupCrypto.unwrapGroupKey({
@@ -2958,6 +3295,16 @@ function changeLocalPassword(input) {
         wrapped: groupCrypto.wrapGroupKey(groupKey, nextUser, newPassword),
       };
     });
+
+  const managedEnvelope = getStateValue(`managedSignin:${user.id}`, '');
+  let nextManagedEnvelope = '';
+  if (managedEnvelope && user.feishu_open_id_hash) {
+    try {
+      const passphrase = getSettings().feishuPassphrase;
+      openLocalUnlock({ envelope: managedEnvelope, user, openIdHash: user.feishu_open_id_hash, passphrase, decrypt: decryptVaultPayload, hashPassword });
+      nextManagedEnvelope = sealLocalUnlock({ user, openIdHash: user.feishu_open_id_hash, password: newPassword, passphrase, encrypt: encryptVaultPayload });
+    } catch { /* A legacy key change requires local password recovery once. */ }
+  }
 
   db.run('BEGIN');
   try {
@@ -2983,6 +3330,14 @@ function changeLocalPassword(input) {
         [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, row.id],
       );
     }
+    for (const row of chatMessages) {
+      db.run('UPDATE chat_messages SET content_ciphertext = ?, content_iv = ?, content_tag = ? WHERE owner_user_id = ? AND room_id = ? AND id = ?',
+        [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, user.id, row.roomId, row.id]);
+    }
+    for (const row of chatAttachments) {
+      db.run('UPDATE chat_attachments SET content_ciphertext = ?, content_iv = ?, content_tag = ? WHERE owner_user_id = ? AND room_id = ? AND id = ?',
+        [row.encrypted.ciphertext, row.encrypted.iv, row.encrypted.tag, user.id, row.roomId, row.id]);
+    }
     for (const row of wrappedGroupKeys) {
       db.run(
         `UPDATE group_member_keys
@@ -2991,6 +3346,7 @@ function changeLocalPassword(input) {
         [row.wrapped.ciphertext, row.wrapped.iv, row.wrapped.tag, row.groupId, user.id, row.keyVersion],
       );
     }
+    if (managedEnvelope) db.run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', [`managedSignin:${user.id}`, JSON.stringify(nextManagedEnvelope)]);
     db.run('COMMIT');
   } catch (error) {
     db.run('ROLLBACK');
@@ -3258,11 +3614,50 @@ async function synthesizeWithLlm(profile, question, evidence, options = {}) {
   }
 }
 
-async function queryKnowledgeCenter(question, options = {}) {
+function knowledgeDownloadCandidates(matches, user) {
+  const candidates = new Map();
+  for (const match of matches) {
+    let record;
+    if (match.sourceTable === 'library_items') {
+      const item = queryOne('SELECT id, scope, group_id, user_id, remote_only FROM library_items WHERE id = ?', [match.assetId]);
+      if (!item?.remote_only) continue;
+      record = queryOne(
+        `SELECT * FROM records WHERE asset_id = ? AND kind = 'library-item' AND
+           ((scope = 'group' AND group_id = ?) OR (COALESCE(scope, 'personal') = 'personal' AND user_id = ?))
+         ORDER BY uploaded_at DESC, id DESC LIMIT 1`,
+        [item.id, item.scope === 'group' ? item.group_id : '', item.scope === 'group' ? '' : user.id],
+      );
+    } else if (match.sourceTable === 'records') {
+      record = queryOne('SELECT * FROM records WHERE id = ?', [match.assetId]);
+      if (record?.kind === 'library-item' && record.asset_id) {
+        if (!queryOne('SELECT id FROM library_items WHERE id = ? AND remote_only = 1', [record.asset_id])) continue;
+        record = queryOne(
+          `SELECT * FROM records WHERE asset_id = ? AND kind = 'library-item' AND
+            COALESCE(scope, 'personal') = ? AND
+            ((scope = 'group' AND group_id = ?) OR (COALESCE(scope, 'personal') = 'personal' AND user_id = ?))
+           ORDER BY uploaded_at DESC, id DESC LIMIT 1`,
+          [record.asset_id, record.scope || 'personal', record.group_id || '', user.id],
+        );
+      }
+    }
+    if (!record?.token || candidates.has(record.id)) continue;
+    if (record.kind !== 'library-item' && queryOne(
+      'SELECT id FROM decrypted_items WHERE record_id = ? AND user_id = ? AND downloaded_at >= ?',
+      [record.id, user.id, record.uploaded_at],
+    )) continue;
+    candidates.set(record.id, { id: record.id, title: match.title });
+    if (candidates.size >= 6) break;
+  }
+  return [...candidates.values()];
+}
+
+async function queryKnowledgeCenter(question, options = {}, report = () => {}) {
   const user = requireUser();
   const cleanQuestion = String(question || '').trim();
   if (!cleanQuestion) throw new Error('请输入要检索的问题');
+  const check = sessionGuard(user);
   const context = options.context || getContext();
+  if (context.scope === 'group') groupService.requireGroupAccess(db, queryOne, context.groupId, user.id);
   const includePersonal = options.includePersonal !== false && context.scope !== 'group';
   const searchContext = options.searchScope === 'all'
     ? { scope: 'all', groupId: '' }
@@ -3278,18 +3673,96 @@ async function queryKnowledgeCenter(question, options = {}) {
     : [];
   const aiProfile = getAiProfileRow(user.id);
   searchService.ensureSearchIndex(db, queryAll, user.id, {
-    decryptLibraryItem: (row) => decryptContent(row, user, requireSessionPassword()),
+    decryptLibraryItem: (row) => row.remote_only ? Buffer.from('{}') : decryptContent(row, user, requireSessionPassword()),
   });
   saveDatabase();
   const vectorOptions = {
     enabled: isLocalVectorSearchEnabled(),
     modelName: currentVectorModel(),
   };
-  const evidence = [...await searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext, vectorOptions)];
+  const findLocal = (vector = {}) => searchService.searchLocalAssets(db, queryAll, user.id, cleanQuestion, searchContext, vector);
+  const notices = [];
+  const feishuToken = getFeishuToken();
+  const cloudMatches = !user.feishu_open_id_hash || (feishuToken?.user?.openId &&
+    cloudAccount.hashFeishuOpenId(feishuToken.user.openId) === user.feishu_open_id_hash);
+  const canSync = Boolean(feishuToken?.accessToken && cloudMatches);
+  if (feishuToken?.accessToken && !cloudMatches) notices.push('当前飞书账号与秘栈绑定账号不一致，已继续使用本机资料。');
+  if (canSync) {
+    const scopes = searchContext.scope === 'all'
+      ? [{ scope: 'personal' }, ...queryAll(
+        "SELECT group_id FROM group_memberships WHERE user_id = ? AND status = 'active'", [user.id],
+      ).map(row => ({ scope: 'group', groupId: row.group_id }))]
+      : [{ scope: context.scope === 'group' ? 'group' : 'personal', groupId: context.groupId }];
+    report({ stage: 'sync' });
+    let failedScopes = 0;
+    for (const scope of scopes) {
+      try {
+        await pullManifestFromFeishu({ ...scope, downloadMode: 'manual' });
+      } catch {
+        failedScopes += 1;
+      }
+      check();
+    }
+    if (failedScopes) notices.push('飞书目录未全部刷新，本次结果可能包含本机已有版本。');
+  }
+
+  report({ stage: 'match' });
+  const initial = await findLocal({ includeMetadata: true });
+  check();
+  const downloads = canSync ? knowledgeDownloadCandidates(initial, user) : [];
+  let failedDownloads = 0;
+  for (const [index, record] of downloads.entries()) {
+    report({ stage: 'download', current: index + 1, total: downloads.length, title: record.title });
+    try {
+      await downloadRecordToLocal(record.id, '', { returnState: false });
+    } catch {
+      failedDownloads += 1;
+    }
+    check();
+  }
+  if (failedDownloads) notices.push(`${failedDownloads} 份匹配资料未能取回，回答仅依据可用资料。`);
+
+  report({ stage: 'search' });
+  const finalMatches = await findLocal({ ...vectorOptions, includeMetadata: true });
+  check();
+  const terms = searchService.tokenizeQuery(cleanQuestion);
+  const withLibraryBody = (match) => {
+    const row = queryOne('SELECT * FROM library_items WHERE id = ?', [match.assetId]);
+    if (!row || row.remote_only || row.kind === 'secret') return match;
+    // Recover the body for items indexed by older builds as metadata only.
+    try {
+      const body = JSON.parse(decryptContent(row, user, requireSessionPassword()).toString('utf8'));
+      if (body.content) return { ...match, content: searchService.extractSnippet(body.content, terms) };
+    } catch { /* Keep the available metadata. */ }
+    return match;
+  };
+  const evidence = finalMatches.filter(match => match.sourceTable !== 'decrypted_items' || !queryOne(
+    `SELECT 1 FROM decrypted_items di JOIN records r ON r.id = di.record_id
+     WHERE di.id = ? AND di.downloaded_at < r.uploaded_at`, [match.assetId],
+  )).map(match => {
+    if (match.sourceTable === 'library_items') return withLibraryBody(match);
+    if (match.sourceTable !== 'records') return match;
+    const linked = queryOne(
+      "SELECT li.id, li.kind, li.title FROM records r JOIN library_items li ON li.id = r.asset_id WHERE r.id = ? AND r.kind = 'library-item'",
+      [match.assetId],
+    );
+    if (linked) {
+      if (finalMatches.some(item => item.assetId === linked.id)) return null;
+      return withLibraryBody({ ...match, assetId: linked.id, sourceTable: 'library_items', title: linked.title, kind: linked.kind });
+    }
+    const local = queryOne(
+      `SELECT di.id, idx.content FROM decrypted_items di
+       LEFT JOIN asset_search_fallback idx ON idx.asset_id = di.id
+       JOIN records r ON r.id = di.record_id
+       WHERE di.record_id = ? AND di.user_id = ? AND di.downloaded_at >= r.uploaded_at`,
+      [match.assetId, user.id],
+    );
+    return local ? { ...match, assetId: local.id, sourceTable: 'decrypted_items',
+      content: local.content ? searchService.extractSnippet(local.content, terms) : match.content } : match;
+  }).filter(Boolean).filter((match, index, matches) => matches.findIndex(item => item.assetId === match.assetId) === index);
   const setupHints = [];
 
-  const feishuToken = getFeishuToken();
-  if (feishuToken && feishuToken.accessToken && getFeishuWikiSettings().enabled) {
+  if (canSync && getFeishuWikiSettings().enabled) {
     try {
       evidence.push(...await callFeishuWikiRetriever(cleanQuestion));
     } catch (error) {
@@ -3341,7 +3814,7 @@ async function queryKnowledgeCenter(question, options = {}) {
     setupHints.push(knowledgeHints.obsidianSetupHint());
   }
 
-  const hasRemote = Boolean(feishuToken && feishuToken.accessToken && getFeishuWikiSettings().enabled)
+  const hasRemote = Boolean(canSync && getFeishuWikiSettings().enabled)
     || knowledgeSources.length + vectorSources.length + obsidianSources.length > 0;
   const actionableEvidence = evidence.filter((item) => !item.isHint);
   if (actionableEvidence.length === 0 && setupHints.length === 0) {
@@ -3352,7 +3825,10 @@ async function queryKnowledgeCenter(question, options = {}) {
     );
   }
   const allEvidence = knowledgeSafety.prepareEvidence([...actionableEvidence, ...setupHints], { limit: 6, hintLimit: 2 });
+  check();
+  report({ stage: aiProfile?.base_url && aiProfile?.model ? 'answer' : 'results' });
   const synthesis = await synthesizeWithLlm(aiProfile, cleanQuestion, allEvidence);
+  check();
   const safeAnswer = knowledgeSafety.redactSensitiveText(synthesis.answer);
   const log = {
     id: crypto.randomUUID(),
@@ -3368,7 +3844,7 @@ async function queryKnowledgeCenter(question, options = {}) {
     [log.id, user.id, log.question, log.answer, JSON.stringify(log.evidence), log.createdAt],
   );
   saveDatabase();
-  return { ...log, state: publicState(), usedLlm: synthesis.usedLlm, setupHints };
+  return { ...log, state: publicState(), usedLlm: synthesis.usedLlm, setupHints, notices };
 }
 
 function createWindow() {
@@ -3391,6 +3867,8 @@ function createWindow() {
   if (process.platform === 'darwin' && app.dock) {
     app.dock.setIcon(iconPath);
   }
+
+  mainWindow.on('closed', () => screenshotEditor?.cancel());
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https:\/\//i.test(url)) shell.openExternal(url);
@@ -3529,79 +4007,132 @@ function openFeishuAuthInBrowser(authUrl) {
   shell.openExternal(authUrl);
 }
 
-async function handleManagedFeishuLogin(settings) {
-  const serviceUrl = managedServiceUrl(settings);
-  if (!serviceUrl) {
-    throw new Error('AxonMind 托管服务尚未开通。当前版本可切换到「个人自建」或「企业自建」继续使用');
+async function managedAuthorization(settings) {
+  const payload = await authorizeManaged({ serviceUrl: managedServiceUrl(settings), port: settings.redirectPort,
+    deviceId: installationDeviceId(), openExternal: async url => { await shell.openExternal(url) },
+    post: (url, body) => requestJson('POST',url,{body}) });
+  return { ...normalizeManagedToken(payload), syncKeyGrant: payload.syncKeyGrant };
+}
+async function handleManagedFeishuLogin() {
+  requireUser();
+  const result = await beginCloudSignin();
+  if (result.needsRecovery || result.needsLocalPassword) throw new Error('旧账号需要恢复一次，请使用「配置 → 飞书同步」中的飞书登录');
+  return result.state;
+}
+
+let pendingCloudSignin = null, cloudSigninBusy = false;
+async function beginCloudSignin() {
+  await ensureDatabase();
+  if (cloudSigninBusy) throw new Error('已有飞书登录正在进行，请完成授权或等待超时');
+  cloudSigninBusy = true;
+  pendingCloudSignin = null;
+  const userId = activeUser?.id || '', epoch = chatSessionEpoch;
+  try {
+    const settings = getSettings();
+    const serviceUrl = managedServiceUrl(settings);
+    const token = await managedAuthorization(settings);
+    if ((activeUser?.id || '') !== userId || chatSessionEpoch !== epoch) throw new Error('登录状态已变化，请重试');
+    if (!token.user?.openId) throw new Error('无法识别飞书身份');
+    const { syncKeyGrant, ...feishuToken } = token;
+    pendingCloudSignin = { token: feishuToken, serviceUrl, userId, epoch, expires: Date.now()+600000 };
+  } finally { cloudSigninBusy = false; }
+  return finishCloudSignin({});
+}
+
+async function managedSigninKey(token, action, passphrase, serviceUrl = managedServiceUrl()) {
+  let result;
+  try {
+    result = await requestJson('POST', `${serviceUrl}/v1/feishu/signin-key`, {
+      headers: { Authorization: `Bearer ${token.accessToken}` },
+      body: { action, ...(passphrase === undefined ? {} : { passphrase }) },
+    });
+  } catch {
+    throw new Error('自动登录服务暂不可用，请稍后重试；若持续出现，请联系管理员更新登录服务');
   }
-  const user = requireUser();
-  await cancelPendingFeishuLoginAsync('准备新的飞书登录');
-  const stateValue = crypto.randomBytes(18).toString('hex');
-  const redirectUri = feishuRedirectUri(settings);
-  await new Promise((resolve, reject) => {
-    let loginTimeout = null;
-    const finish = (fn) => {
-      if (loginTimeout) clearTimeout(loginTimeout);
-      fn();
+  const value = (result?.data || result)?.passphrase;
+  if (action === 'lookup' && value === null) return null;
+  if (typeof value !== 'string' || value.length < 8) throw new Error('自动登录服务未返回有效密钥，请联系管理员');
+  return value;
+}
+
+async function finishCloudSignin(input) {
+  await ensureDatabase();
+  const pending = pendingCloudSignin;
+  if (!pending || pending.expires < Date.now() || pending.epoch !== chatSessionEpoch || pending.userId !== (activeUser?.id || '')) throw new Error('扫码授权已失效，请重新登录');
+  if (cloudSigninBusy) throw new Error('正在恢复账号，请稍候');
+  cloudSigninBusy = true;
+  const previousUser = activeUser, previousPassword = activePassword, previousToken=getFeishuToken(), previousSettings=getSettings();
+  try {
+    const openIdHash = cloudAccount.hashFeishuOpenId(pending.token.user.openId);
+    if (previousUser?.feishu_open_id_hash && previousUser.feishu_open_id_hash !== openIdHash) throw new Error('当前账号已绑定其他飞书身份，请切换账号');
+    const checkSignin = () => {
+      if (pending !== pendingCloudSignin || pending.epoch !== chatSessionEpoch || pending.userId !== (activeUser?.id || '')) throw new Error('登录状态已变化，请重新授权');
     };
-    const server = http.createServer(async (req, res) => {
-      try {
-        const url = new URL(req.url || '/', redirectUri);
-        const ticket = url.searchParams.get('ticket');
-        const returnedState = url.searchParams.get('state');
-        const error = url.searchParams.get('error');
-        if (error) throw new Error(`飞书授权被取消：${error}`);
-        if (!ticket || returnedState !== stateValue) throw new Error('托管登录回调参数无效');
-        const exchanged = await requestJson('POST', `${serviceUrl}/v1/feishu/oauth/sessions/exchange`, {
-          body: { ticket, state: stateValue, redirectUri, deviceId: installationDeviceId() },
-        });
-        setFeishuToken(normalizeManagedToken(exchanged));
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(oauthSuccessHtml());
-        server.close();
-        pendingLogin = null;
-        finish(resolve);
-      } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(`<h2>AxonMind 托管登录失败</h2><pre>${String(err)}</pre>`);
-        server.close();
-        pendingLogin = null;
-        finish(() => reject(err));
+    const headers={Authorization:`Bearer ${pending.token.accessToken}`};
+    const root=ensureFeishuPayload(await requestJson('GET',`${FEISHU_API}/open-apis/drive/explorer/v2/root_folder/meta`,{headers}),'读取云盘权限失败');
+    if(!root.token) throw new Error('飞书云盘尚未授权，请在飞书应用后台开通云盘权限');
+    let folder=previousUser && previousSettings.folderToken && previousSettings.folderToken !== 'root' ? previousSettings.folderToken : root.token;
+    const files=await feishuDrive.listAllFiles(async cursor=>ensureFeishuPayload(await requestJson('GET',`${FEISHU_API}/open-apis/drive/v1/files?folder_token=${encodeURIComponent(folder)}&page_size=200${cursor?`&page_token=${encodeURIComponent(cursor)}`:''}`,{headers}),'读取云端账号失败'));
+    const file=feishuDrive.findManifestFile(files,cloudAccount.accountFileName(pending.token.user.openId));
+    let profileBuffer = null;
+    if(file){const downloaded=await requestBuffer('GET',`${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(file.token)}/download`,{headers});if(downloaded.status>=400)throw new Error('无法下载云端账号');profileBuffer=downloaded.body;}
+    const sameIdentity = previousToken?.user?.openId === pending.token.user.openId;
+    const savedPassphrase = (previousUser || sameIdentity) ? previousSettings.feishuPassphrase : '';
+    const resolved = await resolveSigninKey({
+      lookup: () => managedSigninKey(pending.token, 'lookup', undefined, pending.serviceUrl),
+      create: passphrase => { checkSignin(); return managedSigninKey(pending.token, passphrase ? 'import' : 'create', passphrase, pending.serviceUrl); },
+      hasProfile: Boolean(file), savedPassphrase,
+      recoveryPassphrase: String(input.passphrase || ''),
+      validate: passphrase => cloudAccount.decryptProfile(profileBuffer, passphrase, decryptVaultPayload),
+    });
+    checkSignin();
+    const recoveryResult = { name: pending.token.user.name || '飞书用户', binding: Boolean(previousUser) };
+    if (resolved.needsRecovery) return { ...recoveryResult, needsRecovery: true };
+    const passphrase = resolved.passphrase;
+    let profile=null;
+    if(file) profile=cloudAccount.decryptProfile(profileBuffer,passphrase,decryptVaultPayload);
+    if(!previousUser && profile?.storageFolderToken) folder=profile.storageFolderToken;
+    if(pending !== pendingCloudSignin || pending.epoch !== chatSessionEpoch || pending.userId !== (activeUser?.id || '')) throw new Error('登录状态已变化');
+    const accountInput = {identity:pending.token.user,profile,users:queryAll('SELECT * FROM users'),currentUser:activeUser};
+    const localUser = findSigninAccount(accountInput).user;
+    let localPassword = activeUser ? activePassword : String(input.localPassword || '');
+    if (localUser) {
+      assertLoginAllowed(localUser.email);
+      const envelope = getStateValue(`managedSignin:${localUser.id}`, '');
+      if (!localPassword && envelope) {
+        try { localPassword = openLocalUnlock({ envelope, user: localUser, openIdHash, passphrase, decrypt: decryptVaultPayload, hashPassword }); }
+        catch { return { ...recoveryResult, needsLocalPassword: true }; }
       }
-    });
-    server.listen(settings.redirectPort, '127.0.0.1', async () => {
-      pendingLogin = { server, reject };
-      loginTimeout = setTimeout(() => {
-        server.close();
-        pendingLogin = null;
-        reject(new Error('AxonMind 托管登录超时（10 分钟）'));
-      }, 10 * 60 * 1000);
-      try {
-        const started = await requestJson('POST', `${serviceUrl}/v1/feishu/oauth/sessions`, {
-          body: {
-            state: stateValue,
-            redirectUri,
-            deviceId: installationDeviceId(),
-            accountEmail: user.email,
-          },
-        });
-        const authorizationUrl = started?.data?.authorizationUrl || started?.authorizationUrl;
-        if (!authorizationUrl || !/^https:\/\//i.test(authorizationUrl)) throw new Error('托管服务没有返回有效的飞书授权地址');
-        openFeishuAuthInBrowser(authorizationUrl);
-      } catch (error) {
-        server.close();
-        pendingLogin = null;
-        finish(() => reject(error));
+      if (!localPassword) {
+        const restored = restoreSessionPassword();
+        if (restored && hashPassword(restored, localUser.password_salt) === localUser.password_hash) localPassword = restored;
       }
-    });
-    server.on('error', (err) => {
-      pendingLogin = null;
-      reject(err && err.code === 'EADDRINUSE'
-        ? new Error(`OAuth 回调端口 ${settings.redirectPort} 已被占用，请完全退出其他 AxonMind 实例后重试`)
-        : err);
-    });
-  });
-  return publicState();
+    } else localPassword = crypto.randomBytes(32).toString('base64url');
+    const chosen=chooseSigninAccount({...accountInput,passphrase,localPassword,hashPassword});
+    if(chosen.needsLocalPassword){if(input.localPassword)recordLoginFailure(localUser.email);return {...recoveryResult,needsLocalPassword:true};}
+    if(chosen.user && !previousUser){assertLoginAllowed(chosen.user.email);loginAttempts.delete(chosen.user.email);}
+    let user=chosen.user;
+    if(!user){const salt=crypto.randomBytes(16).toString('base64');user={id:crypto.randomUUID(),vault_id:chosen.vaultId,email:chosen.email,username:profile?.username || pending.token.user.name || '飞书用户',password_salt:salt,password_hash:hashPassword(chosen.password,salt),created_at:new Date().toISOString()};db.run('INSERT INTO users(id,vault_id,email,username,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?,?)',Object.values(user));saveDatabase();}
+    setStateValue(`managedSignin:${user.id}`, sealLocalUnlock({ user, openIdHash, password: chosen.password, passphrase, encrypt: encryptVaultPayload }));
+    activeUser=user;activePassword=chosen.password;
+    setFeishuToken(pending.token);
+    setStateValue('settings',{...previousSettings,syncAccessMode:'managed',managedServiceUrl:pending.serviceUrl,feishuPassphrase:passphrase,feishuAutoSync:true,folderToken:folder});
+    await linkCloudAccount({mode:profile?'join':'create',passphrase});
+    if(folder !== root.token){
+      const actual=await loadCloudAccountProfile(passphrase);
+      const rootFiles=await listFeishuFolderFiles(root.token);
+      const rootFile=feishuDrive.findManifestFile(rootFiles,cloudAccount.accountFileName(pending.token.user.openId));
+      if(rootFile){const rootProfile=cloudAccount.decryptProfile(await downloadFeishuFileBuffer(rootFile.token),passphrase,decryptVaultPayload);if(rootProfile.vaultId!==actual.profile.vaultId)throw new Error('飞书根目录已绑定另一个秘栈账号，未覆盖其资料');}
+      await uploadCloudAccountProfile({...actual.profile,storageFolderToken:folder},passphrase,{parentNode:root.token,files:rootFiles,fileName:cloudAccount.accountFileName(pending.token.user.openId)});
+    }
+    if(pending.epoch !== chatSessionEpoch || activeUser?.id !== user.id) throw new Error('账号已变化，请重新扫码');
+    createLocalSession(activeUser.id,activePassword);
+    afterAuthSuccess(activeUser,activePassword);
+    pendingCloudSignin=null;
+    requestAutoSync('cloud-signin',500);
+    return {state:publicState()};
+  } catch(error) {if(pending.epoch === chatSessionEpoch){activeUser=previousUser;activePassword=previousPassword;setFeishuToken(previousToken);setStateValue('settings',previousSettings);}throw error;}
+  finally {cloudSigninBusy=false;}
 }
 
 async function handleFeishuLogin() {
@@ -3609,7 +4140,7 @@ async function handleFeishuLogin() {
   requireUser();
   const settings = getSettings();
   if (syncAccess.normalizeMode(settings.syncAccessMode, settings) === 'managed') {
-    return handleManagedFeishuLogin(settings);
+    return handleManagedFeishuLogin();
   }
   if (!settings.appId || !settings.appSecret) {
     throw new Error('请先填写飞书 App ID 和 App Secret');
@@ -3702,8 +4233,10 @@ function registerHandlers() {
 
   ipcMain.handle('vault:getState', async () => {
     await ensureDatabase();
+    const wasLoggedIn = Boolean(activeUser);
     restoreLocalSession();
-    requestAutoSync('app-start', 1500);
+    if (!wasLoggedIn && activeUser && hasUsableFeishuToken(getFeishuToken())) refreshFeishuTokenIfNeeded().catch(() => {});
+    if (!autoSyncTimer && !autoSyncRunning) requestAutoSync('app-start', 1500);
     return publicState();
   });
 
@@ -3747,6 +4280,9 @@ function registerHandlers() {
     const acceptedInvites = afterAuthSuccess(user, password);
     return { ...publicState(), recoveryCode, acceptedInvites };
   });
+
+  ipcMain.handle('vault:beginCloudSignin', async () => beginCloudSignin());
+  ipcMain.handle('vault:finishCloudSignin', async (_event,input) => finishCloudSignin(input || {}));
 
   ipcMain.handle('vault:loginLocal', async (_event, input) => {
     await ensureDatabase();
@@ -3808,14 +4344,16 @@ function registerHandlers() {
         (SELECT COUNT(*) FROM library_items WHERE user_id = ?) +
         (SELECT COUNT(*) FROM decrypted_items WHERE user_id = ?) +
         (SELECT COUNT(*) FROM project_accounts WHERE user_id = ?) +
-        (SELECT COUNT(*) FROM group_member_keys WHERE user_id = ?) AS total`,
-      [user.id, user.id, user.id, user.id],
+        (SELECT COUNT(*) FROM group_member_keys WHERE user_id = ?) +
+        (SELECT COUNT(*) FROM chat_messages WHERE owner_user_id = ?) AS total`,
+      [user.id, user.id, user.id, user.id, user.id],
     );
     if (Number(encryptedData?.total || 0) > 0) {
       throw new Error('该账号已有加密内容，无法在不知道旧密码的情况下安全重置。请用旧密码登录后在「配置 → 账户恢复」中修改本地密码。');
     }
     const salt = crypto.randomBytes(16).toString('base64');
     db.run('UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?', [salt, hashPassword(newPassword, salt), user.id]);
+    db.run('DELETE FROM app_state WHERE key = ?', [`managedSignin:${user.id}`]);
     saveDatabase();
     return { ok: true };
   });
@@ -3824,7 +4362,7 @@ function registerHandlers() {
     await ensureDatabase();
     requireUser();
     const previous = getSettings();
-    const next = sanitizeSettings({ ...previous, ...(input || {}) }, previous.appSecret, previous.feishuPassphrase);
+    const next = sanitizeSettings({ ...previous, ...(input || {}), screenshotShortcut: previous.screenshotShortcut }, previous.appSecret, previous.feishuPassphrase);
     setStateValue('settings', next);
     const authenticationChanged = next.syncAccessMode !== previous.syncAccessMode
       || next.appId !== previous.appId
@@ -3948,6 +4486,7 @@ function registerHandlers() {
     const filePaths = Array.isArray(payload && payload.filePaths) ? payload.filePaths : [];
     if (filePaths.length === 0) throw new Error('请选择至少一个本地文件');
     const scopeMeta = resolveScopeFromInput(payload || {});
+    const check = sessionGuard(requireUser());
     const uploadId = String(payload && payload.uploadId ? payload.uploadId : crypto.randomUUID());
     const total = filePaths.length;
     const records = [];
@@ -3975,7 +4514,11 @@ function registerHandlers() {
         index,
       });
       try {
-        const record = await uploadVaultPayload(payloadFromFile(filePath), configuredFeishuPassphrase(payload.passphrase), scopeMeta);
+        check();
+        const file = payloadFromFile(filePath);
+        const record = await uploadVaultPayload(file, configuredFeishuPassphrase(payload.passphrase), scopeMeta);
+        check();
+        await importFileToLocal(filePath, scopeMeta, { payload: file, recordId: record.id });
         records.push(record);
         sendUploadProgress(event, {
           uploadId,
@@ -4062,7 +4605,7 @@ function registerHandlers() {
 
   ipcMain.handle('vault:openItem', async (_event, payload) => {
     await ensureDatabase();
-    return openLibraryItem(String(payload.itemId || ''));
+    return openLibraryItem(String(payload.itemId || ''), { previewOnly: payload.previewOnly === true });
   });
 
   ipcMain.handle('vault:saveItemFile', async (_event, payload) => {
@@ -4250,9 +4793,209 @@ function registerHandlers() {
     return saveFeishuWikiSettings(input || {});
   });
 
-  ipcMain.handle('vault:queryKnowledgeCenter', async (_event, payload) => {
+  ipcMain.handle('vault:queryKnowledgeCenter', async (event, payload) => {
     await ensureDatabase();
-    return queryKnowledgeCenter(payload && payload.question, payload || {});
+    const requestId = typeof payload?.requestId === 'string' ? payload.requestId.slice(0, 64) : '';
+    return queryKnowledgeCenter(payload?.question, payload || {}, progress => {
+      if (requestId && !event.sender.isDestroyed()) {
+        event.sender.send('vault:knowledgeProgress', { requestId, ...progress });
+      }
+    });
+  });
+
+  ipcMain.handle('vault:pickChatAttachments', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input, true);
+    const result = await dialog.showOpenDialog(mainWindow, { title: input.imagesOnly ? '选择图片' : '选择聊天附件',
+      properties: ['openFile', 'multiSelections'], ...(input.imagesOnly ? { filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }] } : {}) });
+    check();
+    if (result.canceled) return { canceled: true, attachments: [] };
+    if (result.filePaths.length > chatFiles.MAX_ATTACHMENTS) throw new Error('一次最多选择 5 个附件');
+    const files = [];
+    for (const filePath of result.filePaths) {
+      const stat = await fs.promises.stat(filePath);
+      if (!stat.isFile() || stat.size > chatFiles.MAX_ATTACHMENT_BYTES) throw new Error(`「${path.basename(filePath)}」无法发送：单个附件不能超过 12MB`);
+      const bytes = await fs.promises.readFile(filePath);
+      check();
+      files.push({ name: path.basename(filePath), bytes });
+    }
+    return { canceled: false, attachments: stageChatFiles(input, files) };
+  });
+  ipcMain.handle('vault:stageChatData', async (_event, input) => {
+    await ensureDatabase();
+    chatOperation(input, true)();
+    if (!Array.isArray(input.files) || input.files.length > chatFiles.MAX_ATTACHMENTS || !input.files.length) throw new Error('每次最多添加 5 个附件');
+    const files = input.files.map(file => {
+      if (typeof file.base64 !== 'string' || file.base64.length > Math.ceil(chatFiles.MAX_ATTACHMENT_BYTES / 3) * 4 || (file.base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64))) throw new Error('附件数据无效或超过 12MB');
+      return { name: chatFiles.safeName(file.name), bytes: Buffer.from(file.base64, 'base64') };
+    });
+    return { attachments: stageChatFiles(input, files) };
+  });
+  ipcMain.handle('vault:discardChatAttachments', async (_event, input) => {
+    await ensureDatabase(); requireUser(); getChatService().discardAttachments(input || {});
+    return { ok: true };
+  });
+  ipcMain.handle('vault:captureChatScreenshot', async (_event, input) => {
+    await ensureDatabase();
+    return captureEditedChatScreenshot(input);
+  });
+  ipcMain.handle('vault:annotateChatDraft', async (_event, input) => {
+    await ensureDatabase();
+    return captureEditedChatScreenshot(input, true);
+  });
+  ipcMain.handle('vault:getScreenshotShortcut', () => screenshotShortcutController.getState());
+  ipcMain.handle('vault:setScreenshotShortcut', async (_event, input) => {
+    await ensureDatabase(); requireUser();
+    const state = screenshotShortcutController.setShortcut(input?.accelerator);
+    setStateValue('settings', { ...getSettings(), screenshotShortcut: state.accelerator });
+    return state;
+  });
+  ipcMain.handle('vault:getPendingScreenshot', () => {
+    requireUser();
+    return pendingGlobalScreenshot?.epoch === chatSessionEpoch ? pendingGlobalScreenshot : null;
+  });
+  ipcMain.handle('vault:ackScreenshotDelivery', (_event, input) => {
+    requireUser();
+    if (pendingGlobalScreenshot?.id === input?.id && pendingGlobalScreenshot.epoch === chatSessionEpoch) {
+      if (input.discard) getChatService().discardAttachments({ ids: pendingGlobalScreenshot.attachments.map(file => file.id) });
+      pendingGlobalScreenshot = null;
+    }
+    return { ok: true };
+  });
+  ipcMain.handle('vault:getChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input);
+    const result = await getChatService().getAttachment(input);
+    check();
+    const preview = chatPreviewData(result.bytes, result.attachment.mime, Boolean(input.thumbnail));
+    if (!preview) throw new Error('该附件无法预览，请保存到本地查看');
+    return { preview };
+  });
+  ipcMain.handle('vault:operateChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input);
+    if (!['open', 'reveal', 'copyPath', 'copyImage', 'copyFile'].includes(input.action)) throw new Error('不支持的附件操作');
+    const result = await getChatService().getAttachment(input);
+    check();
+    if (input.action === 'copyFile') {
+      const marker = crypto.randomUUID();
+      clipboard.writeBuffer(CHAT_FILE_CLIPBOARD_FORMAT, Buffer.from(marker));
+      copiedChatFile = {
+        marker, epoch: chatSessionEpoch,
+        source: { scope: input.scope, groupId: input.groupId, messageId: input.messageId, attachmentId: input.attachmentId },
+      };
+      return;
+    }
+    if (input.action === 'copyImage') {
+      if (!result.attachment.mime.startsWith('image/')) throw new Error('该附件不是图片');
+      const image = nativeImage.createFromBuffer(result.bytes);
+      if (image.isEmpty()) throw new Error('无法复制该格式的图片');
+      clipboard.writeImage(image);
+      return;
+    }
+    const name = chatFiles.safeName(result.attachment.name).replace(/[<>:"|?*]/g, '_').replace(/[. ]+$/, '') || '附件';
+    if (input.action === 'open' && !/\.(pdf|txt|md|csv|docx?|xlsx?|pptx?|odt|ods|odp|rtf|png|jpe?g|gif|webp|bmp|tiff?|heic|mp4|mov|mp3|wav|m4a|flac|ogg)$/i.test(name)) {
+      throw new Error('请先将此格式的附件另存到本地');
+    }
+    chatOpenedFilesDirectory ||= fs.mkdtempSync(path.join(os.tmpdir(), 'mizhan-chat-'));
+    const cacheKey = crypto.createHash('sha256').update(result.bytes).digest('hex');
+    const directory = path.join(chatOpenedFilesDirectory, cacheKey);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const file = path.join(directory, name);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, result.bytes, { mode: 0o600, flag: 'wx' });
+    if (input.action === 'copyPath') clipboard.writeText(file);
+    else if (input.action === 'reveal') shell.showItemInFolder(file);
+    else {
+      const error = await shell.openPath(file);
+      if (error) throw new Error(error);
+    }
+  });
+
+  ipcMain.handle('vault:pasteChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input, true);
+    const copy = copiedChatFile;
+    if (!copy || copy.epoch !== chatSessionEpoch ||
+        clipboard.readBuffer(CHAT_FILE_CLIPBOARD_FORMAT).toString() !== copy.marker) return { attachments: [] };
+    const checkSource = chatOperation(copy.source);
+    const { attachment, bytes } = await getChatService().getAttachment(copy.source);
+    checkSource();
+    check();
+    return { attachments: stageChatFiles(input, [{ name: attachment.name, bytes }]) };
+  });
+  ipcMain.handle('vault:saveChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input);
+    const result = await getChatService().getAttachment(input);
+    check();
+    const selected = await dialog.showSaveDialog(mainWindow, { title: '保存聊天附件', defaultPath: chatFiles.safeName(result.attachment.name) });
+    check();
+    if (selected.canceled || !selected.filePath) return { canceled: true };
+    await fs.promises.writeFile(selected.filePath, result.bytes, { mode: 0o600 });
+    return { canceled: false };
+  });
+
+  for (const [channel, method] of [['inviteFriend','invite'],['exportFriendDevice','exportDevice'],['inspectFriendInvite','inspect'],['acceptFriendInvite','accept'],['updateFriend','update']]) {
+    ipcMain.handle(`vault:${channel}`,async (_event,input)=> { await ensureDatabase(); const result=getFriendService()[method](input || {}); scheduleChatAutoSync(500); return result; });
+  }
+
+  ipcMain.handle('vault:getChatUnread', async () => {
+    await ensureDatabase();
+    scheduleChatAutoSync(500);
+    return getChatService().unreadCounts();
+  });
+  ipcMain.handle('vault:markChatRead', async (event, input) => {
+    await ensureDatabase();
+    if (!mainWindow?.isFocused() || event.sender !== mainWindow.webContents) return;
+    if (getChatService().markRead(input || {})) notifyChatStatus({ readChanged: true });
+  });
+  ipcMain.handle('vault:deleteChatMessages', async (_event, input) => {
+    await ensureDatabase();
+    const count = getChatService().deleteMessages(input || {});
+    notifyChatStatus();
+    return count;
+  });
+  ipcMain.handle('vault:forwardChatMessages', async (_event, input) => {
+    await ensureDatabase();
+    const count = await getChatService().forwardMessages(input || {});
+    scheduleChatAutoSync(500);
+    notifyChatStatus();
+    return count;
+  });
+  ipcMain.handle('vault:listChat', async (_event, input) => {
+    await ensureDatabase();
+    return getChatService().list(input || {});
+  });
+  ipcMain.handle('vault:sendChat', async (_event, input) => {
+    await ensureDatabase();
+    const service = getChatService();
+    const message = service.send(input || {});
+    let relayed = false;
+    if (input?.scope === 'personal' && chatLiveClient.canRelay()) {
+      try {
+        const envelope = service.encodeLiveText(message);
+        if (envelope) relayed = chatLiveClient.publishText(envelope);
+      } catch { /* Local outbox still archives the message. */ }
+    }
+    if (!relayed) scheduleChatAutoSync(500);
+    else scheduleChatAutoSync(5000);
+    notifyChatStatus();
+    return message;
+  });
+  ipcMain.handle('vault:syncChat', async (_event, input) => {
+    await ensureDatabase();
+    try { return await getChatService().syncRoom(input || {}); }
+    finally { notifyChatStatus(); }
+  });
+  ipcMain.handle('vault:exportChatInvite', async (_event, input) => {
+    await ensureDatabase();
+    return getChatService().exportInvite(input || {});
+  });
+  ipcMain.handle('vault:acceptChatInvite', async (_event, input) => {
+    await ensureDatabase();
+    const result = getChatService().acceptInvite(input || {});
+    scheduleChatAutoSync(500);
+    return { ...result, state: publicState() };
   });
 
   ipcMain.handle('vault:setContext', async (_event, input) => {
@@ -4298,7 +5041,20 @@ function registerHandlers() {
     await ensureDatabase();
     const user = requireUser();
     const password = requireSessionPassword();
-    const result = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, user, password, String(groupId || ''));
+    const epoch = chatSessionEpoch;
+    groupService.requireGroupAccess(db, queryOne, String(groupId || ''), user.id, ['owner', 'admin']);
+    const rotate = () => {
+      if (epoch !== chatSessionEpoch || activeUser?.id !== user.id) throw new Error('登录状态已变化，请重试');
+      const result = groupService.rotateGroupKey(db, saveDatabase, queryOne, queryAll, user, password, String(groupId || ''));
+      db.run("UPDATE chat_messages SET synced_at = NULL, outgoing = 1 WHERE owner_user_id = ? AND group_id = ?", [user.id, String(groupId || '')]);
+      saveDatabase();
+      scheduleChatAutoSync(500);
+      return result;
+    };
+    const attachmentCount = queryOne('SELECT COUNT(*) AS count FROM chat_attachments WHERE owner_user_id = ? AND room_id = ?', [user.id, `group:${groupId}`]);
+    const result = Number(attachmentCount?.count || 0)
+      ? await getChatService().prepareGroupRotation(String(groupId), rotate)
+      : rotate();
     return { ...result, state: publicState() };
   });
 
@@ -4485,15 +5241,32 @@ function registerHandlers() {
   });
 }
 
+const CHAT_FILE_CLIPBOARD_FORMAT = 'com.axonmind.chat-file';
+let copiedChatFile;
+let chatOpenedFilesDirectory;
 app.on('before-quit', () => {
+  if (chatOpenedFilesDirectory) {
+    try { fs.rmSync(chatOpenedFilesDirectory, { recursive: true, force: true }); } catch { /* An external app may still hold the file. */ }
+  }
+  chatLiveClient.stop();
   clearAutoSyncTimer();
+  clearTimeout(chatSyncTimer);
+  screenshotEditor?.dispose();
+  screenshotShortcutController?.dispose();
+  chatSessionEpoch += 1;
   cancelPendingFeishuLogin('应用正在退出');
 });
 
 app.whenReady().then(async () => {
+  setInterval(() => {
+    if (db && activeUser && hasUsableFeishuToken(getFeishuToken())) refreshFeishuTokenIfNeeded().catch(() => {});
+  }, 5 * 60 * 1000).unref();
   if (process.env.AXONMIND_E2E !== '1') migrateLegacyUserData();
   await ensureDatabase();
   configureAutoUpdater();
+  screenshotEditor = createScreenshotEditor({ BrowserWindow, ipcMain, nativeImage, screen });
+  screenshotShortcutController = createScreenshotShortcut(globalShortcut, () => { void captureFromGlobalShortcut(); });
+  screenshotShortcutController.registerInitial(getSettings().screenshotShortcut);
   registerHandlers();
   createWindow();
   if (app.isPackaged) {

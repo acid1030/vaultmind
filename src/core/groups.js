@@ -43,6 +43,7 @@ function normalizeGroup(row) {
 }
 
 function requireGroupAccess(db, queryOne, groupId, userId, minRoles = ['owner', 'admin', 'member', 'viewer']) {
+  if (minRoles.length < 4 && queryOne('SELECT 1 FROM friend_rooms WHERE group_id=?', [groupId])) throw new Error('好友私聊不支持群管理操作');
   const row = queryOne(
     `SELECT m.*, g.name FROM group_memberships m
      INNER JOIN groups g ON g.id = m.group_id

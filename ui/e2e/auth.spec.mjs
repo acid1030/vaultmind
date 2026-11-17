@@ -37,6 +37,7 @@ const appPath = path.resolve(__dirname, '..', '..');
   console.log('Title:', title);
 
   // If register mode is shown, fill and submit
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first();
   if (await registerButton.isVisible().catch(() => false)) {
     await registerButton.click();
@@ -53,12 +54,14 @@ const appPath = path.resolve(__dirname, '..', '..');
   await window.screenshot({ path: '/tmp/electron-registered.png' });
 
   const appImagesReady = await window.locator('img').evaluateAll(images =>
-    images.length > 0 && images.every(image => image.complete && image.naturalWidth > 0),
+    images.every(image => image.complete && image.naturalWidth > 0),
   );
   if (!appImagesReady) throw new Error('A generated interface image failed to load');
 
   const brandName = await window.locator('.vm-brand strong').textContent();
-  if (brandName?.trim() !== 'AxonMind') throw new Error(`Unexpected product brand: ${brandName}`);
+  if (brandName?.trim() !== '秘栈 CONTROL') throw new Error(`Unexpected product brand: ${brandName}`);
+
+  if (await window.locator('.vm-console-logo svg').count() !== 1) throw new Error('Console brand icon is missing');
 
   const backup = await window.evaluate(() => window.vaultApi.createBackup());
   if (!backup?.path || !fs.existsSync(backup.path)) throw new Error('Manual database backup was not created');

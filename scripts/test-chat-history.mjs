@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import { mergeChatHistory } from '../ui/src/lib/chat-history.ts';
+const message = index => ({ id: String(index), createdAt: new Date(index * 1000).toISOString(), text: String(index), senderId: 'a', senderName: 'a', senderEmail: 'a@example.com', deviceId: 'd', synced: true, mine: true });
+const history = (start, end, hasMore = false) => ({ messages: Array.from({ length: end - start + 1 }, (_, i) => message(start + i)), hasMore, writable: true, pending: 0 });
+const gap = mergeChatHistory(history(1, 100), history(151, 250, true), '100');
+assert.equal(gap.messages.length, 100);
+assert.equal(gap.messages[0].id, '151');
+assert.equal(gap.hasMore, true, 'a gap must reset to a contiguous page so older messages remain reachable');
+const overlap = mergeChatHistory(history(1, 100), history(51, 150, true), '100');
+assert.equal(overlap.messages.length, 150);
+assert.equal(overlap.hasMore, false, 'keep loaded older pages when new results cover the previous newest message');
+const manuallyAppended = history(1, 100);
+manuallyAppended.messages.push(message(250));
+const gapWithPending = mergeChatHistory(manuallyAppended, history(151, 250, true), '100');
+assert.equal(gapWithPending.messages.length, 100, 'an optimistic send must not conceal a gap in received history');
+console.log('Chat history continuity tests passed.');

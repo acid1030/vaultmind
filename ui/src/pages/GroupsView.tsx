@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import {
-  Users, Plus, Mail, Crown, Shield, Eye, Trash2, RefreshCw,
+  FolderOpen, Users, Plus, Mail, Crown, Shield, Eye, Trash2, RefreshCw,
   ChevronRight, UserPlus, Copy, Check, Share2, BookOpen,
   Lock, Unlock, FileText, Key, Globe, X, LogOut, Gift
 } from 'lucide-react'
@@ -37,6 +37,9 @@ export default function GroupsView() {
   const pendingInvites = state?.pendingInvites || []
   const context = state?.context || { scope: 'personal' as const, groupId: '', groupName: '' }
 
+  const [groupSearch, setGroupSearch] = useState('')
+  const [memberSearch, setMemberSearch] = useState('')
+  const [sharedSearch, setSharedSearch] = useState('')
   const [selectedGroupId, setSelectedGroupId] = useState<string>('')
   const [groupTab, setGroupTab] = useState<GroupTab>('members')
   const [newGroupName, setNewGroupName] = useState('')
@@ -45,6 +48,7 @@ export default function GroupsView() {
   const [inviteRole, setInviteRole] = useState('member')
   const [inviteCode, setInviteCode] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const memberRequest = useRef(0)
   const [members, setMembers] = useState<any[]>([])
   const [membersLoading, setMembersLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
@@ -63,8 +67,11 @@ export default function GroupsView() {
   // Fetch members when selected group changes
   const fetchMembers = useCallback(async (groupId: string) => {
     if (!groupId) { setMembers([]); return }
+    const version = ++memberRequest.current
+    setMembers([])
     setMembersLoading(true)
     const result = await listGroupMembers(groupId)
+    if (version !== memberRequest.current) return
     if (Array.isArray(result)) {
       setMembers(result)
     } else {
@@ -79,9 +86,12 @@ export default function GroupsView() {
     } else {
       setMembers([])
     }
+    return () => { memberRequest.current++ }
   }, [selectedGroupId, fetchMembers])
 
   const currentGroup = groups.find(g => g.id === selectedGroupId)
+  const canManageGroup = Boolean(currentGroup && ['owner', 'admin'].includes(currentGroup.role))
+  const canShareGroup = Boolean(currentGroup && currentGroup.role !== 'viewer')
   const groupItems = (state?.items || []).filter(i => i.scope === 'group' && i.groupId === selectedGroupId)
   const personalItems = (state?.items || []).filter(i => i.scope === 'personal' || !i.scope)
 
@@ -213,7 +223,7 @@ export default function GroupsView() {
         {pendingInvites.length > 0 && (
           <div className="glass-card rounded-lg overflow-hidden">
             <div className="px-4 py-3 flex items-center justify-between"
-              style={{ borderBottom: '1px solid var(--border)' }}>
+              style={{ borderBottom: '1px solid hsl(var(--border))' }}>
               <h2 className="text-sm font-semibold flex items-center gap-2 text-[hsl(210_30%_90%)]">
                 <Gift className="w-4 h-4 text-amber-400" />
                 待接受邀请
@@ -240,7 +250,7 @@ export default function GroupsView() {
         {/* Group List */}
         <div className="glass-card rounded-lg overflow-hidden">
           <div className="px-4 py-3 flex items-center justify-between"
-            style={{ borderBottom: '1px solid var(--border)' }}>
+            style={{ borderBottom: '1px solid hsl(var(--border))' }}>
             <h2 className="text-sm font-semibold flex items-center gap-2 text-[hsl(210_30%_90%)]">
               <Users className="w-4 h-4 text-cyan-400" />
               我的用户组
@@ -254,7 +264,9 @@ export default function GroupsView() {
                 <p className="text-[10px] text-[hsl(218_16%_36%)] mt-1">在下方创建一个</p>
               </div>
             )}
-            {groups.map(g => {
+            <input className="vm-input mb-2" aria-label="搜索用户组" placeholder="搜索用户组" value={groupSearch} onChange={e => setGroupSearch(e.target.value)} />
+            {groupSearch && !groups.some(g => g.name.toLowerCase().includes(groupSearch.toLowerCase())) && <p className="vm-module-note">没有匹配的用户组</p>}
+            {groups.filter(g => g.name.toLowerCase().includes(groupSearch.toLowerCase())).map(g => {
               const rc = ROLE_CONFIG[g.role] || ROLE_CONFIG.member
               const RoleIcon = rc.icon
               return (
@@ -267,7 +279,7 @@ export default function GroupsView() {
                       : "vm-hover-row border border-transparent"
                   )}>
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 text-base font-bold text-cyan-300"
-                    style={{ background: 'linear-gradient(145deg, hsl(190 60% 18%), hsl(218 36% 14%))', border: '1px solid var(--border)' }}>
+                    style={{ background: 'linear-gradient(145deg, hsl(190 60% 18%), hsl(218 36% 14%))', border: '1px solid hsl(var(--border))' }}>
                     {g.name.charAt(0)}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -312,9 +324,17 @@ export default function GroupsView() {
       {/* ====== Right Column ====== */}
       {currentGroup ? (
         <div className="glass-card rounded-lg overflow-hidden flex flex-col">
+          <section className="vm-module-summary" aria-label="用户组概况">
+            <div><span>当前角色</span><strong>{ROLE_CONFIG[currentGroup.role]?.label || currentGroup.role}</strong></div>
+            <div><span>本机成员目录</span><strong>{membersLoading ? '加载中' : members.length}</strong></div>
+            <div><span>共享内容</span><strong>{groupItems.length}</strong></div>
+            <div><span>云端共享目录</span><strong>{currentGroup.feishuFolderToken && currentGroup.feishuFolderToken !== 'root' ? '已配置' : '待配置'}</strong></div>
+          </section>
+          <div className="vm-module-note">成员数量来自本机目录；不同设备的实际云端访问权限以飞书共享文件夹授权为准。</div>
+          <div className="vm-module-toolbar"><input className="vm-input" aria-label="搜索成员或共享内容" placeholder={groupTab === 'members' ? '搜索成员姓名或账号' : '搜索共享内容标题'} value={groupTab === 'members' ? memberSearch : sharedSearch} onChange={e => groupTab === 'members' ? setMemberSearch(e.target.value) : setSharedSearch(e.target.value)} /></div>
           {/* Group Header */}
           <div className="px-5 py-3 flex items-center justify-between flex-shrink-0"
-            style={{ borderBottom: '1px solid var(--border)' }}>
+            style={{ borderBottom: '1px solid hsl(var(--border))' }}>
             <div>
               <h2 className="text-sm font-semibold text-[hsl(210_30%_90%)]">{currentGroup.name}</h2>
               <p className="text-[10px] mt-0.5 text-[hsl(218_16%_44%)]">
@@ -322,11 +342,11 @@ export default function GroupsView() {
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="ghost" size="sm" onClick={handleRotateKey} disabled={actionLoading}>
+              <Button variant="ghost" size="sm" onClick={handleRotateKey} disabled={actionLoading || !canManageGroup}>
                 <RefreshCw className="w-3.5 h-3.5" />
                 轮换密钥
               </Button>
-              <Button variant="primary" size="sm" onClick={() => setShowShareModal(true)}>
+              <Button variant="primary" size="sm" onClick={() => setShowShareModal(true)} disabled={!canShareGroup}>
                 <Share2 className="w-3.5 h-3.5" />
                 共享内容
               </Button>
@@ -393,18 +413,20 @@ export default function GroupsView() {
                   {[1,2,3].map(i => <CardSkeleton key={i} />)}
                 </div>
               ) : (
-                <div className="space-y-1">
+                <div className="vm-members-table">
+                  <div className="vm-members-heading" aria-hidden="true"><span>成员 / 账号</span><span>角色</span><span>权限管理</span></div>
                   {members.length === 0 && (
                     <div className="px-3 py-6 text-center">
                       <Users className="w-7 h-7 mx-auto mb-2 text-[hsl(218_16%_32%)]" />
                       <p className="text-xs text-[hsl(218_16%_44%)]">暂无成员</p>
                     </div>
                   )}
-                  {members.map(m => {
+                  {memberSearch && !members.some(m => `${m.username || ''} ${m.email || ''}`.toLowerCase().includes(memberSearch.toLowerCase())) && <p className="vm-module-note">没有匹配的成员</p>}
+                  {members.filter(m => `${m.username || ''} ${m.email || ''}`.toLowerCase().includes(memberSearch.toLowerCase())).map(m => {
                     const rc = ROLE_CONFIG[m.role] || ROLE_CONFIG.member
                     const RoleIcon = rc.icon
                     return (
-                      <div key={m.userId || m.id} className="vm-hover-row flex items-center gap-3 px-3 py-2.5 rounded-lg group">
+                      <div key={m.userId || m.id} className="vm-member-row vm-hover-row group">
                         <div className="vm-surface-raised w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-sm font-semibold text-cyan-500">
                           {(m.username || m.email || '?').charAt(0).toUpperCase()}
                         </div>
@@ -413,16 +435,16 @@ export default function GroupsView() {
                             <span className="text-sm font-medium text-[hsl(210_30%_88%)]">
                               {m.username || m.email || '未知用户'}
                             </span>
-                            <span className={cn("vm-badge text-[9px]", rc.badge)}>
-                              <RoleIcon className="w-2.5 h-2.5" />{rc.label}
-                            </span>
+
                           </div>
                           {m.email && (
                             <p className="text-[10px] mt-0.5 text-[hsl(218_16%_44%)]">{m.email}</p>
                           )}
                         </div>
-                        {m.role !== 'owner' && (
-                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <span className={cn("vm-badge text-[9px]", rc.badge)}><RoleIcon className="w-2.5 h-2.5" />{rc.label}</span>
+                        {(!canManageGroup || m.role === 'owner') && <span className="vm-member-permission">{m.role === 'owner' ? '组所有者' : '由管理员管理'}</span>}
+                        {canManageGroup && m.role !== 'owner' && (
+                          <div className="flex gap-1">
                             <select className="h-6 rounded border border-border bg-background px-1.5 text-[10px] text-foreground"
                               value={m.role}
                               onChange={e => handleUpdateRole(m.userId || m.id, e.target.value)}>
@@ -442,6 +464,7 @@ export default function GroupsView() {
                 </div>
               )}
 
+              <section className="vm-group-folder" aria-label="共享文件夹信息"><div><FolderOpen className="w-5 h-5" /><h3>共享文件夹 · 组内资源</h3></div><p>{currentGroup.feishuFolderToken && currentGroup.feishuFolderToken !== 'root' ? '已配置飞书共享目录；实际访问权限由飞书授权决定。' : '尚未配置飞书共享目录。组内资料与云端访问权限需要分别确认。'}</p><Button variant="ghost" size="sm" onClick={() => setGroupTab('shared')}>查看共享内容</Button></section>
               {/* Invite form */}
               <div className="vm-surface-card rounded-lg p-3.5 space-y-2.5">
                 <p className="text-xs font-medium text-[hsl(210_30%_82%)] flex items-center gap-1.5">
@@ -461,7 +484,7 @@ export default function GroupsView() {
                     <option value="viewer">只读</option>
                   </select>
                   <Button variant="primary" size="sm" onClick={handleInvite}
-                    disabled={actionLoading || !inviteEmail.trim()}>
+                    disabled={actionLoading || !canManageGroup || !inviteEmail.trim()}>
                     <Mail className="w-3.5 h-3.5" />
                     邀请
                   </Button>
@@ -475,7 +498,7 @@ export default function GroupsView() {
             <div className="p-4 space-y-2">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs text-[hsl(218_16%_52%)]">共 {groupItems.length} 条共享内容</span>
-                <Button variant="primary" size="sm" onClick={() => setShowShareModal(true)}>
+                <Button variant="primary" size="sm" onClick={() => setShowShareModal(true)} disabled={!canShareGroup}>
                   <Plus className="w-3.5 h-3.5" />
                   从个人库共享
                 </Button>
@@ -487,7 +510,8 @@ export default function GroupsView() {
                   <p className="text-[10px] text-[hsl(218_16%_36%)] mt-1">点击「从个人库共享」添加</p>
                 </div>
               )}
-              {groupItems.map(item => {
+              {sharedSearch && !groupItems.some(item => (item.title || item.name || '').toLowerCase().includes(sharedSearch.toLowerCase())) && <p className="vm-module-note">没有匹配的共享内容</p>}
+              {groupItems.filter(item => (item.title || item.name || '').toLowerCase().includes(sharedSearch.toLowerCase())).map(item => {
                 const KindIcon = KIND_ICONS[item.kind] || FileText
                 return (
                   <div key={item.id} className="vm-hover-row flex items-center gap-3 p-3 rounded-lg border border-border group">

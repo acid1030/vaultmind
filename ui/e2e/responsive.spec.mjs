@@ -16,6 +16,7 @@ const appPath = path.resolve(__dirname, '..', '..');
   const window = await app.firstWindow()
   await window.waitForLoadState('networkidle')
 
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first()
   if (await registerButton.isVisible().catch(() => false)) await registerButton.click()
   await window.fill('input[placeholder="you@example.com"]', `responsive${Date.now()}@example.com`)
@@ -37,7 +38,7 @@ const appPath = path.resolve(__dirname, '..', '..');
 
   const visualPages = ['知识库', '密码库', '添加内容', '用户组', '开发连接', '同步中心', '设置']
   for (const pageName of visualPages) {
-    await window.click(`nav button:has-text("${pageName}")`)
+    await window.locator('.vm-sidebar').getByRole('button', { name: pageName, exact: true }).click()
     const hero = window.locator('.vm-page-hero')
     await hero.waitFor({ state: 'visible' })
     await window.waitForTimeout(350)
@@ -72,7 +73,9 @@ const appPath = path.resolve(__dirname, '..', '..');
   }
 
   await window.screenshot({ path: '/tmp/electron-responsive.png' })
-  await window.click('button[title="切换亮色模式"]')
+  if (!await window.evaluate(() => document.documentElement.classList.contains('light'))) {
+    await window.click('button[title="切换亮色模式"]')
+  }
   await window.waitForTimeout(250)
   if (!await window.locator('.vm-page-hero h1').isVisible()) throw new Error('Page title is hidden after switching to the light theme')
   await window.screenshot({ path: '/tmp/electron-responsive-light.png' })

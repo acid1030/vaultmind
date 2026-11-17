@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>截图标注</title><link rel="stylesheet" href="./editor.css">
+</head>
+<body>
+  <header><div><strong>截图标注</strong><small id="dimensions">正在读取截图…</small></div><span class="hint">原图分辨率导出 · Esc 取消 · ⌘/Ctrl + Enter 完成</span></header>
+  <main id="workspace"><div id="frame"><canvas id="canvas" aria-label="截图标注画布"></canvas><textarea id="text-input" aria-label="标注文字" placeholder="输入文字，Enter 确认，Shift+Enter 换行" hidden></textarea></div></main>
+  <footer>
+    <div class="toolbar" role="toolbar" aria-label="截图标注工具">
+      <button data-tool="rectangle" aria-label="矩形" title="矩形 R">▭</button>
+      <button data-tool="ellipse" aria-label="圆形" title="圆形 O">◯</button>
+      <button data-tool="arrow" aria-label="箭头" title="箭头 A">↗</button>
+      <button data-tool="brush" aria-label="画笔" title="画笔 B">✎</button>
+      <button data-tool="text" aria-label="文字" title="文字 T">T</button>
+      <button data-tool="mosaic" aria-label="马赛克" title="马赛克 M">▦</button>
+      <span class="separator"></span>
+      <div id="palette" aria-label="标注颜色"></div>
+      <label>粗细<select id="line-width" aria-label="线条粗细"><option value="2">细</option><option value="4" selected>中</option><option value="8">粗</option><option value="12">加粗</option></select></label>
+      <label>字号<select id="font-size" aria-label="文字字号"><option>18</option><option selected>24</option><option>32</option><option>48</option><option>64</option></select></label>
+      <span class="separator"></span>
+      <button id="undo" aria-label="撤销" title="⌘/Ctrl+Z">↶</button><button id="redo" aria-label="重做" title="⌘/Ctrl+Shift+Z">↷</button><button id="clear" aria-label="清空标注" title="清空标注">清空</button>
+    </div>
+    <div class="bottom"><p id="status" role="status">拖动画框；选择文字工具后点击图片写字</p><div><button id="cancel">取消</button><button id="finish" class="primary">完成并加入聊天</button></div></div>
+  </footer>
+  <script type="module" src="./editor.mjs"></script>
+</body>
+</html>
