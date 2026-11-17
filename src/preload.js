@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('vaultApi', {
   discardChatAttachments: (payload) => ipcRenderer.invoke('vault:discardChatAttachments', payload),
   captureChatScreenshot: (payload) => ipcRenderer.invoke('vault:captureChatScreenshot', payload),
   getChatAttachment: (payload) => ipcRenderer.invoke('vault:getChatAttachment', payload),
+  pasteChatAttachment: (payload) => ipcRenderer.invoke('vault:pasteChatAttachment', payload),
+  operateChatAttachment: (payload) => ipcRenderer.invoke('vault:operateChatAttachment', payload),
   saveChatAttachment: (payload) => ipcRenderer.invoke('vault:saveChatAttachment', payload),
   exportFriendDevice: payload => ipcRenderer.invoke('vault:exportFriendDevice',payload),
   inviteFriend: payload => ipcRenderer.invoke('vault:inviteFriend',payload),

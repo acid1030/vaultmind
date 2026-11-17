@@ -375,6 +375,8 @@ export interface VaultApi {
   discardChatAttachments: (input: { ids: string[] }) => Promise<{ ok: boolean }>
   captureChatScreenshot: (input: ChatRoom) => Promise<{ canceled: boolean; attachments: ChatDraftAttachment[] }>
   getChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string; thumbnail?: boolean }) => Promise<{ preview: string }>
+  pasteChatAttachment: (input: ChatRoom) => Promise<{ attachments: ChatDraftAttachment[] }>
+  operateChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string; action: 'open' | 'reveal' | 'copyPath' | 'copyImage' | 'copyFile' }) => Promise<void>
   saveChatAttachment: (input: ChatRoom & { messageId: string; attachmentId: string }) => Promise<{ canceled: boolean }>
 
   exportFriendDevice: (input:{groupId:string}) => Promise<{code:string}>
@@ -502,6 +504,8 @@ const mockVaultApi: VaultApi = {
   discardChatAttachments: async () => ({ ok: true }),
   captureChatScreenshot: async () => { throw new Error('Electron 不可用') },
   getChatAttachment: async () => { throw new Error('Electron 不可用') },
+  pasteChatAttachment: async () => ({ attachments: [] }),
+  operateChatAttachment: async () => { throw new Error('Electron 不可用') },
   saveChatAttachment: async () => { throw new Error('Electron 不可用') },
   getChatUnread: async () => ({ personal: 0, groups: {}, total: 0 }),
   markChatRead: async () => {},

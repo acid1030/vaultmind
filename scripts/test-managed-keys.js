@@ -18,6 +18,8 @@ const { hashPassword, encryptVaultPayload, decryptVaultPayload } = require('../s
       return { ok: Boolean(identity), json: async () => identity ? { data: { open_id: identity } } : { error: 'invalid token' } };
     },
   };
+  options.syncKeyDirectory = path.join(directory, 'sync-keys');
+  const { createSyncKeyStore } = require('../server/feishu-auth/sync-key-store');
   let server;
   async function start() {
     server = createAuthServer(options);
@@ -31,7 +33,10 @@ const { hashPassword, encryptVaultPayload, decryptVaultPayload } = require('../s
     return { status: response.status, data: await response.json() };
   };
   try {
+    await createSyncKeyStore(options.syncKeyDirectory, tokenKey, options.appId).enroll('legacy-open', { vaultId: crypto.randomUUID(), passphrase: 'existing-sync-secret' });
     await start();
+    assert.equal((await post('legacy', { action: 'lookup' })).data.passphrase, 'existing-sync-secret');
+    assert.equal((await post('legacy', { action: 'create' })).data.passphrase, 'existing-sync-secret');
     assert.equal((await post('', { action: 'create' })).status, 400);
     assert.equal((await post('invalid', { action: 'create' })).status, 400);
     assert.equal((await post('user-a', { action: 'lookup' })).data.passphrase, null);
@@ -46,6 +51,7 @@ const { hashPassword, encryptVaultPayload, decryptVaultPayload } = require('../s
     assert.equal((await post('legacy', { action: 'import', passphrase: 'existing-sync-secret' })).data.passphrase, 'existing-sync-secret');
     assert.equal((await post('legacy', { action: 'import', passphrase: 'different-secret' })).status, 400);
     for (const name of fs.readdirSync(directory)) {
+      if (name === 'sync-keys') continue;
       const file = path.join(directory, name), bytes = fs.readFileSync(file, 'utf8');
       assert.ok(!bytes.includes(first.data.passphrase) && !bytes.includes('existing-sync-secret'));
       assert.equal(fs.statSync(file).mode & 0o777, 0o600);

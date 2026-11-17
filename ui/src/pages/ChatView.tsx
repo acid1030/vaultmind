@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { CheckCheck, Cloud, Copy, LockKeyhole, MessageSquare, Plus, RefreshCw, Send, UserPlus, Users, X, Camera, Image as ImageIcon, Paperclip, FileText, SlidersHorizontal, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { useToast } from '@/components/shared/Toast'
 import { useAppStore } from '@/store/app'
-import { vaultApi, type ChatHistory, type ChatMessage, type ChatRoom, type ChatDraftAttachment, type ScreenshotDelivery } from '@/lib/ipc'
+import { vaultApi, type ChatAttachment, type ChatHistory, type ChatMessage, type ChatRoom, type ChatDraftAttachment, type ScreenshotDelivery } from '@/lib/ipc'
 import FriendsPanel from '@/components/shared/FriendsPanel'
 import { cn } from '@/lib/utils'
 import { mergeChatHistory, sortMessages } from '@/lib/chat-history'
@@ -37,6 +38,11 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   const [showDetails, setShowDetails] = useState(false)
   const [attachmentSearch, setAttachmentSearch] = useState('')
   const [draft, setDraft] = useState('')
+  const [quote, setQuote] = useState('')
+  const composer = useRef<HTMLTextAreaElement>(null)
+  const [messageMenu, setMessageMenu] = useState<{ x: number; y: number; message: ChatMessage; attachment?: ChatAttachment; selectedText: string } | null>(null)
+  const menuElement = useRef<HTMLDivElement>(null)
+  const draftLimit = 20000 - (quote ? quote.length + 2 : 0)
   const [draftFiles, setDraftFiles] = useState<ChatDraftAttachment[]>([])
   const draftFilesRef = useRef<ChatDraftAttachment[]>([])
   const attachmentBusyRef = useRef(false)
@@ -90,6 +96,8 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   useEffect(() => {
     setHistory({ messages: [], hasMore: false, writable: false, pending: 0 })
     setDraft('')
+    setQuote('')
+    setMessageMenu(null)
     setSelecting(false)
     setSelected([])
     setDestination('')
@@ -143,14 +151,15 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
   }, [history.messages])
 
   const send = async () => {
-    if ((!draft.trim() && !draftFilesRef.current.length) || sending || attaching || !history.writable || loading) return
+    if ((!draft.trim() && !draftFilesRef.current.length) || draft.length > draftLimit || sending || attaching || !history.writable || loading) return
     const key = roomKey
-    const text = draft
+    const text = quote ? quote + '\n\n' + draft : draft
     setSending(true)
     try {
       const message = await vaultApi.sendChat({ ...room, text, attachmentIds: draftFilesRef.current.map(file => file.id) })
       if (activeRoom.current !== key) return
       setDraft('')
+      setQuote('')
       replaceDraftFiles([])
       stickToBottom.current = true
       setHistory(previous => ({ ...previous, messages: sortMessages([...previous.messages, message]), pending: previous.pending + 1 }))
@@ -320,16 +329,60 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
     ...(state?.groups || []).filter(g => g.role !== 'viewer').map(g => ({ value: g.id, label: g.name })),
   ].filter((entry, index, all) => all.findIndex(other => other.value === entry.value) === index)
 
+  const openMessageMenu = (event: MouseEvent, message: ChatMessage, attachment?: ChatAttachment) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const selection = window.getSelection()
+    const selectedText = event.currentTarget.contains(selection?.anchorNode || null) &&
+      event.currentTarget.contains(selection?.focusNode || null) ? selection?.toString() || '' : ''
+    setMessageMenu({ x: event.clientX, y: event.clientY, message, attachment, selectedText })
+  }
+
+  useEffect(() => {
+    if (!messageMenu) return
+    const menu = menuElement.current
+    const previous = document.activeElement as HTMLElement | null
+    menu?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+    const dismiss = () => setMessageMenu(null)
+    const outside = (event: PointerEvent) => { if (!menu?.contains(event.target as Node)) dismiss() }
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        dismiss()
+        previous?.focus({ preventScroll: true })
+      }
+      if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return
+      const buttons = Array.from(menu?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || [])
+      if (!buttons.length) return
+      event.preventDefault()
+      const index = buttons.findIndex(button => button === document.activeElement)
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      buttons[(index + step + buttons.length) % buttons.length]?.focus()
+    }
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', keyboard)
+    window.addEventListener('resize', dismiss)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('keydown', keyboard)
+      window.removeEventListener('resize', dismiss)
+    }
+  }, [messageMenu])
+
+  const copyChatText = async (value: string) => {
+    await navigator.clipboard.writeText(value)
+    toast('已复制到剪贴板', 'success')
+  }
+
   const resetSelection = () => {
     setSelecting(false)
     setSelected([])
     setDestination('')
   }
 
-  const actOnSelection = async (action: 'delete' | 'forward') => {
-    if (!selected.length || acting || (action === 'forward' && !destination)) return
+  const actOnSelection = async (action: 'delete' | 'forward', ids = selected) => {
+    if (!ids.length || acting || (action === 'forward' && !destination)) return
     const key = roomKey
-    const ids = selected
     const target: ChatRoom = destination === 'personal'
       ? { scope: 'personal', groupId: '' }
       : { scope: 'group', groupId: destination }
@@ -358,6 +411,17 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
     } finally {
       if (activeRoom.current === key) setActing(false)
     }
+  }
+
+  const menuAction = (operation: () => void | Promise<void>) => {
+    setMessageMenu(null)
+    void Promise.resolve().then(operation).catch(e => toast(messageError(e), 'error'))
+  }
+
+  const selectMessage = (id: string, forward = false) => {
+    setSelecting(true)
+    setSelected(previous => forward ? [id] : previous.includes(id) || previous.length >= 100 ? previous : [...previous, id])
+    if (forward) requestAnimationFrame(() => document.querySelector<HTMLSelectElement>('[aria-label="转发到"]')?.focus())
   }
 
   return (
@@ -411,7 +475,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
           if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
         }}>
           {history.hasMore && <div className="text-center mb-4"><Button size="sm" variant="ghost" onClick={loadOlder} disabled={olderLoading}>{olderLoading ? '正在加载…' : '加载更早的消息'}</Button></div>}
-          {loading ? <div className="vm-chat-empty"><span className="vm-spinner" /><p>正在读取聊天记录…</p></div> : !history.messages.length ? <div className="vm-chat-empty"><span className="vm-chat-empty-icon">{scope === 'personal' ? <MessageSquare /> : <Users />}</span><h3>{scope === 'personal' ? '给其他设备留句话' : '开始组内交流'}</h3><p>{scope === 'personal' ? '发送文字、图片或文件后，其他设备加入同一云端账号即可获取。' : '消息与附件会加密同步到组的飞书共享文件夹。'}</p></div> : history.messages.map(message => <article key={message.id} className={cn('vm-chat-message', message.mine && 'mine')}>
+          {loading ? <div className="vm-chat-empty"><span className="vm-spinner" /><p>正在读取聊天记录…</p></div> : !history.messages.length ? <div className="vm-chat-empty"><span className="vm-chat-empty-icon">{scope === 'personal' ? <MessageSquare /> : <Users />}</span><h3>{scope === 'personal' ? '给其他设备留句话' : '开始组内交流'}</h3><p>{scope === 'personal' ? '发送文字、图片或文件后，其他设备加入同一云端账号即可获取。' : '消息与附件会加密同步到组的飞书共享文件夹。'}</p></div> : history.messages.map(message => <article key={message.id} className={cn('vm-chat-message', message.mine && 'mine')} onContextMenu={event => openMessageMenu(event, message)}>
             {selecting && <input type="checkbox" aria-label={`选择消息 ${message.text || message.attachments?.[0]?.name || ''}`}
               checked={selected.includes(message.id)} disabled={acting || (!selected.includes(message.id) && selected.length >= 100)}
               onChange={event => {
@@ -422,7 +486,7 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
             <div className="vm-chat-message-body">
             <div className="vm-chat-message-meta"><strong title={message.senderEmail}>{message.mine ? '我' : message.senderName}</strong><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</time></div>
             {message.text && <div className="vm-chat-bubble">{message.text}</div>}
-            {Boolean(message.attachments?.length) && <div className="vm-chat-attachments">{message.attachments!.map(attachment => <ChatAttachmentView key={attachment.id} attachment={attachment} messageId={message.id} room={room} onImageLoad={() => { if (stickToBottom.current && timeline.current) timeline.current.scrollTop = timeline.current.scrollHeight }} />)}</div>}
+            {Boolean(message.attachments?.length) && <div className="vm-chat-attachments">{message.attachments!.map(attachment => <ChatAttachmentView key={attachment.id} attachment={attachment} messageId={message.id} room={room} onContextMenu={event => openMessageMenu(event, message, attachment)} onImageLoad={() => { if (stickToBottom.current && timeline.current) timeline.current.scrollTop = timeline.current.scrollHeight }} />)}</div>}
             {message.mine && <small className="vm-chat-message-status">{message.synced ? <><CheckCheck className="w-3 h-3" />已存云端</> : '已存本机 · 待云端归档'}</small>}
             </div>
           </article>)}
@@ -451,14 +515,21 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
             {file.mime.startsWith('image/') && <button type="button" aria-label={`标注图片 ${file.name}`} title="标注图片" disabled={sending || attaching} onClick={() => annotateDraft(file)}><Pencil className="w-3.5 h-3.5" /></button>}
             <button type="button" aria-label={`移除附件 ${file.name}`} disabled={sending} onClick={() => removeDraftFile(file)}><X className="w-3.5 h-3.5" /></button>
           </div>)}</div>}
-          <textarea aria-label="消息内容" value={draft} maxLength={20000} disabled={!history.writable || sending || loading}
+          {quote && <div className="vm-chat-quote"><span>{quote}</span><Button type="button" size="icon-sm" variant="ghost" aria-label="取消引用" onClick={() => setQuote('')}><X className="w-4 h-4" /></Button></div>}
+          <textarea ref={composer} aria-label="消息内容" value={draft} maxLength={draftLimit} disabled={!history.writable || sending || loading}
             placeholder={!history.writable && !loading ? '你是只读成员，可以查看群聊记录' : '输入文字，Enter 发送，Shift + Enter 换行'}
             onChange={event => setDraft(event.target.value)} onPaste={event => {
-              if (event.clipboardData.files.length) { event.preventDefault(); void addBrowserFiles(Array.from(event.clipboardData.files)) }
+              if (event.clipboardData.files.length) {
+                event.preventDefault()
+                void addBrowserFiles(Array.from(event.clipboardData.files))
+              } else if (!event.clipboardData.getData('text/plain') && !event.clipboardData.getData('text/html')) {
+                event.preventDefault()
+                void addFiles(() => vaultApi.pasteChatAttachment(room))
+              }
             }} onKeyDown={event => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() }
             }} />
-          <div className="vm-chat-composer-footer"><span><LockKeyhole className="w-3 h-3" />消息与附件加密存储 <small>{draft.length}/20000</small></span><Button type="submit" variant="primary" size="sm" aria-label="发送消息" disabled={(!draft.trim() && !draftFiles.length) || !history.writable || sending || attaching || loading}><Send className="w-3.5 h-3.5" />{sending ? '保存中…' : '发送'}</Button></div>
+          <div className="vm-chat-composer-footer"><span><LockKeyhole className="w-3 h-3" />消息与附件加密存储 <small>{draft.length}/{draftLimit}</small></span><Button type="submit" variant="primary" size="sm" aria-label="发送消息" disabled={(!draft.trim() && !draftFiles.length) || draft.length > draftLimit || !history.writable || sending || attaching || loading}><Send className="w-3.5 h-3.5" />{sending ? '保存中…' : '发送'}</Button></div>
         </form>
       </section>
 
@@ -468,10 +539,49 @@ export default function ChatView({ onOpenSync, screenshotDelivery, onScreenshotC
         <Button size="sm" className="w-full" onClick={onOpenSync}>管理云端同步</Button>
         <h3 className="mt-6">共享图片与文件</h3><p className="vm-chat-help">仅显示本次已加载消息中的附件，加载更早记录可查看更多。</p>
         <input className="vm-input my-3" aria-label="搜索共享附件" placeholder="按文件名筛选" value={attachmentSearch} onChange={e => setAttachmentSearch(e.target.value)} />
-        <div className="vm-shared-attachments">{history.messages.flatMap(message => (message.attachments || []).filter(file => file.name.toLowerCase().includes(attachmentSearch.toLowerCase())).map(file => <ChatAttachmentView key={`${roomKey}:${message.id}:${file.id}`} attachment={file} messageId={message.id} room={room} />))}</div>
+        <div className="vm-shared-attachments">{history.messages.flatMap(message => (message.attachments || []).filter(file => file.name.toLowerCase().includes(attachmentSearch.toLowerCase())).map(file => <ChatAttachmentView key={`${roomKey}:${message.id}:${file.id}`} attachment={file} messageId={message.id} room={room} onContextMenu={event => openMessageMenu(event, message, file)} />))}</div>
         {!history.messages.some(message => message.attachments?.length) && <p className="vm-chat-help">当前已加载记录中暂无附件。</p>}
         </div>
       </aside>}
+
+      {messageMenu && createPortal(<div ref={menuElement} className="vm-chat-context-menu" role="menu" aria-label="聊天右键菜单"
+        style={{ left: Math.max(8, Math.min(messageMenu.x, window.innerWidth - 192)), top: Math.max(8, Math.min(messageMenu.y, window.innerHeight - (messageMenu.attachment ? 370 : 190))) }}
+        onContextMenu={event => event.preventDefault()}>
+        {messageMenu.attachment && <>
+          <button role="menuitem" onClick={() => menuAction(() => vaultApi.operateChatAttachment({ ...room, messageId: messageMenu.message.id, attachmentId: messageMenu.attachment!.id, action: 'open' }))}>打开</button>
+          <button role="menuitem" onClick={() => menuAction(() => vaultApi.operateChatAttachment({ ...room, messageId: messageMenu.message.id, attachmentId: messageMenu.attachment!.id, action: 'reveal' }))}>打开所在文件夹</button>
+          <button role="menuitem" onClick={() => menuAction(async () => {
+            await vaultApi.operateChatAttachment({ ...room, messageId: messageMenu.message.id, attachmentId: messageMenu.attachment!.id, action: 'copyFile' })
+            toast('已复制附件，可粘贴到秘栈聊天', 'success')
+          })}>复制附件</button>
+          <button role="menuitem" onClick={() => menuAction(() => copyChatText(messageMenu.attachment!.name))}>复制文件名</button>
+          <button role="menuitem" onClick={() => menuAction(async () => {
+            await vaultApi.operateChatAttachment({ ...room, messageId: messageMenu.message.id, attachmentId: messageMenu.attachment!.id, action: 'copyPath' })
+            toast('已复制本机文件路径', 'success')
+          })}>复制文件路径</button>
+          {messageMenu.attachment.mime.startsWith('image/') && <button role="menuitem" onClick={() => menuAction(async () => {
+            await vaultApi.operateChatAttachment({ ...room, messageId: messageMenu.message.id, attachmentId: messageMenu.attachment!.id, action: 'copyImage' })
+            toast('已复制图片', 'success')
+          })}>复制图片</button>}
+          <button role="menuitem" onClick={() => menuAction(async () => {
+            const result = await vaultApi.saveChatAttachment({ ...room, messageId: messageMenu.message.id, attachmentId: messageMenu.attachment!.id })
+            if (!result.canceled) toast('附件已保存', 'success')
+          })}>另存为…</button>
+          <hr />
+        </>}
+        {!messageMenu.attachment && messageMenu.message.text && <button role="menuitem" onClick={() => menuAction(() => copyChatText(messageMenu.selectedText || messageMenu.message.text))}>{messageMenu.selectedText ? '复制选中文字' : '复制'}</button>}
+        {history.writable && <button role="menuitem" disabled={sending} onClick={() => menuAction(() => {
+          const message = messageMenu.message
+          const source = messageMenu.attachment?.name || messageMenu.selectedText || message.text || message.attachments?.map(file => file.name).join('、') || ''
+          const author = message.mine ? '我' : message.senderName || message.senderEmail || '成员'
+          const excerpt = source.replace(/\s+/g, ' ').trim()
+          setQuote(`> ${author}：${excerpt.slice(0, 260)}${excerpt.length > 260 ? '…' : ''}`)
+          composer.current?.focus()
+        })}>引用</button>}
+        <button role="menuitem" disabled={acting} onClick={() => menuAction(() => selectMessage(messageMenu.message.id))}>多选</button>
+        <button role="menuitem" disabled={acting} onClick={() => menuAction(() => selectMessage(messageMenu.message.id, true))}>转发</button>
+        <button role="menuitem" disabled={acting} onClick={() => menuAction(() => actOnSelection('delete', [messageMenu.message.id]))}>删除</button>
+      </div>, document.body)}
 
       {dialog && <ChatDialog title={dialog === 'create' ? '新建群聊' : dialog === 'join' ? '加入群聊' : dialog === 'screenshot' ? '截图快捷键' : '邀请成员'} busy={busy} onClose={() => setDialog(null)}>
         {dialog === 'screenshot' ? <ScreenshotSettings onSaved={value => { setScreenshotShortcut(value.accelerator); toast('截图快捷键已保存', 'success') }} /> : <form className="space-y-4" onSubmit={event => { event.preventDefault(); void dialogAction() }}>

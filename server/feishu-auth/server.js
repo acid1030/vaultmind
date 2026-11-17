@@ -2,10 +2,12 @@
 const http=require('node:http'), crypto=require('node:crypto');
 const { createChatLive } = require('./chat-live');
 const { createSigninKeyStore } = require('./signin-keys');
+const { createSyncKeyStore, verifyAccountProfile } = require('./sync-key-store');
 const API='https://open.feishu.cn';
-function createAuthServer({publicUrl,appId,appSecret,tokenKey,keyDirectory=process.env.SIGNIN_KEY_DIR||'/var/lib/mizhan-auth/signin-keys',scope='drive:drive drive:drive:readonly auth:user.id:read wiki:wiki:readonly offline_access',fetcher=fetch,now=Date.now}) {
+function createAuthServer({publicUrl,appId,appSecret,tokenKey,keyDirectory=process.env.SIGNIN_KEY_DIR||'/var/lib/mizhan-auth/signin-keys',scope='drive:drive drive:drive:readonly auth:user.id:read wiki:wiki:readonly offline_access',fetcher=fetch,now=Date.now,syncKeyDirectory}) {
  const base=new URL(publicUrl);if(base.protocol!=='https:'||base.search||base.hash)throw Error('PUBLIC_URL must be HTTPS');
  if(!appId||!appSecret||!Buffer.isBuffer(tokenKey)||tokenKey.length!==32)throw Error('Missing auth configuration');
+ const syncKeys = syncKeyDirectory && createSyncKeyStore(syncKeyDirectory, tokenKey, appId);
  const prefix=base.pathname.replace(/\/$/,''),sessions=new Map(),tickets=new Map(),rates=new Map();
  const signinKeys=createSigninKeyStore({directory:keyDirectory,tokenKey,appId});
  const random=()=>crypto.randomBytes(32).toString('base64url');
@@ -37,7 +39,11 @@ function createAuthServer({publicUrl,appId,appSecret,tokenKey,keyDirectory=proce
     res.writeHead(302,{Location:redirect.toString(),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'});return res.end();
    }
    if(req.method==='POST'&&route===prefix+'/v1/feishu/oauth/sessions/exchange'){
-    const b=await body(req),t=tickets.get(b.ticket);if(!t||b.state!==t.state||b.redirectUri!==t.redirectUri||b.deviceId!==t.deviceId||typeof b.verifier!=='string'||b.verifier.length>128||crypto.createHash('sha256').update(b.verifier).digest('base64url')!==t.challenge)throw Error();tickets.delete(b.ticket);return json(res,200,t.result);
+    const b=await body(req),t=tickets.get(b.ticket);if(!t||b.state!==t.state||b.redirectUri!==t.redirectUri||b.deviceId!==t.deviceId||typeof b.verifier!=='string'||b.verifier.length>128||crypto.createHash('sha256').update(b.verifier).digest('base64url')!==t.challenge)throw Error();tickets.delete(b.ticket);
+    const syncKeyGrant = syncKeys ? wrap({
+     purpose: 'sync-key', appId, openId: t.result.user.openId, accessToken: t.result.accessToken, expires: now() + 600000,
+    }) : undefined;
+    return json(res, 200, { ...t.result, syncKeyGrant });
    }
    if(req.method==='POST'&&route===prefix+'/v1/feishu/oauth/refresh'){
     const b=await body(req),t=unwrap(b.refreshToken);if(!t.refresh||t.expires<=now())throw Error();const v=await remote('/open-apis/authen/v2/oauth/token',{grant_type:'refresh_token',client_id:appId,client_secret:appSecret,refresh_token:t.refresh});const result=await payload(v);if(result.user.openId!==t.openId)throw Error();return json(res,200,result);
@@ -48,8 +54,42 @@ function createAuthServer({publicUrl,appId,appSecret,tokenKey,keyDirectory=proce
     if(b.action==='import'&&(typeof b.passphrase!=='string'||b.passphrase.length<8||b.passphrase.length>1024))throw Error();
     const user=(await remote('/open-apis/authen/v1/user_info',null,match[1])).data;
     if(!user?.open_id)throw Error();
+    const legacy=syncKeys && await syncKeys.read(user.open_id);
+    const current=signinKeys.read(user.open_id);
+    if(legacy && ((current && current!==legacy.passphrase) || (b.action==='import' && b.passphrase!==legacy.passphrase)))throw Error('Conflicting managed keys');
+    if(legacy)return json(res,200,{passphrase:legacy.passphrase});
     const passphrase=b.action==='lookup'?signinKeys.read(user.open_id):signinKeys.create(user.open_id,b.action==='import'?b.passphrase:undefined);
     return json(res,200,{passphrase});
+   }
+   if (syncKeys && req.method === 'POST' && route === prefix + '/v1/sync-key') {
+    const input = await body(req);
+    const grant = unwrap(input.grant);
+    if (grant.purpose !== 'sync-key' || grant.appId !== appId || grant.expires <= now()) throw Error();
+    if (!Object.hasOwn(input, 'passphrase')) return json(res, 200, { record: await syncKeys.read(grant.openId) });
+    if (typeof input.passphrase !== 'string' || input.passphrase.length < 8 || input.passphrase.length > 1024 ||
+        typeof input.vaultId !== 'string' || !/^[0-9a-f-]{36}$/i.test(input.vaultId)) throw Error();
+    const root = (await remote('/open-apis/drive/explorer/v2/root_folder/meta', null, grant.accessToken)).data;
+    if (!root?.token) throw Error();
+    const name = 'vaultmind-account-' + crypto.createHash('sha256').update(grant.openId).digest('hex').slice(0, 24) + '.axonvault';
+    let cursor = '';
+    let file;
+    do {
+     const query = new URLSearchParams({ folder_token: root.token, page_size: '200' });
+     if (cursor) query.set('page_token', cursor);
+     const page = (await remote('/open-apis/drive/v1/files?' + query, null, grant.accessToken)).data;
+     file = page?.files?.find(item => item.name === name && item.token === input.fileToken);
+     const next = !file && page?.has_more && (page.next_page_token || page.page_token);
+     if (next && next === cursor) throw Error();
+     cursor = next;
+    } while (cursor);
+    if (!file) throw Error();
+    const download = await fetcher(API + '/open-apis/drive/v1/files/' + encodeURIComponent(file.token) + '/download', {
+     headers: { Authorization: 'Bearer ' + grant.accessToken }, signal: AbortSignal.timeout(20000),
+    });
+    if (!download.ok) throw Error();
+    verifyAccountProfile(Buffer.from(await download.arrayBuffer()), input.passphrase, input.vaultId);
+    const enrolled = await syncKeys.enroll(grant.openId, { vaultId: input.vaultId, passphrase: input.passphrase });
+    return json(res, enrolled ? 200 : 409, enrolled ? { enrolled } : { message: '已有其他同步密钥，请联系管理员' });
    }
    if(req.method==='POST'&&route===prefix+'/v1/chat/live-ticket'){
     const b=await body(req), match=/^Bearer ([^\s]+)$/.exec(req.headers.authorization||'');
@@ -64,5 +104,5 @@ function createAuthServer({publicUrl,appId,appSecret,tokenKey,keyDirectory=proce
  const chatLive=createChatLive(server,prefix+'/v1/chat/live',now);
  return server;
 }
-if(require.main===module){const server=createAuthServer({publicUrl:process.env.PUBLIC_URL,appId:process.env.FEISHU_APP_ID,appSecret:process.env.FEISHU_APP_SECRET,tokenKey:Buffer.from(process.env.TOKEN_KEY||'','hex')});server.listen(Number(process.env.PORT||3492),'127.0.0.1',()=>console.log('Mizhan auth listening on loopback'));}
+if(require.main===module){const server=createAuthServer({publicUrl:process.env.PUBLIC_URL,appId:process.env.FEISHU_APP_ID,appSecret:process.env.FEISHU_APP_SECRET,tokenKey:Buffer.from(process.env.TOKEN_KEY||'','hex'),syncKeyDirectory:process.env.SYNC_KEY_DIRECTORY});server.listen(Number(process.env.PORT||3492),'127.0.0.1',()=>console.log('Mizhan auth listening on loopback'));}
 module.exports={createAuthServer};

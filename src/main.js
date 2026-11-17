@@ -501,11 +501,10 @@ function createLocalSession(userId, password = '') {
   pendingGlobalScreenshot = null;
   chatSessionEpoch += 1;
   const token = crypto.randomBytes(32).toString('base64url');
-  const expiresAt = Date.now() + LOCAL_SESSION_TTL_MS;
   db.run('DELETE FROM local_sessions WHERE user_id = ?', [userId]);
   db.run(
     'INSERT INTO local_sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)',
-    [hashSessionToken(token), userId, expiresAt, new Date().toISOString()],
+    [hashSessionToken(token), userId, Date.now() + LOCAL_SESSION_TTL_MS, new Date().toISOString()],
   );
   fs.writeFileSync(sessionTokenPath(), token, { mode: 0o600 });
   if (password) persistSessionPassword(password);
@@ -546,18 +545,21 @@ function restoreLocalSession() {
     const token = fs.readFileSync(sessionTokenPath(), 'utf8').trim();
     if (!token) return;
     const row = queryOne('SELECT * FROM local_sessions WHERE token_hash = ?', [hashSessionToken(token)]);
-    if (!row || Number(row.expires_at) < Date.now()) {
+    if (!row || (Number(row.expires_at) !== 0 && Number(row.expires_at) < Date.now())) {
       clearLocalSession();
       return;
     }
-    const restoredPassword = restoreSessionPassword();
-    if (!restoredPassword) {
-      // 密码缓存丢失，强制重新登录，避免进入「已登录但无法解密」的异常状态
+    const user = queryOne('SELECT * FROM users WHERE id = ?', [row.user_id]);
+    const matchesUser = (value) => Boolean(value && user && hashPassword(value, user.password_salt) === user.password_hash);
+    const savedPassword = restoreSessionPassword();
+    const syncPassphrase = user?.feishu_open_id_hash ? getSettings().feishuPassphrase : '';
+    const password = matchesUser(savedPassword) ? savedPassword : matchesUser(syncPassphrase) ? syncPassphrase : '';
+    if (!password) {
       clearLocalSession();
       return;
     }
-    activeUser = queryOne('SELECT * FROM users WHERE id = ?', [row.user_id]);
-    activePassword = restoredPassword;
+    activeUser = user;
+    activePassword = password;
     db.run('UPDATE local_sessions SET expires_at = ? WHERE token_hash = ?', [Date.now() + LOCAL_SESSION_TTL_MS, hashSessionToken(token)]);
     saveDatabase();
   } catch {
@@ -641,7 +643,10 @@ function getFeishuToken() {
   return getStateValue('feishuToken', null);
 }
 
+let feishuTokenRevision = 0;
+
 function setFeishuToken(token) {
+  feishuTokenRevision += 1;
   setStateValue('feishuToken', token);
 }
 
@@ -1489,6 +1494,8 @@ function normalizeManagedToken(payload) {
   };
 }
 
+let pendingFeishuRefresh = null;
+
 async function refreshFeishuTokenIfNeeded(options = {}) {
   const settings = getSettings();
   const token = getFeishuToken();
@@ -1500,7 +1507,25 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
   }
   if (token.refreshExpiresAt && Date.now() > token.refreshExpiresAt) {
     setFeishuToken(null);
-    throw new Error('飞书登录已超过 30 天，请重新登录飞书账号。');
+    throw new Error('飞书授权已到期，请重新扫码连接飞书。');
+  }
+
+  if (pendingFeishuRefresh?.revision === feishuTokenRevision) return pendingFeishuRefresh.promise;
+  const revision = feishuTokenRevision;
+  const promise = renewFeishuToken(settings, token, revision);
+  pendingFeishuRefresh = { revision, promise };
+  try {
+    return await promise;
+  } finally {
+    if (pendingFeishuRefresh?.promise === promise) pendingFeishuRefresh = null;
+  }
+}
+
+async function renewFeishuToken(settings, token, revision) {
+  function saveRefreshedToken(next) {
+    if (revision !== feishuTokenRevision) throw new Error('飞书登录状态已变化，请重试');
+    setFeishuToken(next);
+    return next;
   }
 
   if (syncAccess.normalizeMode(settings.syncAccessMode, settings) === 'managed') {
@@ -1508,14 +1533,12 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
     if (!serviceUrl) throw new Error('AxonMind 托管服务尚未配置，请切换到自建模式或安装正式托管版本');
     try {
       const refreshed = await requestJson('POST', `${serviceUrl}/v1/feishu/oauth/refresh`, {
-        body: { refreshToken: token.refreshToken },
+        body: { refreshToken: token.refreshToken }, timeout: 20000,
       });
       const next = { ...normalizeManagedToken(refreshed), user: token.user };
-      setFeishuToken(next);
-      return next;
+      return saveRefreshedToken({ ...next, refreshToken: next.refreshToken || token.refreshToken, refreshExpiresAt: next.refreshToken ? next.refreshExpiresAt : token.refreshExpiresAt });
     } catch (error) {
-      setFeishuToken(null);
-      throw new Error(`AxonMind 托管登录已失效，请重新连接飞书。${error.message || error}`);
+      throw new Error(`暂时无法刷新飞书授权。${error.message || error}`);
     }
   }
 
@@ -1527,12 +1550,11 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
         client_id: settings.appId,
         client_secret: settings.appSecret,
         refresh_token: token.refreshToken,
-      },
+      }, timeout: 20000,
     });
     data = ensureFeishuPayload(refreshed, '刷新飞书登录失败');
   } catch (error) {
-    setFeishuToken(null);
-    throw new Error(`飞书登录已失效，请在顶栏重新登录飞书账号。${error.message || error}`);
+    throw new Error(`暂时无法刷新飞书授权。${error.message || error}`);
   }
   if (!data.access_token) throw new Error('飞书没有返回新的 access_token');
   const next = {
@@ -1543,8 +1565,7 @@ async function refreshFeishuTokenIfNeeded(options = {}) {
     refreshExpiresAt: data.refresh_token ? Date.now() + FEISHU_REFRESH_TTL_MS : (token.refreshExpiresAt || Date.now() + FEISHU_REFRESH_TTL_MS),
     scope: data.scope || token.scope,
   };
-  setFeishuToken(next);
-  return next;
+  return saveRefreshedToken(next);
 }
 
 function isFeishuTokenExpiredError(error) {
@@ -3990,7 +4011,7 @@ async function managedAuthorization(settings) {
   const payload = await authorizeManaged({ serviceUrl: managedServiceUrl(settings), port: settings.redirectPort,
     deviceId: installationDeviceId(), openExternal: async url => { await shell.openExternal(url) },
     post: (url, body) => requestJson('POST',url,{body}) });
-  return normalizeManagedToken(payload);
+  return { ...normalizeManagedToken(payload), syncKeyGrant: payload.syncKeyGrant };
 }
 async function handleManagedFeishuLogin() {
   requireUser();
@@ -4007,18 +4028,21 @@ async function beginCloudSignin() {
   pendingCloudSignin = null;
   const userId = activeUser?.id || '', epoch = chatSessionEpoch;
   try {
-    const token = await managedAuthorization(getSettings());
+    const settings = getSettings();
+    const serviceUrl = managedServiceUrl(settings);
+    const token = await managedAuthorization(settings);
     if ((activeUser?.id || '') !== userId || chatSessionEpoch !== epoch) throw new Error('登录状态已变化，请重试');
     if (!token.user?.openId) throw new Error('无法识别飞书身份');
-    pendingCloudSignin = { token, userId, epoch, expires: Date.now()+600000 };
+    const { syncKeyGrant, ...feishuToken } = token;
+    pendingCloudSignin = { token: feishuToken, serviceUrl, userId, epoch, expires: Date.now()+600000 };
   } finally { cloudSigninBusy = false; }
   return finishCloudSignin({});
 }
 
-async function managedSigninKey(token, action, passphrase) {
+async function managedSigninKey(token, action, passphrase, serviceUrl = managedServiceUrl()) {
   let result;
   try {
-    result = await requestJson('POST', `${managedServiceUrl()}/v1/feishu/signin-key`, {
+    result = await requestJson('POST', `${serviceUrl}/v1/feishu/signin-key`, {
       headers: { Authorization: `Bearer ${token.accessToken}` },
       body: { action, ...(passphrase === undefined ? {} : { passphrase }) },
     });
@@ -4055,8 +4079,8 @@ async function finishCloudSignin(input) {
     const sameIdentity = previousToken?.user?.openId === pending.token.user.openId;
     const savedPassphrase = (previousUser || sameIdentity) ? previousSettings.feishuPassphrase : '';
     const resolved = await resolveSigninKey({
-      lookup: () => managedSigninKey(pending.token, 'lookup'),
-      create: passphrase => { checkSignin(); return managedSigninKey(pending.token, passphrase ? 'import' : 'create', passphrase); },
+      lookup: () => managedSigninKey(pending.token, 'lookup', undefined, pending.serviceUrl),
+      create: passphrase => { checkSignin(); return managedSigninKey(pending.token, passphrase ? 'import' : 'create', passphrase, pending.serviceUrl); },
       hasProfile: Boolean(file), savedPassphrase,
       recoveryPassphrase: String(input.passphrase || ''),
       validate: passphrase => cloudAccount.decryptProfile(profileBuffer, passphrase, decryptVaultPayload),
@@ -4092,7 +4116,7 @@ async function finishCloudSignin(input) {
     setStateValue(`managedSignin:${user.id}`, sealLocalUnlock({ user, openIdHash, password: chosen.password, passphrase, encrypt: encryptVaultPayload }));
     activeUser=user;activePassword=chosen.password;
     setFeishuToken(pending.token);
-    setStateValue('settings',{...previousSettings,syncAccessMode:'managed',managedServiceUrl:managedServiceUrl(previousSettings),feishuPassphrase:passphrase,feishuAutoSync:true,folderToken:folder});
+    setStateValue('settings',{...previousSettings,syncAccessMode:'managed',managedServiceUrl:pending.serviceUrl,feishuPassphrase:passphrase,feishuAutoSync:true,folderToken:folder});
     await linkCloudAccount({mode:profile?'join':'create',passphrase});
     if(folder !== root.token){
       const actual=await loadCloudAccountProfile(passphrase);
@@ -4209,7 +4233,9 @@ function registerHandlers() {
 
   ipcMain.handle('vault:getState', async () => {
     await ensureDatabase();
+    const wasLoggedIn = Boolean(activeUser);
     restoreLocalSession();
+    if (!wasLoggedIn && activeUser && hasUsableFeishuToken(getFeishuToken())) refreshFeishuTokenIfNeeded().catch(() => {});
     if (!autoSyncTimer && !autoSyncRunning) requestAutoSync('app-start', 1500);
     return publicState();
   });
@@ -4845,6 +4871,58 @@ function registerHandlers() {
     if (!preview) throw new Error('该附件无法预览，请保存到本地查看');
     return { preview };
   });
+  ipcMain.handle('vault:operateChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input);
+    if (!['open', 'reveal', 'copyPath', 'copyImage', 'copyFile'].includes(input.action)) throw new Error('不支持的附件操作');
+    const result = await getChatService().getAttachment(input);
+    check();
+    if (input.action === 'copyFile') {
+      const marker = crypto.randomUUID();
+      clipboard.writeBuffer(CHAT_FILE_CLIPBOARD_FORMAT, Buffer.from(marker));
+      copiedChatFile = {
+        marker, epoch: chatSessionEpoch,
+        source: { scope: input.scope, groupId: input.groupId, messageId: input.messageId, attachmentId: input.attachmentId },
+      };
+      return;
+    }
+    if (input.action === 'copyImage') {
+      if (!result.attachment.mime.startsWith('image/')) throw new Error('该附件不是图片');
+      const image = nativeImage.createFromBuffer(result.bytes);
+      if (image.isEmpty()) throw new Error('无法复制该格式的图片');
+      clipboard.writeImage(image);
+      return;
+    }
+    const name = chatFiles.safeName(result.attachment.name).replace(/[<>:"|?*]/g, '_').replace(/[. ]+$/, '') || '附件';
+    if (input.action === 'open' && !/\.(pdf|txt|md|csv|docx?|xlsx?|pptx?|odt|ods|odp|rtf|png|jpe?g|gif|webp|bmp|tiff?|heic|mp4|mov|mp3|wav|m4a|flac|ogg)$/i.test(name)) {
+      throw new Error('请先将此格式的附件另存到本地');
+    }
+    chatOpenedFilesDirectory ||= fs.mkdtempSync(path.join(os.tmpdir(), 'mizhan-chat-'));
+    const cacheKey = crypto.createHash('sha256').update(result.bytes).digest('hex');
+    const directory = path.join(chatOpenedFilesDirectory, cacheKey);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const file = path.join(directory, name);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, result.bytes, { mode: 0o600, flag: 'wx' });
+    if (input.action === 'copyPath') clipboard.writeText(file);
+    else if (input.action === 'reveal') shell.showItemInFolder(file);
+    else {
+      const error = await shell.openPath(file);
+      if (error) throw new Error(error);
+    }
+  });
+
+  ipcMain.handle('vault:pasteChatAttachment', async (_event, input) => {
+    await ensureDatabase();
+    const check = chatOperation(input, true);
+    const copy = copiedChatFile;
+    if (!copy || copy.epoch !== chatSessionEpoch ||
+        clipboard.readBuffer(CHAT_FILE_CLIPBOARD_FORMAT).toString() !== copy.marker) return { attachments: [] };
+    const checkSource = chatOperation(copy.source);
+    const { attachment, bytes } = await getChatService().getAttachment(copy.source);
+    checkSource();
+    check();
+    return { attachments: stageChatFiles(input, [{ name: attachment.name, bytes }]) };
+  });
   ipcMain.handle('vault:saveChatAttachment', async (_event, input) => {
     await ensureDatabase();
     const check = chatOperation(input);
@@ -5163,7 +5241,13 @@ function registerHandlers() {
   });
 }
 
+const CHAT_FILE_CLIPBOARD_FORMAT = 'com.axonmind.chat-file';
+let copiedChatFile;
+let chatOpenedFilesDirectory;
 app.on('before-quit', () => {
+  if (chatOpenedFilesDirectory) {
+    try { fs.rmSync(chatOpenedFilesDirectory, { recursive: true, force: true }); } catch { /* An external app may still hold the file. */ }
+  }
   chatLiveClient.stop();
   clearAutoSyncTimer();
   clearTimeout(chatSyncTimer);
@@ -5174,6 +5258,9 @@ app.on('before-quit', () => {
 });
 
 app.whenReady().then(async () => {
+  setInterval(() => {
+    if (db && activeUser && hasUsableFeishuToken(getFeishuToken())) refreshFeishuTokenIfNeeded().catch(() => {});
+  }, 5 * 60 * 1000).unref();
   if (process.env.AXONMIND_E2E !== '1') migrateLegacyUserData();
   await ensureDatabase();
   configureAutoUpdater();
