@@ -5,6 +5,9 @@ After=network.target
 Type=simple
 User=www-data
 Group=www-data
+StateDirectory=mizhan-auth
+StateDirectoryMode=0700
+Environment=SYNC_KEY_DIRECTORY=/var/lib/mizhan-auth/sync-keys
 EnvironmentFile=/etc/mizhan-auth.env
 ExecStart=/usr/bin/node /opt/mizhan-auth/server.js
 Restart=on-failure

@@ -56,6 +56,50 @@ try {
   await page.getByText('附件已保存', { exact: true }).waitFor();
   assert.equal(fs.readFileSync(savedPath, 'utf8'), fs.readFileSync(filePath, 'utf8'));
 
+  const card = page.getByRole('log', { name: '聊天记录' }).getByRole('button', { name: '打开附件 项目说明.txt', exact: true });
+  await app.evaluate(({ shell }) => {
+    shell.openPath = async file => { globalThis.chatTestOpened = file; return ''; };
+    shell.showItemInFolder = file => { globalThis.chatTestRevealed = file; };
+  });
+  await card.dblclick();
+  await page.waitForFunction(() => !document.querySelector('button[aria-label="打开附件 项目说明.txt"]').disabled);
+  const opened = await app.evaluate(() => globalThis.chatTestOpened);
+  assert.equal(fs.readFileSync(opened, 'utf8'), fs.readFileSync(filePath, 'utf8'));
+
+  await card.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '打开所在文件夹', exact: true }).click();
+  await page.waitForFunction(async () => document.querySelector('[role=menu]') === null);
+  for (let attempt = 0; attempt < 20 && !(await app.evaluate(() => globalThis.chatTestRevealed)); attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(await app.evaluate(() => globalThis.chatTestRevealed), opened);
+
+  await card.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '引用', exact: true }).click();
+  await page.locator('.vm-chat-quote').getByText('项目说明.txt', { exact: false }).waitFor();
+  await page.getByRole('button', { name: '取消引用', exact: true }).click();
+
+  await card.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '多选', exact: true }).click();
+  assert.equal(await page.getByRole('checkbox', { name: /^选择消息/ }).isChecked(), true);
+  await page.getByRole('button', { name: '取消多选', exact: true }).click();
+
+  await app.evaluate(({ clipboard }) => {
+    let copied;
+    clipboard.writeBuffer = (_format, value) => { copied = Buffer.from(value); };
+    clipboard.readBuffer = () => copied || Buffer.alloc(0);
+  });
+  await card.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '复制附件', exact: true }).click();
+  await page.getByText('已复制附件，可粘贴到秘栈聊天', { exact: true }).waitFor();
+  await page.getByRole('textbox', { name: '消息内容' }).evaluate(element => {
+    element.dispatchEvent(new ClipboardEvent('paste', {
+      clipboardData: new DataTransfer(), bubbles: true, cancelable: true,
+    }));
+  });
+  await page.getByRole('button', { name: '移除附件 项目说明.txt', exact: true }).waitFor();
+  await page.getByRole('button', { name: '移除附件 项目说明.txt', exact: true }).click();
+
   if (await page.getByRole('button', { name: '会话资料', exact: true }).getAttribute('aria-expanded') === 'false') await page.getByRole('button', { name: '会话资料', exact: true }).click();
   const details = page.getByRole('complementary', { name: '会话资料', exact: true });
   await details.getByRole('textbox', { name: '搜索共享附件' }).fill('项目说明');

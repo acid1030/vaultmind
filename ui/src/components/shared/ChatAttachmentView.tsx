@@ -12,7 +12,7 @@ export function chatFileSize(bytes: number) {
 }
 const errorText = (error: unknown) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '附件暂时不可用'
 
-export default function ChatAttachmentView({ attachment, messageId, room, onImageLoad }: { attachment: ChatAttachment; messageId: string; room: ChatRoom; onImageLoad?: () => void }) {
+export default function ChatAttachmentView({ attachment, messageId, room, onImageLoad, onContextMenu }: { attachment: ChatAttachment; messageId: string; room: ChatRoom; onImageLoad?: () => void; onContextMenu?: React.MouseEventHandler<HTMLDivElement> }) {
   const toast = useToast()
   const element = useRef<HTMLDivElement>(null)
   const [thumbnail, setThumbnail] = useState('')
@@ -63,16 +63,27 @@ export default function ChatAttachmentView({ attachment, messageId, room, onImag
   const open = async () => {
     if (opening) return
     setOpening(true)
-    try { const result = await vaultApi.getChatAttachment({ scope, groupId, messageId, attachmentId: attachment.id }); setFullImage(result.preview) }
+    try {
+      if (!image) {
+        await vaultApi.operateChatAttachment({ scope, groupId, messageId, attachmentId: attachment.id, action: 'open' })
+      } else {
+        const result = await vaultApi.getChatAttachment({ scope, groupId, messageId, attachmentId: attachment.id })
+        setFullImage(result.preview)
+      }
+    }
     catch (e) { setError(errorText(e)) }
     finally { setOpening(false) }
   }
-  return <div ref={element} className="vm-chat-attachment">
+  return <div ref={element} className="vm-chat-attachment" onContextMenu={onContextMenu}
+    onDoubleClick={event => { if (!image && !(event.target as HTMLElement).closest('[data-save-attachment]')) void open() }}>
     {image && <div className="vm-chat-image-area">
       {thumbnail ? <button type="button" aria-label={`预览图片 ${attachment.name}`} onClick={open} disabled={opening}><img src={thumbnail} alt={attachment.name} loading="lazy" onLoad={onImageLoad} />{opening && <span className="vm-chat-image-loading">加载原图…</span>}</button>
         : <div className="vm-chat-image-placeholder"><ImageIcon className="w-7 h-7" /><span>{loading ? '正在获取图片…' : '图片预览'}</span>{error && <Button size="sm" variant="ghost" onClick={loadThumbnail}><RefreshCw className="w-3 h-3" />重试预览</Button>}</div>}
     </div>}
-    <div className="vm-chat-file-row"><span className="vm-chat-file-icon">{image ? <ImageIcon className="w-4 h-4" /> : <FileText className="w-5 h-5" />}</span><span className="min-w-0 flex-1"><strong title={attachment.name}>{attachment.name}</strong><small>{chatFileSize(attachment.size)}{image ? ' · 图片' : ' · 文件'}</small></span><Button type="button" variant="ghost" size="icon-sm" aria-label={`保存 ${attachment.name}`} title="保存到本地" disabled={saving} onClick={save}><Download className="w-4 h-4" /></Button></div>
+    <div className="vm-chat-file-row"><span className="vm-chat-file-icon">{image ? <ImageIcon className="w-4 h-4" /> : <FileText className="w-5 h-5" />}</span><button type="button" className="min-w-0 flex-1 text-left" aria-label={`打开附件 ${attachment.name}`} disabled={opening}
+      onKeyDown={event => { if (!event.repeat && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); void open() } }}>
+      <strong title={attachment.name}>{attachment.name}</strong><small>{chatFileSize(attachment.size)}{image ? ' · 图片' : ' · 文件'}</small>
+    </button><Button data-save-attachment type="button" variant="ghost" size="icon-sm" aria-label={`保存 ${attachment.name}`} title="保存到本地" disabled={saving} onClick={save}><Download className="w-4 h-4" /></Button></div>
     {error && <p className="vm-chat-attachment-error">{error}</p>}
     {fullImage && createPortal(<div className="vm-chat-image-overlay" role="dialog" aria-modal="true" aria-label={`图片预览 ${attachment.name}`} onClick={() => setFullImage('')}><Button autoFocus type="button" variant="default" size="icon" className="vm-chat-image-close" aria-label="关闭图片预览" onClick={() => setFullImage('')}><X className="w-5 h-5" /></Button><img src={fullImage} alt={attachment.name} onClick={event => event.stopPropagation()} /></div>, document.body)}
   </div>

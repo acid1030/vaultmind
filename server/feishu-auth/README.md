@@ -24,9 +24,11 @@ TOKEN_KEY=64-hex-characters-generated-from-32-random-bytes
 - POST /v1/feishu/oauth/refresh：刷新服务端加密封装的刷新令牌，Secret 不发往桌面端。
 - GET /health：仅返回服务就绪状态。
 
-不记录访问令牌、刷新令牌、授权码、加密口令或用户本机密码；Nginx 专用路径关闭访问日志。内存会话重启后失效，需要重新扫码。这里不保存密码库与聊天内容，账号归属由飞书身份及用户云盘中的加密账号资料恢复。
+日志不记录访问令牌、刷新令牌、授权码、同步口令或用户本机密码；Nginx 专用路径关闭访问日志。内存会话重启后失效，需要重新扫码。这里不保存密码库与聊天内容，账号归属由飞书身份及用户云盘中的加密账号资料恢复。
 
-客户端的本机密码与云端加密口令相互独立。新机器首次恢复以输入的加密口令设置本机解锁；原机器已有账号仍需原本机密码。原账号先在设置中扫码绑定一次。自定义存储目录通过根目录中的加密定位资料发现。
+systemd 单元通过 `StateDirectory` 创建私有持久目录，并将 `SYNC_KEY_DIRECTORY` 指向其中的同步密钥目录。部署需同时更新 systemd 单元和 `sync-key-store.js`，执行 daemon-reload 后重启服务。备份持久目录与原 TOKEN_KEY，后者变更会导致已托管的密钥不可读。
+
+旧账号在已解锁设备上通过统一飞书登录入口扫码绑定一次。服务端使用 PKCE 票据兑换后发出的短期授权，验证飞书根目录里的账号文件可以用原同步口令解密，再保存 AES-256-GCM 密文。首次创建账号需设置同步口令。完成托管后，新设备只需扫码。已有独立本机密码的旧设备仍可通过本机登录解锁原资料库。自定义存储目录通过根目录中的加密定位资料发现。
 
 部署实例（2026-11-10）：`https://axonclawx.cn/mizhan-auth`；服务名 mizhan-auth。Nginx 原文件备份在 `/var/backups/mizhan`。回滚可停用该服务并移除新增的专用 include，再 nginx -t 后 reload，保留环境文件以免丢失刷新密钥。
 
@@ -37,5 +39,5 @@ TOKEN_KEY=64-hex-characters-generated-from-32-random-bytes
 - 飞书云盘的加密账号资料包含 `chatLive`（协议版本、WSS 地址和资料库 ID）。旧账号资料在下一次正常上传时补写。桌面端使用本机配置的托管服务地址，不向云盘资料指定的任意地址发送飞书令牌。
 - 托管客户端使用飞书用户令牌换取 30 秒内有效、仅可用一次的连接票据。服务端核验飞书身份，按身份和资料库 ID 分隔通道。
 - 在线时，个人纯文字保存到本地后立即通过 WSS 转发端到端加密密文，服务端不归档。客户端后台批量归档飞书，归档后广播 `changed`，对端更新归档状态并去重。图片、文件和未在线送达的消息走飞书；重连会补拉，轮询继续兜底。群聊和好友私聊仍使用轮询。
-- 更新部署时，替换 `server.js`、`chat-live.js` 和两个 npm 清单，在部署目录安装锁定依赖；将仓库中的 Nginx 配置同步到专用 include，验证 `nginx -t` 后重载，再重启 mizhan-auth。保留既有环境文件和 TOKEN_KEY。确认 HTTPS 健康检查后，用同一飞书账号的两台设备互发测试。
+- 更新部署时，替换 `server.js`、`chat-live.js`、`sync-key-store.js` 和两个 npm 清单，在部署目录安装锁定依赖；将仓库中的 Nginx 配置同步到专用 include，验证 `nginx -t` 后重载，再重启 mizhan-auth。保留既有环境文件和 TOKEN_KEY。确认 HTTPS 健康检查后，用同一飞书账号的两台设备互发测试。
 - 本地验证：`npm ci --prefix server/feishu-auth` 后运行 `node scripts/test-chat-live.js`。

@@ -9,7 +9,7 @@ try {
  await page.getByRole('button',{name:'使用飞书扫码登录',exact:true}).waitFor();
  assert.equal((await page.evaluate(()=>window.vaultApi.getState())).auth.hasUsers,false);
  // UI-only IPC fixtures: no real Feishu authorization or credentials.
- await app.evaluate(({ipcMain})=>{ipcMain.removeHandler('vault:beginCloudSignin');ipcMain.handle('vault:beginCloudSignin',()=>({name:'跨设备测试用户',binding:false}));ipcMain.removeHandler('vault:finishCloudSignin');ipcMain.handle('vault:finishCloudSignin',()=>({needsLocalPassword:true}));});
+ await app.evaluate(({ipcMain})=>{ipcMain.removeHandler('vault:beginCloudSignin');ipcMain.handle('vault:beginCloudSignin',()=>({name:'跨设备测试用户',binding:false}));ipcMain.removeHandler('vault:finishCloudSignin');ipcMain.handle('vault:finishCloudSignin',(_event,{passphrase})=>passphrase?{needsLocalPassword:true}:{needsPassphrase:true});});
  await page.getByRole('button',{name:'使用飞书扫码登录',exact:true}).click();
  await page.getByRole('textbox',{name:'云端加密口令',exact:true}).fill('fixture-passphrase');await page.getByRole('button',{name:'解锁并进入秘栈',exact:true}).click();await page.getByRole('alert').filter({hasText:'旧本机资料库'}).waitFor();assert.equal(await page.getByRole('textbox',{name:'已有账号本机解锁密码',exact:true}).count(),0);
  assert.equal((await page.evaluate(()=>window.vaultApi.getState())).auth.isLoggedIn,false,'OAuth UI cannot bypass a local password');
