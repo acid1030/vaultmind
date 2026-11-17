@@ -29,7 +29,7 @@
     "test:dashboard:e2e": "node ui/e2e/dashboard.spec.mjs",
     "test:friends": "node scripts/test-friends.js",
     "test:friends:e2e": "node ui/e2e/friends.spec.mjs",
-    "test:managed-signin": "node scripts/test-managed-signin.js",
+    "test:managed-signin": "node scripts/test-managed-signin.js && node scripts/test-managed-keys.js && node scripts/test-cloud-signin.js",
     "test:managed-signin:e2e": "node ui/e2e/cloud-signin.spec.mjs"
   },
   "devDependencies": {

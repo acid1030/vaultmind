@@ -1,15 +1,62 @@
 import { useState } from 'react'
 import { Cloud, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { vaultApi } from '@/lib/ipc'
+import { vaultApi, type CloudSigninResult } from '@/lib/ipc'
 import { useAppStore } from '@/store/app'
-export default function CloudSignin({binding=false}:{binding?:boolean}) {
- const refresh=useAppStore(s=>s.refresh)
- const [name,setName]=useState(''),[passphrase,setPassphrase]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('')
- async function begin(){setBusy(true);setError('');try{const result=await vaultApi.beginCloudSignin();setName(result.name)}catch(e){setError(e instanceof Error?e.message:'飞书登录未完成')}finally{setBusy(false)}}
- async function finish(){setBusy(true);setError('');try{const result=await vaultApi.finishCloudSignin({passphrase});if(result.needsLocalPassword){setError('此窗口打开的是旧本机资料库。请在下方使用本机账号登录，或在独立资料库用飞书恢复已同步资料。')}else{setName('');setPassphrase('');await refresh()}}catch(e){setError(e instanceof Error?e.message:'账号恢复未完成')}finally{setBusy(false)}}
- return <section className="vm-cloud-signin" aria-label="飞书统一登录"><h3>{binding?'绑定现有账号，开启跨设备登录':'飞书扫码登录'}</h3><p>{binding?'请先在原注册设备绑定一次，保留现有数据归属。':'无需在新设备注册，也无需填写 App ID 或 Secret。'}</p>
- {!name?<Button variant="primary" className="w-full" disabled={busy} onClick={begin}>{busy?<RefreshCw className="w-4 h-4 animate-spin"/>:<Cloud className="w-4 h-4"/>}{busy?'等待手机扫码与授权…':binding?'飞书扫码绑定本账号':'使用飞书扫码登录'}</Button>:<div className="space-y-3"><p>已授权：{name}</p><label className="vm-chat-field">加密口令<input className="vm-input" aria-label="云端加密口令" type="password" autoComplete="off" value={passphrase} onChange={e=>setPassphrase(e.target.value)} /></label><p>已有资料请使用原同步口令；首次使用将以此口令保护资料。本机密码仍只用于本机解锁。</p><Button className="w-full" variant="primary" disabled={busy||passphrase.length<8} onClick={finish}>{busy?'正在恢复账号与云盘配置…':binding?'绑定并开启同步':'解锁并进入秘栈'}</Button><Button variant="ghost" disabled={busy} onClick={()=>{setName('');setPassphrase('');setError('')}}>重新扫码</Button></div>}
- {error&&<p role="alert" className="text-destructive">{error}</p>}
- </section>
+export default function CloudSignin({ binding = false }: { binding?: boolean }) {
+  const refresh = useAppStore(s => s.refresh)
+  const [recovery, setRecovery] = useState<CloudSigninResult | null>(null)
+  const [passphrase, setPassphrase] = useState('')
+  const [localPassword, setLocalPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+
+  async function accept(result: CloudSigninResult) {
+    if (result.needsRecovery || result.needsLocalPassword) {
+      setRecovery(result)
+      return
+    }
+    setRecovery(null); setPassphrase(''); setLocalPassword(''); setSuccess(true)
+    await refresh()
+  }
+
+  async function begin() {
+    setBusy(true); setError(''); setSuccess(false); setRecovery(null)
+    setPassphrase(''); setLocalPassword('')
+    try { await accept(await vaultApi.beginCloudSignin()) }
+    catch (e) { setError(e instanceof Error ? e.message : '飞书登录未完成，请重试') }
+    finally { setBusy(false) }
+  }
+
+  async function restore() {
+    setBusy(true); setError('')
+    try { await accept(await vaultApi.finishCloudSignin({ passphrase, localPassword })) }
+    catch (e) { setError(e instanceof Error ? e.message : '旧资料恢复未完成，请重试') }
+    finally { setBusy(false) }
+  }
+
+  return <section className="vm-cloud-signin" aria-label="飞书统一登录">
+    <h3>{binding ? '飞书账号与自动同步' : '飞书扫码登录'}</h3>
+    <p>扫码授权即可使用，无需注册、设置或记录加密口令。</p>
+    {!recovery ? <Button variant="primary" className="w-full" disabled={busy} onClick={begin}>
+      {busy ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Cloud className="w-4 h-4" />}
+      {busy ? '正在授权并自动登录…' : binding ? '飞书扫码绑定本账号' : '使用飞书扫码登录'}
+    </Button> : <div className="space-y-3">
+      <p>已授权：{recovery.name}</p>
+      <p>此账号有旧版加密资料，只需恢复一次。完成后再次扫码即可进入，无需记录新口令。</p>
+      {recovery.needsRecovery && <label className="vm-chat-field">原同步口令
+        <input className="vm-input" aria-label="原同步口令" type="password" autoComplete="off" value={passphrase} onChange={e => setPassphrase(e.target.value)} />
+      </label>}
+      {recovery.needsLocalPassword && <label className="vm-chat-field">原本机密码
+        <input className="vm-input" aria-label="原本机密码" type="password" autoComplete="current-password" value={localPassword} onChange={e => setLocalPassword(e.target.value)} />
+      </label>}
+      <Button className="w-full" variant="primary" disabled={busy || (recovery.needsRecovery && passphrase.length < 8) || (recovery.needsLocalPassword && !localPassword)} onClick={restore}>
+        {busy ? '正在恢复…' : '恢复并进入'}
+      </Button>
+      <Button variant="ghost" disabled={busy} onClick={begin}>重新扫码</Button>
+    </div>}
+    {success && binding && <p role="status">已完成飞书绑定，自动同步已开启。</p>}
+    {error && <p role="alert" className="text-destructive">{error}</p>}
+  </section>
 }

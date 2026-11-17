@@ -52,6 +52,8 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
   const accountSync = state?.accountSync
   const autoSyncState = state?.autoSync
   const syncAccess = state?.syncAccess
+  const managed = state?.settings.syncAccessMode === 'managed'
+  const connectionHint = managed ? '请先在飞书设置中扫码授权，系统会自动完成账号与同步配置' : '请先在配置中设置飞书加密口令'
   const syncModeLabel = syncAccess?.mode === 'personal' ? '个人自建' : syncAccess?.mode === 'enterprise' ? '企业自建' : 'AxonMind 托管'
   const conflicts = state?.syncConflicts || []
   const pendingConflicts = conflicts.filter(conflict => !conflict.resolvedAt && conflict.resolution === 'pending')
@@ -60,7 +62,7 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
 
   const handleAccountAction = async (mode: 'create' | 'join' | 'refresh') => {
     if (!isFeishuLoggedIn || !hasPassphrase) {
-      toast('请先登录飞书并在配置中设置加密口令', 'warning')
+      toast(connectionHint, 'warning')
       return
     }
     setAccountBusy(true)
@@ -72,7 +74,7 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
 
   const handleFullSync = async () => {
     if (!hasPassphrase) {
-      toast('请先在配置中设置飞书加密口令', 'warning')
+      toast(connectionHint, 'warning')
       return
     }
     setSyncing(true)
@@ -96,7 +98,7 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
 
   const handlePush = async () => {
     if (!hasPassphrase) {
-      toast('请先在配置中设置飞书加密口令', 'warning')
+      toast(connectionHint, 'warning')
       return
     }
     setPushing(true)
@@ -112,7 +114,7 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
 
   const handlePull = async () => {
     if (!hasPassphrase) {
-      toast('请先在配置中设置飞书加密口令', 'warning')
+      toast(connectionHint, 'warning')
       return
     }
     setPulling(true)
@@ -130,7 +132,7 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
 
   const handleDownload = async (recordId: string) => {
     if (!hasPassphrase) {
-      toast('请先在配置中设置飞书加密口令', 'warning')
+      toast(connectionHint, 'warning')
       return
     }
     toast('正在下载解密...', 'info')
@@ -228,20 +230,20 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
             {(!isFeishuLoggedIn || !hasPassphrase) && (
               <div className="vm-notice vm-notice-attention vm-sync-setup-notice" role="status">
                 <p className="text-xs font-medium text-foreground">
-                  {!isFeishuLoggedIn ? '先连接飞书，再绑定云端账号' : '请先设置飞书加密口令'}
+                  {managed ? '飞书扫码授权后自动同步' : !isFeishuLoggedIn ? '先连接飞书，再绑定云端账号' : '请先设置飞书加密口令'}
                 </p>
                 <p className="text-xs text-foreground leading-relaxed">
-                  {!isFeishuLoggedIn ? '在飞书设置中选择接入方式、登录授权并保存加密口令，然后返回这里绑定。' : '所有设备需使用同一加密口令，保存后即可创建或加入云端账号。'}
+                  {managed ? '在飞书设置中扫码授权即可，系统会自动连接云端账号，无需设置或记录口令。' : !isFeishuLoggedIn ? '在飞书设置中选择接入方式、登录授权并保存加密口令，然后返回这里绑定。' : '所有设备需使用同一加密口令，保存后即可创建或加入云端账号。'}
                 </p>
                 <Button variant="primary" className="w-full" onClick={onConfigureFeishu}>
                   <Link2 className="w-4 h-4" />
-                  {!isFeishuLoggedIn ? '开始配置飞书' : '设置加密口令'}
+                  {managed ? '前往飞书授权' : !isFeishuLoggedIn ? '开始配置飞书' : '设置加密口令'}
                 </Button>
               </div>
             )}
             <div className="grid grid-cols-2 gap-2">
               {!accountSync?.linked ? (
-                <>
+                managed ? <Button variant="primary" size="sm" className="col-span-2" onClick={onConfigureFeishu}>飞书扫码连接</Button> : <>
                   <Button variant="primary" size="sm" className="disabled:opacity-100 disabled:bg-muted disabled:text-muted-foreground disabled:border-border" onClick={() => handleAccountAction('create')} disabled={accountBusy || !isFeishuLoggedIn || !hasPassphrase}>
                     {accountBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
                     创建云端账号
@@ -259,7 +261,7 @@ export default function SyncCenterView({ onConfigureFeishu }: { onConfigureFeish
               )}
             </div>
             <p className="text-[10px] leading-relaxed text-muted-foreground">
-              同一飞书账号与同一加密口令用于发现账号；每台电脑仍使用自己的本地解锁密码。
+              {managed ? '在其他电脑授权同一飞书账号，即可自动恢复已同步的资料。' : '同一飞书账号与同一加密口令用于发现账号；每台电脑仍使用自己的本地解锁密码。'}
             </p>
 
           </div>

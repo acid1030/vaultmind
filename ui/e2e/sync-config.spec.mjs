@@ -17,6 +17,7 @@ async function launchApp() {
 }
 
 async function register(window) {
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first();
   if (await registerButton.isVisible().catch(() => false)) {
     await registerButton.click();
@@ -74,7 +75,8 @@ async function register(window) {
   // Disconnected accounts have a visible, actionable route directly to Feishu settings.
   const connect = window.getByRole('button', { name: '连接飞书', exact: true });
   if (!await connect.isEnabled()) throw new Error('Feishu setup entry must remain actionable');
-  if (!await window.getByRole('button', { name: '创建云端账号', exact: true }).isDisabled()) throw new Error('Binding must require Feishu authorization');
+  if (await window.getByRole('button', { name: '创建云端账号', exact: true }).count()) throw new Error('Managed accounts must bind automatically after authorization');
+  if (!await window.getByRole('button', { name: '飞书扫码连接', exact: true }).isEnabled()) throw new Error('Managed accounts must offer a simple authorization entry');
   await connect.click();
   await window.getByText('选择同步接入方式', { exact: true }).waitFor();
   // Navigate to Config through its standard entry as well.
@@ -99,6 +101,7 @@ async function register(window) {
   await window.getByRole('radio', { name: /个人自建/ }).waitFor();
   await window.getByRole('radio', { name: /企业自建/ }).waitFor();
   await window.getByText('托管服务已就绪').waitFor();
+  if (await window.locator('input[placeholder*="所有设备保持一致"]').count()) throw new Error('Managed mode must not ask users to set or record an encryption passphrase');
   if (!await window.getByRole('button', { name: '登录飞书', exact: true }).isEnabled()) throw new Error('Managed login must be enabled with a configured service');
   await window.getByRole('radio', { name: /个人自建/ }).click();
   await window.locator('input[placeholder="cli_xxx"]').waitFor();

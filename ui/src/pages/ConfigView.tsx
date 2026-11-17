@@ -387,7 +387,7 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
       <section className="vm-settings-readiness" aria-label="设置连接概况">
         <button onClick={() => setActive('llm')}><Bot className="w-4 h-4" /><span><strong>知识问答</strong><small>{state?.knowledgeCenter.aiProfile?.model && state?.knowledgeCenter.aiProfile?.baseUrl ? '模型已配置' : '待配置模型'}</small></span></button>
         <button onClick={() => setActive('feishu')}><CloudCog className="w-4 h-4" /><span><strong>飞书同步</strong><small>{state?.isFeishuLoggedIn ? '已登录授权' : '待连接'}</small></span></button>
-        <button onClick={() => setActive('feishu')}><ShieldCheck className="w-4 h-4" /><span><strong>云端加密口令</strong><small>{state?.settings.hasFeishuPassphrase ? '已设置' : '尚未设置'}</small></span></button>
+        <button onClick={() => setActive('feishu')}><ShieldCheck className="w-4 h-4" /><span><strong>云端加密保护</strong><small>{state?.settings.hasFeishuPassphrase ? '已启用' : '待连接'}</small></span></button>
         <button onClick={() => setActive('security')}><ArchiveRestore className="w-4 h-4" /><span><strong>本地备份</strong><small>查看备份与恢复</small></span></button>
       </section>
       <div className="vm-sidebar-grid vm-settings-grid">
@@ -433,8 +433,8 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
           <aside className="vm-settings-help" aria-label="当前配置说明">
             <ShieldCheck className="w-5 h-5" />
             <h3>{activeSection?.label}配置说明</h3>
-            <p>{active === 'feishu' ? '先选择接入方式，填写应用凭据并保存，再登录飞书授权。加密口令应在所有设备保持一致。' : active === 'llm' ? '选择服务商后填写模型、接口地址和 API Key，保存后使用测试连接验证配置。' : active === 'security' ? '备份与恢复操作前，先确认当前数据和目标备份。恢复前会保存保护性备份。' : '配置按当前本地账号保存。修改后请使用本页保存按钮，并检查连接或操作结果。'}</p>
-            <ol className="vm-config-steps">{(active === 'feishu' ? ['选择托管、个人自建或企业自建接入。', '自建方式填写 App ID、App Secret，并配置回调地址与所需权限。', '保存配置，登录飞书并完成授权。', '保存各设备一致的加密口令，再到同步中心创建或加入云端账号。'] : active === 'llm' ? ['选择服务商和模型。', '填写接口地址与 API Key。', '保存配置，再测试连接。'] : active === 'security' ? ['检查当前账号与数据。', '先创建并确认备份。', '选择目标备份，阅读恢复提示后操作。'] : ['按表单填写当前服务配置。', '保存后检查提示与连接结果。', '返回对应模块验证实际使用。']).map((step, index) => <li key={step}><span>{index + 1}</span>{step}</li>)}</ol>
+            <p>{active === 'feishu' ? syncAccessMode === 'managed' ? '飞书扫码授权后自动登录并开启同步，无需设置或记录口令。' : '填写自建应用凭据并保存，再登录飞书授权。加密口令应在所有设备保持一致。' : active === 'llm' ? '选择服务商后填写模型、接口地址和 API Key，保存后使用测试连接验证配置。' : active === 'security' ? '备份与恢复操作前，先确认当前数据和目标备份。恢复前会保存保护性备份。' : '配置按当前本地账号保存。修改后请使用本页保存按钮，并检查连接或操作结果。'}</p>
+            <ol className="vm-config-steps">{(active === 'feishu' ? syncAccessMode === 'managed' ? ['点击飞书扫码登录或绑定。', '在飞书中确认授权。', '返回秘栈，账号与同步自动就绪。'] : ['填写 App ID、App Secret，并配置回调地址与所需权限。', '保存配置，登录飞书并完成授权。', '保存各设备一致的加密口令，再到同步中心创建或加入云端账号。'] : active === 'llm' ? ['选择服务商和模型。', '填写接口地址与 API Key。', '保存配置，再测试连接。'] : active === 'security' ? ['检查当前账号与数据。', '先创建并确认备份。', '选择目标备份，阅读恢复提示后操作。'] : ['按表单填写当前服务配置。', '保存后检查提示与连接结果。', '返回对应模块验证实际使用。']).map((step, index) => <li key={step}><span>{index + 1}</span>{step}</li>)}</ol>
             <div className="vm-settings-help-note">{activeSection?.desc}</div>
           </aside>
           {active === 'llm' && (
@@ -624,13 +624,13 @@ export default function ConfigView({ initialSection = 'llm' }: { initialSection?
                 </div>
               </div>}
 
-              <div>
+              {syncAccessMode !== 'managed' && <div>
                 <label className="block text-xs mb-1.5 text-muted-foreground">端到端加密口令</label>
                 <input className="vm-input" type="password" placeholder="至少 8 位；所有设备保持一致" value={passphrase} onChange={e => setPassphrase(e.target.value)} />
                 <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
                   口令仅保存在本机并用于加解密同步内容，AxonMind 和飞书均无法读取或找回。
                 </p>
-              </div>
+              </div>}
 
               <label className="vm-surface-card flex items-center gap-2.5 p-3 rounded-lg cursor-pointer">
                 <input

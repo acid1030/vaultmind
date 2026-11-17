@@ -1,11 +1,13 @@
 'use strict';
 const http=require('node:http'), crypto=require('node:crypto');
 const { createChatLive } = require('./chat-live');
+const { createSigninKeyStore } = require('./signin-keys');
 const API='https://open.feishu.cn';
-function createAuthServer({publicUrl,appId,appSecret,tokenKey,scope='drive:drive drive:drive:readonly auth:user.id:read wiki:wiki:readonly offline_access',fetcher=fetch,now=Date.now}) {
+function createAuthServer({publicUrl,appId,appSecret,tokenKey,keyDirectory=process.env.SIGNIN_KEY_DIR||'/var/lib/mizhan-auth/signin-keys',scope='drive:drive drive:drive:readonly auth:user.id:read wiki:wiki:readonly offline_access',fetcher=fetch,now=Date.now}) {
  const base=new URL(publicUrl);if(base.protocol!=='https:'||base.search||base.hash)throw Error('PUBLIC_URL must be HTTPS');
  if(!appId||!appSecret||!Buffer.isBuffer(tokenKey)||tokenKey.length!==32)throw Error('Missing auth configuration');
  const prefix=base.pathname.replace(/\/$/,''),sessions=new Map(),tickets=new Map(),rates=new Map();
+ const signinKeys=createSigninKeyStore({directory:keyDirectory,tokenKey,appId});
  const random=()=>crypto.randomBytes(32).toString('base64url');
  const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
  const wrap=value=>{const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',tokenKey,iv);return Buffer.concat([iv,cipher.update(JSON.stringify(value)),cipher.final(),cipher.getAuthTag()]).toString('base64url')};
@@ -39,6 +41,15 @@ function createAuthServer({publicUrl,appId,appSecret,tokenKey,scope='drive:drive
    }
    if(req.method==='POST'&&route===prefix+'/v1/feishu/oauth/refresh'){
     const b=await body(req),t=unwrap(b.refreshToken);if(!t.refresh||t.expires<=now())throw Error();const v=await remote('/open-apis/authen/v2/oauth/token',{grant_type:'refresh_token',client_id:appId,client_secret:appSecret,refresh_token:t.refresh});const result=await payload(v);if(result.user.openId!==t.openId)throw Error();return json(res,200,result);
+   }
+   if(req.method==='POST'&&route===prefix+'/v1/feishu/signin-key'){
+    const b=await body(req),match=/^Bearer ([^\s]+)$/.exec(req.headers.authorization||'');
+    if(!match||!['lookup','create','import'].includes(b.action))throw Error();
+    if(b.action==='import'&&(typeof b.passphrase!=='string'||b.passphrase.length<8||b.passphrase.length>1024))throw Error();
+    const user=(await remote('/open-apis/authen/v1/user_info',null,match[1])).data;
+    if(!user?.open_id)throw Error();
+    const passphrase=b.action==='lookup'?signinKeys.read(user.open_id):signinKeys.create(user.open_id,b.action==='import'?b.passphrase:undefined);
+    return json(res,200,{passphrase});
    }
    if(req.method==='POST'&&route===prefix+'/v1/chat/live-ticket'){
     const b=await body(req), match=/^Bearer ([^\s]+)$/.exec(req.headers.authorization||'');

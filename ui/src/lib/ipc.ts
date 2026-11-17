@@ -1,5 +1,13 @@
 export type ChatUnread = { personal: number; groups: Record<string, number>; total: number }
 
+export interface CloudSigninResult {
+  state?: VaultState
+  name?: string
+  binding?: boolean
+  needsRecovery?: boolean
+  needsLocalPassword?: boolean
+}
+
 export interface KnowledgeProgress {
   requestId: string
   stage: 'sync' | 'match' | 'download' | 'search' | 'answer' | 'results'
@@ -393,8 +401,8 @@ export interface VaultApi {
     phone?: string
     recoveryEmail?: string
   }) => Promise<VaultState & { recoveryCode: string; acceptedInvites: any[] }>
-  beginCloudSignin: () => Promise<{name:string;binding:boolean}>
-  finishCloudSignin: (input:{passphrase:string}) => Promise<{state?:VaultState;needsLocalPassword?:boolean}>
+  beginCloudSignin: () => Promise<CloudSigninResult>
+  finishCloudSignin: (input:{passphrase?:string;localPassword?:string}) => Promise<CloudSigninResult>
   loginLocal: (payload: { email: string; password: string }) => Promise<VaultState & { acceptedInvites: any[] }>
   logoutLocal: () => Promise<VaultState>
   updateRecovery: (payload: { phone?: string; recoveryEmail?: string }) => Promise<VaultState>

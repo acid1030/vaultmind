@@ -16,6 +16,7 @@ const appPath = path.resolve(__dirname, '..', '..');
   const window = await app.firstWindow()
   await window.waitForLoadState('networkidle')
 
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first()
   if (await registerButton.isVisible().catch(() => false)) await registerButton.click()
   await window.fill('input[placeholder="you@example.com"]', `responsive${Date.now()}@example.com`)

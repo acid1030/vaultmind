@@ -37,6 +37,7 @@ const appPath = path.resolve(__dirname, '..', '..');
   console.log('Title:', title);
 
   // If register mode is shown, fill and submit
+  await window.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   const registerButton = window.locator('button:has-text("注册")').first();
   if (await registerButton.isVisible().catch(() => false)) {
     await registerButton.click();

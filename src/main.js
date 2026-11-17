@@ -1,5 +1,6 @@
 const { authorizeManaged } = require('./core/managed-signin');
-const { chooseSigninAccount } = require('./core/signin-profile');
+const { chooseSigninAccount, findSigninAccount } = require('./core/signin-profile');
+const { sealLocalUnlock, openLocalUnlock, resolveSigninKey } = require('./core/managed-keys');
 const { createFriendService } = require('./core/friends');
 const { app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, shell, nativeImage, systemPreferences, globalShortcut, screen } = require('electron');
 const crypto = require('crypto');
@@ -3274,6 +3275,16 @@ function changeLocalPassword(input) {
       };
     });
 
+  const managedEnvelope = getStateValue(`managedSignin:${user.id}`, '');
+  let nextManagedEnvelope = '';
+  if (managedEnvelope && user.feishu_open_id_hash) {
+    try {
+      const passphrase = getSettings().feishuPassphrase;
+      openLocalUnlock({ envelope: managedEnvelope, user, openIdHash: user.feishu_open_id_hash, passphrase, decrypt: decryptVaultPayload, hashPassword });
+      nextManagedEnvelope = sealLocalUnlock({ user, openIdHash: user.feishu_open_id_hash, password: newPassword, passphrase, encrypt: encryptVaultPayload });
+    } catch { /* A legacy key change requires local password recovery once. */ }
+  }
+
   db.run('BEGIN');
   try {
     db.run(
@@ -3314,6 +3325,7 @@ function changeLocalPassword(input) {
         [row.wrapped.ciphertext, row.wrapped.iv, row.wrapped.tag, row.groupId, user.id, row.keyVersion],
       );
     }
+    if (managedEnvelope) db.run('INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)', [`managedSignin:${user.id}`, JSON.stringify(nextManagedEnvelope)]);
     db.run('COMMIT');
   } catch (error) {
     db.run('ROLLBACK');
@@ -3980,12 +3992,11 @@ async function managedAuthorization(settings) {
     post: (url, body) => requestJson('POST',url,{body}) });
   return normalizeManagedToken(payload);
 }
-async function handleManagedFeishuLogin(settings) {
-  const user = requireUser(), epoch = chatSessionEpoch;
-  const token = await managedAuthorization(settings);
-  if (activeUser?.id !== user.id || epoch !== chatSessionEpoch) throw new Error('登录账号已变化，请重试');
-  setFeishuToken(token);
-  return publicState();
+async function handleManagedFeishuLogin() {
+  requireUser();
+  const result = await beginCloudSignin();
+  if (result.needsRecovery || result.needsLocalPassword) throw new Error('旧账号需要恢复一次，请使用「配置 → 飞书同步」中的飞书登录');
+  return result.state;
 }
 
 let pendingCloudSignin = null, cloudSigninBusy = false;
@@ -4000,37 +4011,88 @@ async function beginCloudSignin() {
     if ((activeUser?.id || '') !== userId || chatSessionEpoch !== epoch) throw new Error('登录状态已变化，请重试');
     if (!token.user?.openId) throw new Error('无法识别飞书身份');
     pendingCloudSignin = { token, userId, epoch, expires: Date.now()+600000 };
-    return {name:token.user.name || '飞书用户', binding:Boolean(userId)};
   } finally { cloudSigninBusy = false; }
+  return finishCloudSignin({});
 }
+
+async function managedSigninKey(token, action, passphrase) {
+  let result;
+  try {
+    result = await requestJson('POST', `${managedServiceUrl()}/v1/feishu/signin-key`, {
+      headers: { Authorization: `Bearer ${token.accessToken}` },
+      body: { action, ...(passphrase === undefined ? {} : { passphrase }) },
+    });
+  } catch {
+    throw new Error('自动登录服务暂不可用，请稍后重试；若持续出现，请联系管理员更新登录服务');
+  }
+  const value = (result?.data || result)?.passphrase;
+  if (action === 'lookup' && value === null) return null;
+  if (typeof value !== 'string' || value.length < 8) throw new Error('自动登录服务未返回有效密钥，请联系管理员');
+  return value;
+}
+
 async function finishCloudSignin(input) {
   await ensureDatabase();
   const pending = pendingCloudSignin;
   if (!pending || pending.expires < Date.now() || pending.epoch !== chatSessionEpoch || pending.userId !== (activeUser?.id || '')) throw new Error('扫码授权已失效，请重新登录');
   if (cloudSigninBusy) throw new Error('正在恢复账号，请稍候');
-  const passphrase = String(input.passphrase || (activeUser ? getSettings().feishuPassphrase : '') || '');
-  if (passphrase.length < 8) throw new Error('加密口令至少 8 位；旧账号请使用原来的同步口令');
   cloudSigninBusy = true;
   const previousUser = activeUser, previousPassword = activePassword, previousToken=getFeishuToken(), previousSettings=getSettings();
   try {
+    const openIdHash = cloudAccount.hashFeishuOpenId(pending.token.user.openId);
+    if (previousUser?.feishu_open_id_hash && previousUser.feishu_open_id_hash !== openIdHash) throw new Error('当前账号已绑定其他飞书身份，请切换账号');
+    const checkSignin = () => {
+      if (pending !== pendingCloudSignin || pending.epoch !== chatSessionEpoch || pending.userId !== (activeUser?.id || '')) throw new Error('登录状态已变化，请重新授权');
+    };
     const headers={Authorization:`Bearer ${pending.token.accessToken}`};
     const root=ensureFeishuPayload(await requestJson('GET',`${FEISHU_API}/open-apis/drive/explorer/v2/root_folder/meta`,{headers}),'读取云盘权限失败');
     if(!root.token) throw new Error('飞书云盘尚未授权，请在飞书应用后台开通云盘权限');
     let folder=previousUser && previousSettings.folderToken && previousSettings.folderToken !== 'root' ? previousSettings.folderToken : root.token;
     const files=await feishuDrive.listAllFiles(async cursor=>ensureFeishuPayload(await requestJson('GET',`${FEISHU_API}/open-apis/drive/v1/files?folder_token=${encodeURIComponent(folder)}&page_size=200${cursor?`&page_token=${encodeURIComponent(cursor)}`:''}`,{headers}),'读取云端账号失败'));
     const file=feishuDrive.findManifestFile(files,cloudAccount.accountFileName(pending.token.user.openId));
+    let profileBuffer = null;
+    if(file){const downloaded=await requestBuffer('GET',`${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(file.token)}/download`,{headers});if(downloaded.status>=400)throw new Error('无法下载云端账号');profileBuffer=downloaded.body;}
+    const sameIdentity = previousToken?.user?.openId === pending.token.user.openId;
+    const savedPassphrase = (previousUser || sameIdentity) ? previousSettings.feishuPassphrase : '';
+    const resolved = await resolveSigninKey({
+      lookup: () => managedSigninKey(pending.token, 'lookup'),
+      create: passphrase => { checkSignin(); return managedSigninKey(pending.token, passphrase ? 'import' : 'create', passphrase); },
+      hasProfile: Boolean(file), savedPassphrase,
+      recoveryPassphrase: String(input.passphrase || ''),
+      validate: passphrase => cloudAccount.decryptProfile(profileBuffer, passphrase, decryptVaultPayload),
+    });
+    checkSignin();
+    const recoveryResult = { name: pending.token.user.name || '飞书用户', binding: Boolean(previousUser) };
+    if (resolved.needsRecovery) return { ...recoveryResult, needsRecovery: true };
+    const passphrase = resolved.passphrase;
     let profile=null;
-    if(file){const downloaded=await requestBuffer('GET',`${FEISHU_API}/open-apis/drive/v1/files/${encodeURIComponent(file.token)}/download`,{headers});if(downloaded.status>=400)throw new Error('无法下载云端账号');profile=cloudAccount.decryptProfile(downloaded.body,passphrase,decryptVaultPayload);}
+    if(file) profile=cloudAccount.decryptProfile(profileBuffer,passphrase,decryptVaultPayload);
     if(!previousUser && profile?.storageFolderToken) folder=profile.storageFolderToken;
     if(pending !== pendingCloudSignin || pending.epoch !== chatSessionEpoch || pending.userId !== (activeUser?.id || '')) throw new Error('登录状态已变化');
-    const chosen=chooseSigninAccount({identity:pending.token.user,profile,users:queryAll('SELECT * FROM users'),currentUser:activeUser,passphrase,localPassword:activeUser?activePassword:undefined,hashPassword});
-    if(chosen.needsLocalPassword)return {needsLocalPassword:true};
+    const accountInput = {identity:pending.token.user,profile,users:queryAll('SELECT * FROM users'),currentUser:activeUser};
+    const localUser = findSigninAccount(accountInput).user;
+    let localPassword = activeUser ? activePassword : String(input.localPassword || '');
+    if (localUser) {
+      assertLoginAllowed(localUser.email);
+      const envelope = getStateValue(`managedSignin:${localUser.id}`, '');
+      if (!localPassword && envelope) {
+        try { localPassword = openLocalUnlock({ envelope, user: localUser, openIdHash, passphrase, decrypt: decryptVaultPayload, hashPassword }); }
+        catch { return { ...recoveryResult, needsLocalPassword: true }; }
+      }
+      if (!localPassword) {
+        const restored = restoreSessionPassword();
+        if (restored && hashPassword(restored, localUser.password_salt) === localUser.password_hash) localPassword = restored;
+      }
+    } else localPassword = crypto.randomBytes(32).toString('base64url');
+    const chosen=chooseSigninAccount({...accountInput,passphrase,localPassword,hashPassword});
+    if(chosen.needsLocalPassword){if(input.localPassword)recordLoginFailure(localUser.email);return {...recoveryResult,needsLocalPassword:true};}
     if(chosen.user && !previousUser){assertLoginAllowed(chosen.user.email);loginAttempts.delete(chosen.user.email);}
     let user=chosen.user;
-    if(!user){const salt=crypto.randomBytes(16).toString('base64');user={id:crypto.randomUUID(),vault_id:chosen.vaultId,email:chosen.email,username:profile?.username || pending.token.user.name || '飞书用户',password_salt:salt,password_hash:hashPassword(passphrase,salt),created_at:new Date().toISOString()};db.run('INSERT INTO users(id,vault_id,email,username,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?,?)',Object.values(user));saveDatabase();}
+    if(!user){const salt=crypto.randomBytes(16).toString('base64');user={id:crypto.randomUUID(),vault_id:chosen.vaultId,email:chosen.email,username:profile?.username || pending.token.user.name || '飞书用户',password_salt:salt,password_hash:hashPassword(chosen.password,salt),created_at:new Date().toISOString()};db.run('INSERT INTO users(id,vault_id,email,username,password_salt,password_hash,created_at) VALUES(?,?,?,?,?,?,?)',Object.values(user));saveDatabase();}
+    setStateValue(`managedSignin:${user.id}`, sealLocalUnlock({ user, openIdHash, password: chosen.password, passphrase, encrypt: encryptVaultPayload }));
     activeUser=user;activePassword=chosen.password;
     setFeishuToken(pending.token);
-    setStateValue('settings',{...previousSettings,syncAccessMode:'managed',managedServiceUrl:managedServiceUrl(previousSettings),feishuPassphrase:passphrase,folderToken:folder});
+    setStateValue('settings',{...previousSettings,syncAccessMode:'managed',managedServiceUrl:managedServiceUrl(previousSettings),feishuPassphrase:passphrase,feishuAutoSync:true,folderToken:folder});
     await linkCloudAccount({mode:profile?'join':'create',passphrase});
     if(folder !== root.token){
       const actual=await loadCloudAccountProfile(passphrase);
@@ -4054,7 +4116,7 @@ async function handleFeishuLogin() {
   requireUser();
   const settings = getSettings();
   if (syncAccess.normalizeMode(settings.syncAccessMode, settings) === 'managed') {
-    return handleManagedFeishuLogin(settings);
+    return handleManagedFeishuLogin();
   }
   if (!settings.appId || !settings.appSecret) {
     throw new Error('请先填写飞书 App ID 和 App Secret');
@@ -4265,6 +4327,7 @@ function registerHandlers() {
     }
     const salt = crypto.randomBytes(16).toString('base64');
     db.run('UPDATE users SET password_salt = ?, password_hash = ? WHERE id = ?', [salt, hashPassword(newPassword, salt), user.id]);
+    db.run('DELETE FROM app_state WHERE key = ?', [`managedSignin:${user.id}`]);
     saveDatabase();
     return { ok: true };
   });

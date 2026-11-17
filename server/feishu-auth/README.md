@@ -12,7 +12,9 @@ FEISHU_APP_SECRET=your-app-secret
 TOKEN_KEY=64-hex-characters-generated-from-32-random-bytes
 ```
 
-首次生成 TOKEN_KEY 后保持稳定；改变它会使已有托管刷新令牌失效，需要重新扫码。环境文件由 systemd 读取，应用以 www-data 运行。
+首次生成 TOKEN_KEY 后保持稳定；它同时保护托管刷新令牌和自动登录密钥。丢失或直接改变 TOKEN_KEY 会使现有自动登录密钥无法解密，不能用重新扫码代替恢复备份。环境文件由 systemd 读取，应用以 www-data 运行。
+
+自动登录密钥保存在 `/var/lib/mizhan-auth/signin-keys`，可通过 `SIGNIN_KEY_DIR` 指定目录。每个飞书身份使用独立随机密钥，以 AES-256-GCM 加密保存，文件权限 0600，目录 0700；密文与应用 ID、飞书 open_id 绑定。部署时更新 systemd 单元并运行 `systemctl daemon-reload`，其中 `StateDirectory=mizhan-auth` 为 www-data 提供持久可写目录，重启服务后密钥仍保留。备份必须同时保留密钥目录和 TOKEN_KEY，不得清空密钥目录或轮换 TOKEN_KEY 来处理登录故障。
 
 飞书后台的安全设置必须添加精确回调：`PUBLIC_URL/callback`。用户令牌申请范围包括 drive:drive、drive:drive:readonly、auth:user.id:read、wiki:wiki:readonly、offline_access，须按后台支持的权限完成开通、版本发布及可用范围配置。应用属于企业自建时，不会自动变成面向所有企业的公共登录应用。
 
@@ -22,11 +24,14 @@ TOKEN_KEY=64-hex-characters-generated-from-32-random-bytes
 - GET /callback：校验独立的服务端 state，服务端换取授权令牌，重定向客户端仅携带一分钟票据。
 - POST /v1/feishu/oauth/sessions/exchange：验证客户端 verifier 和全部会话绑定信息后，一次性交换令牌。
 - POST /v1/feishu/oauth/refresh：刷新服务端加密封装的刷新令牌，Secret 不发往桌面端。
+- POST /v1/feishu/signin-key：以 Bearer 用户令牌向飞书核验身份，再查询、创建或首次导入该身份的同步密钥。忽略客户端声明的 openId，不允许覆盖已有密钥。响应禁止缓存，不通过浏览器回调或渲染层传输密钥。
 - GET /health：仅返回服务就绪状态。
 
-不记录访问令牌、刷新令牌、授权码、加密口令或用户本机密码；Nginx 专用路径关闭访问日志。内存会话重启后失效，需要重新扫码。这里不保存密码库与聊天内容，账号归属由飞书身份及用户云盘中的加密账号资料恢复。
+不在日志中记录访问令牌、刷新令牌、授权码、同步密钥或用户本机密码；Nginx 专用路径关闭访问日志。内存授权票据重启后失效，需要重新扫码。持久化密钥以密文保存，服务器持有解密能力，因此托管模式属于密钥托管，不能宣称认证服务器无法解密。这里不保存密码库与聊天内容，账号归属由飞书身份及用户云盘中的加密账号资料恢复。
 
-客户端的本机密码与云端加密口令相互独立。新机器首次恢复以输入的加密口令设置本机解锁；原机器已有账号仍需原本机密码。原账号先在设置中扫码绑定一次。自定义存储目录通过根目录中的加密定位资料发现。
+客户端的本机加密凭据与云端同步密钥相互独立，均由程序管理。扫码后自动创建/恢复账号并开启同步。本机解锁凭据以同步密钥加密缓存，授权后可再次解锁，不需用户记录。旧账号在已登录的原设备绑定时，使用已保存口令自动导入，不改写旧文件的加密格式；没有旧口令或本机解锁信息时才要求恢复一次，错误口令不会写入托管密钥库。自定义存储目录通过根目录中的加密定位资料发现。
+
+客户端和认证服务需配套更新：部署 `server.js`、`signin-keys.js`、`chat-live.js`、npm 清单及 systemd 单元，安装依赖并重载/重启服务；既有 Nginx 前缀规则会覆盖新接口。仅更新客户端而未部署 `/v1/feishu/signin-key` 时，客户端会明确提示自动登录服务不可用，不会偷偷创建无法恢复的新账号。本地验证运行 `npm run test:managed-signin` 和 `npm run test:managed-signin:e2e`；真实扫码与跨物理设备仍需部署后验收。
 
 部署实例（2026-11-10）：`https://axonclawx.cn/mizhan-auth`；服务名 mizhan-auth。Nginx 原文件备份在 `/var/backups/mizhan`。回滚可停用该服务并移除新增的专用 include，再 nginx -t 后 reload，保留环境文件以免丢失刷新密钥。
 
