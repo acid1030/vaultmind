@@ -15,6 +15,7 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForLoadState('domcontentloaded');
+  await page.getByText('本机账号（离线 / 高级）', { exact: true }).click();
   await page.getByRole('button', { name: '注册', exact: true }).click();
   await page.getByPlaceholder('you@example.com').fill('alice@example.com');
   await page.getByPlaceholder('你的名字').fill('Alice');
